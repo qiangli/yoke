@@ -152,19 +152,23 @@ func (a *shapedApp) serveServer(w http.ResponseWriter, r *http.Request, c *objec
 	}
 	bin, err := a.servers.build(r.Context(), a, c)
 	if err != nil {
-		http.Error(w, "shaped app "+a.name+": server build failed for revision "+short(c.Hash.String())+":\n"+err.Error(), http.StatusInternalServerError)
+		a.writeServerError(w, r, principal, http.StatusInternalServerError,
+			"shaped app "+a.name+": server build failed for revision "+short(c.Hash.String())+":\n"+err.Error(),
+			err.Error(), c.Hash.String())
 		return
 	}
 	p, err := a.servers.start(a, c.TreeHash.String(), bin, srv, principal, dataDir)
 	if err != nil {
-		http.Error(w, "shaped app "+a.name+": server failed to start:\n"+err.Error(), http.StatusBadGateway)
+		a.writeServerError(w, r, principal, http.StatusBadGateway,
+			"shaped app "+a.name+": server failed to start:\n"+err.Error(),
+			err.Error(), c.Hash.String())
 		return
 	}
 	defer p.touch(-1)
 	tree, _ := c.Tree()
 	shapedServerProxy(p, func(page string) genieTag {
 		return genieTagFor(r, a.name, a.mount, tree, page, "")
-	}).ServeHTTP(w, r)
+	}, a.serverCapture(principal, c.Hash.String(), p)).ServeHTTP(w, r)
 }
 
 func short(sha string) string {
@@ -514,11 +518,20 @@ func (s *shapedServers) close() error {
 // content is never cacheable, and the console's own session cookie never
 // reaches app code.
 //
+// serverErrorCapture hooks a shaped server proxy into incident capture
+// (shaped_repair.go): upstream sees every 5xx the server answers and may
+// reshape it, fail answers when the server is unreachable at all. A nil
+// capture, or nil hooks, leaves the proxy exactly as before.
+type serverErrorCapture struct {
+	upstream func(resp *http.Response)
+	fail     func(w http.ResponseWriter, r *http.Request, err error)
+}
+
 // genie builds the common Genie button's tag for a page the server answers
 // (genie.go); nil leaves pages untouched. The upstream is asked for identity
 // encoding so an HTML page can be rewritten — it is a loopback hop, and
 // compression there buys nothing.
-func shapedServerProxy(p *serverProc, genie func(page string) genieTag) http.Handler {
+func shapedServerProxy(p *serverProc, genie func(page string) genieTag, capture *serverErrorCapture) http.Handler {
 	rp := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: p.addr})
 	inner := rp.Director
 	rp.Director = func(req *http.Request) {
@@ -536,12 +549,21 @@ func shapedServerProxy(p *serverProc, genie func(page string) genieTag) http.Han
 			resp.Header.Set("Location", coopauth.PrefixPath(resp.Request, loc))
 		}
 		if genie != nil {
-			return injectGenieResponse(resp, genie)
+			if err := injectGenieResponse(resp, genie); err != nil {
+				return err
+			}
+		}
+		if capture != nil && capture.upstream != nil && resp.StatusCode >= 500 {
+			capture.upstream(resp)
 		}
 		return nil
 	}
 	rp.FlushInterval = -1
-	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if capture != nil && capture.fail != nil {
+			capture.fail(w, r, err)
+			return
+		}
 		http.Error(w, "shaped app server unreachable: "+err.Error(), http.StatusBadGateway)
 	}
 	return rp

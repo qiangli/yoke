@@ -110,6 +110,11 @@ func TestRepairPipeline(t *testing.T) {
 			if string(got.State) != tc.want || len(got.Attempts) != tc.attempts {
 				t.Fatalf("incident: %+v", got)
 			}
+			// A failing replay is the candidate failing, not a new incident:
+			// it must not record one (or start a nested repair).
+			if all, _ := incidents.List(); len(all) != 1 {
+				t.Fatalf("replay recorded incidents: %+v", all)
+			}
 			bob, _ := shape.OpenAt(app.opts.Home, "notes", "device:bob")
 			bs, _ := bob.Read()
 			if bs.ActiveRevision != base {

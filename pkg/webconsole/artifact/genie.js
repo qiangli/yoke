@@ -1254,6 +1254,213 @@
     pin(bar);
   }
 
+  // ---- self-repair -------------------------------------------------------
+  // S549.R1: when the app breaks for this person, the server records an
+  // incident and this component follows it. Page errors — a failed
+  // same-origin asset load, an uncaught script error, an unhandled
+  // rejection, a same-app api/* fetch answering 5xx with an incident id —
+  // are reported once per signature per page load to
+  // api/shape/<app>/incidents, and the overlay below follows the incident:
+  // it waits while repairing, reloads when a fix is activated, and tells
+  // the truth when the fix failed (the previous version is still active),
+  // was refused (waiting for review), or is outside bashy's control.
+  // Only live pages report: a preview's or draft's errors are not the
+  // active version's.
+  const repairAPI = (rest) => abs(base + "api/shape/" + encodeURIComponent(app) + "/incidents" + (rest || ""));
+  const reportedSigs = new Set();
+  const repairSig = (kind, message, url) => kind + "\n" + (message || "") + "\n" + (url || "");
+  let repairOverlay = null, repairText = null, repairReview = null;
+  let repairId = null, repairTimer = 0;
+
+  function stopRepairPoll() {
+    if (repairTimer) clearInterval(repairTimer);
+    repairTimer = 0;
+  }
+
+  // paintRepair renders one incident state. Activated reloads the page to
+  // the fixed version; the terminal states stop the poll and stay visible
+  // until dismissed.
+  function paintRepair(state, id) {
+    if (!repairOverlay) return;
+    repairOverlay.setAttribute("data-incident", id);
+    repairOverlay.setAttribute("data-state", state);
+    repairReview.hidden = true;
+    if (state === "activated") {
+      stopRepairPoll();
+      location.reload();
+      return;
+    }
+    if (state === "failed") {
+      repairText.textContent = "Bashy could not fix the error. The previous version is still active. (Incident " + id + ")";
+      stopRepairPoll();
+      return;
+    }
+    if (state === "refused") {
+      repairText.textContent = "A fix is ready, but it changes the app, so it is waiting for your review instead of going live on its own. (Incident " + id + ")";
+      repairReview.href = reviewURL();
+      repairReview.hidden = false;
+      stopRepairPoll();
+      return;
+    }
+    if (state === "external") {
+      repairText.textContent = "That error is outside Bashy's control, so there is nothing to fix here. (Incident " + id + ")";
+      stopRepairPoll();
+      return;
+    }
+    repairText.textContent = "Oops, I saw that error and am fixing it, please wait…";
+  }
+
+  async function pollRepair() {
+    if (!repairId) return;
+    let j = null;
+    try {
+      const res = await origFetch(repairAPI("/" + encodeURIComponent(repairId)), { credentials: "same-origin" });
+      if (res.status === 404) { stopRepairPoll(); if (repairOverlay) repairOverlay.hidden = true; return; }
+      if (!res.ok) return;
+      j = await res.json();
+    } catch (_) { return; }
+    if (j && j.state) paintRepair(j.state, repairId);
+  }
+
+  function startRepairPoll() {
+    stopRepairPoll();
+    repairTimer = setInterval(pollRepair, 2000);
+  }
+
+  function showRepairOverlay(id, state) {
+    if (!id) return;
+    if (repairOverlay && repairId !== id) {
+      stopRepairPoll();
+      repairOverlay.remove();
+      repairOverlay = null;
+    }
+    repairId = id;
+    if (!repairOverlay) {
+      repairOverlay = el("div", "bgn bgn-overlay");
+      repairOverlay.setAttribute("data-bgn-repair", "");
+      repairOverlay.setAttribute("role", "alert");
+      const sheet = el("div", "bgn-sheet");
+      const h = el("h2");
+      h.innerHTML = sparkle;
+      h.append(el("span", "", "Something broke"));
+      repairText = el("div", "bgn-prompt");
+      repairText.setAttribute("data-bgn-repair-text", "");
+      const row = el("div", "bgn-row");
+      repairReview = el("a", "", "Review the fix");
+      repairReview.setAttribute("data-bgn-repair-review", "");
+      repairReview.hidden = true;
+      const dismiss = el("button", "bgn-b", "Dismiss");
+      dismiss.type = "button";
+      dismiss.addEventListener("click", () => { stopRepairPoll(); repairOverlay.hidden = true; });
+      row.append(el("span", "bgn-sp"), repairReview, dismiss);
+      sheet.append(h, repairText, row);
+      repairOverlay.append(sheet);
+      theme(repairOverlay);
+      (document.body || document.documentElement).append(repairOverlay);
+    }
+    repairOverlay.hidden = false;
+    paintRepair(state || "repairing", id);
+    if (repairTimer === 0) startRepairPoll();
+  }
+
+  async function reportRepair(kind, path, message, stack, url, offline) {
+    if (mode !== "live" || (kind !== "asset" && kind !== "script")) return null;
+    const sig = repairSig(kind, message, url);
+    if (reportedSigs.has(sig)) return null;
+    reportedSigs.add(sig);
+    try {
+      const res = await origFetch(repairAPI(), {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, path, message, stack, url, offline: !!offline }),
+      });
+      if (!res.ok) return null;
+      const body = await res.json();
+      if (body && body.incident) showRepairOverlay(body.incident, body.state);
+      return body;
+    } catch (_) { return null; }
+  }
+
+  function sameOrigin(u) {
+    try { return new URL(u, location.href).origin === location.origin; }
+    catch (_) { return false; }
+  }
+
+  // isAppAPI is a same-origin call to the app's own api/* — under its mount
+  // or any prefix above it — but never the shaping API itself, whose own
+  // failures must not start repairs.
+  function isAppAPI(u) {
+    let p;
+    try { p = new URL(u, location.href); }
+    catch (_) { return false; }
+    if (p.origin !== location.origin) return false;
+    if (p.pathname.indexOf("/api/shape/") !== -1) return false;
+    return /(^|\/)api\//.test(p.pathname);
+  }
+
+  // A fetch that answered 5xx may carry the server's incident: follow it.
+  function noteFetchResponse(input, res) {
+    try {
+      if (!isAppAPI(input) || !res || res.status < 500) return;
+      res.clone().json().then((j) => {
+        if (j && j.incident) showRepairOverlay(j.incident, j.state);
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  // A fetch that never answered while offline is outside bashy's control:
+  // report it once so the page says so instead of failing silently.
+  function noteFetchError(input, err) {
+    try {
+      if (!isAppAPI(input)) return;
+      const u = String((input && input.url) || input || "");
+      if (u.indexOf("/api/shape/") !== -1) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        reportRepair("script", page, "The page is offline, so this request could not be sent: " + u, "", u, true);
+      }
+    } catch (_) {}
+  }
+
+  const origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (origFetch) {
+    window.fetch = function (input, init) {
+      return origFetch(input, init).then(
+        (res) => { noteFetchResponse(input, res); return res; },
+        (err) => { noteFetchError(input, err); throw err; }
+      );
+    };
+  }
+
+  // Failing same-origin app assets and uncaught page errors, in the capture
+  // phase so a failed <script>/<link>/<img> load is seen with its element.
+  // Cross-origin failures name their URL; the server marks them external.
+  window.addEventListener("error", (ev) => {
+    try {
+      if (mode !== "live") return;
+      const t = ev && ev.target;
+      if (t && t !== window && t.tagName && /^(SCRIPT|LINK|IMG|VIDEO|AUDIO|SOURCE|TRACK|EMBED)$/.test(t.tagName)) {
+        const u = String(t.currentSrc || t.src || t.href || "");
+        const cross = u !== "" && !sameOrigin(u);
+        reportRepair("asset", page,
+          cross ? "An asset outside this app failed to load: " + u : "An asset failed to load: " + u,
+          "", u, false);
+        return;
+      }
+      const msg = String((ev && ev.message) || "Script error") +
+        (ev && ev.filename ? " @ " + ev.filename + ":" + (ev.lineno || 0) : "");
+      const stack = (ev && ev.error && ev.error.stack) || "";
+      reportRepair("script", page, msg, String(stack), (ev && ev.filename) || "", false);
+    } catch (_) {}
+  }, true);
+  window.addEventListener("unhandledrejection", (ev) => {
+    try {
+      if (mode !== "live") return;
+      const r = ev && ev.reason;
+      const msg = (r instanceof Error ? (r.message || "Unhandled rejection") : "Unhandled rejection: " + String(r));
+      reportRepair("script", page, String(msg), (r instanceof Error && r.stack) || "", "", false);
+    } catch (_) {}
+  });
+
   function start() {
     if (mode === "draft") draftBar();
     else if (candidate) reviewBar();
@@ -1270,6 +1477,13 @@
       }
     }
     placeButton();
+    // The fixing page names its incident on window.__bashyIncident: follow
+    // it so the page reloads when the repair lands.
+    try {
+      if (mode === "live" && typeof window.__bashyIncident === "string" && window.__bashyIncident) {
+        showRepairOverlay(window.__bashyIncident, "repairing");
+      }
+    } catch (_) {}
   }
 
   if (document.body) start();

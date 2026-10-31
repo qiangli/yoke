@@ -20,7 +20,11 @@ import (
 
 // startRepair is the incident capture side's hook. A keyed guard keeps one
 // worker in flight for an incident even when several requests fail at once.
-var startRepair = startRepairAsync
+var startRepair func(app *shapedApp, principal string, in Incident)
+
+// Assigned in init: the pipeline replays requests through serveTree, which
+// reaches this hook, so a static initializer would be a cycle.
+func init() { startRepair = startRepairAsync }
 
 var repairFlights = struct {
 	sync.Mutex
@@ -252,6 +256,7 @@ func (a *shapedApp) replayRepair(ctx context.Context, principal string, in Incid
 		return err
 	}
 	probe := *a
+	probe.replay = true
 	probe.servers = &shapedServers{}
 	defer probe.servers.close()
 	check := func(p string, strict bool) error {

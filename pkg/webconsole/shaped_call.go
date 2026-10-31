@@ -165,7 +165,7 @@ func (b *callBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-	target.serveAPI(w, req, tree, unitName, g.principal, dataDir)
+	target.serveAPI(w, req, tree, unitName, g.principal, dataDir, "")
 }
 
 // admit narrows what a unit declares outside its data to what principal

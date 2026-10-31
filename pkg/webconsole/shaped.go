@@ -70,9 +70,9 @@ type ShapeOptions struct {
 	// ServerIdle stops a shaped app server no request has used for this
 	// long. Zero = 10m.
 	ServerIdle time.Duration
-	Delegate  Delegator
-	Verifier  Verifier
-	Activator Activator
+	Delegate   Delegator
+	Verifier   Verifier
+	Activator  Activator
 }
 
 func (o ShapeOptions) home() (string, error) {
@@ -114,6 +114,9 @@ type shapedApp struct {
 	// or add relative to its base (guardProtected). Nil for registered apps:
 	// nothing inside an app's own tree is protected from its owner.
 	protected []string
+	// replay marks a repair probe (replayRepair): its serving errors are the
+	// candidate failing the replay, not new incidents, so nothing is recorded.
+	replay bool
 	// mount is where the app's live pages sit, relative to the launcher's
 	// base and with a trailing slash ("notes/"); "" for the launcher itself.
 	// The common Genie button pairs a previewed page with its live one by it.
@@ -292,7 +295,7 @@ func (a *shapedApp) serveTree(w http.ResponseWriter, r *http.Request, c *object.
 		return
 	}
 	if name, ok := strings.CutPrefix(rel, "api/"); ok {
-		a.serveAPI(w, r, tree, name, principal, dataDir)
+		a.serveAPI(w, r, tree, name, principal, dataDir, c.Hash.String())
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -336,7 +339,9 @@ const (
 
 // serveAPI runs api/<name>.md — a Bash# unit — once, contained, with the
 // request in CGI-style environment variables and the response on stdout.
-func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *object.Tree, name, principal, dataDir string) {
+// baseRev is the served revision and "" for non-serving callers (the tidy
+// command, cross-app calls), which keep the bare errors and record nothing.
+func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *object.Tree, name, principal, dataDir, baseRev string) {
 	if name == "" || strings.ContainsAny(name, "/\\") || strings.HasPrefix(name, ".") {
 		http.NotFound(w, r)
 		return
@@ -348,7 +353,7 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 	}
 	doc, err := f.Contents()
 	if err != nil {
-		http.Error(w, "unit unreadable", http.StatusInternalServerError)
+		a.writeAPIError(w, name, principal, http.StatusInternalServerError, "unit unreadable", err.Error(), baseRev)
 		return
 	}
 	body := unit.BashSharpBody(doc)
@@ -370,7 +375,8 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		// may be asking for isolation we cannot see; never run it
 		// unsandboxed.
 		if mentionsSandboxRequest(body) {
-			http.Error(w, "unit "+name+" may ask for a sandbox but its contract is unreadable: "+cerr.Error(), http.StatusServiceUnavailable)
+			msg := "unit " + name + " may ask for a sandbox but its contract is unreadable: " + cerr.Error()
+			a.writeAPIError(w, name, principal, http.StatusServiceUnavailable, msg, cerr.Error(), baseRev)
 			return
 		}
 	} else {
@@ -395,7 +401,7 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	out, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, principal, grants, map[string]string{
+	out, stderrTail, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, principal, grants, map[string]string{
 		"REQUEST_METHOD":     r.Method,
 		"QUERY_STRING":       r.URL.RawQuery,
 		"CONTENT_TYPE":       r.Header.Get("Content-Type"),
@@ -410,15 +416,17 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 			return
 		}
 		if errors.Is(err, contain.ErrUnavailable) {
-			http.Error(w, "unit "+name+" could not run as it asked (a requested sandbox comes from bashy oci): "+err.Error(), http.StatusServiceUnavailable)
+			msg := "unit " + name + " could not run as it asked (a requested sandbox comes from bashy oci): " + err.Error()
+			a.writeAPIError(w, name, principal, http.StatusServiceUnavailable, msg, stderrOr(stderrTail, err), baseRev)
 			return
 		}
 		slog.Error("shaped app unit", "app", a.name, "unit", name, "err", err)
-		http.Error(w, "unit failed to run", http.StatusInternalServerError)
+		a.writeAPIError(w, name, principal, http.StatusInternalServerError, "unit failed to run", stderrOr(stderrTail, err), baseRev)
 		return
 	}
 	if res.ExitCode != 0 {
-		http.Error(w, fmt.Sprintf("unit %s failed (exit %d)", name, res.ExitCode), http.StatusInternalServerError)
+		a.writeAPIError(w, name, principal, http.StatusInternalServerError,
+			fmt.Sprintf("unit %s failed (exit %d)", name, res.ExitCode), stderrTail, baseRev)
 		return
 	}
 	if json.Valid(out) {
@@ -448,22 +456,53 @@ func mentionsSandboxRequest(body string) bool {
 	return false
 }
 
+// stderrOr is the evidence for a failed run: the unit's stderr tail when it
+// says anything, else the Go error.
+func stderrOr(tail string, err error) string {
+	if strings.TrimSpace(tail) != "" {
+		return tail
+	}
+	return err.Error()
+}
+
 // runUnit runs one Bash# body under pkg/shape/contain with dataDir as its
 // cwd and its BASHY_APP_DATA (and, in a sandbox, its only mount). Outside a
 // sandbox the interpreter enforces the app data boundary (pkg/shape/boundary)
 // it receives in $BASHY_APP_BOUNDARY, including the cross-app call endpoint.
-func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, principal string, grants boundary.Grants, env map[string]string) ([]byte, contain.Result, error) {
+//
+// Besides stdout it returns the bounded tail of the unit's stderr, kept for
+// incident evidence: it is drained fully so a chatty unit never blocks on a
+// full pipe, and kept only as a tail so a runaway one cannot grow the server.
+func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, principal string, grants boundary.Grants, env map[string]string) ([]byte, string, contain.Result, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		return nil, contain.Result{}, err
+		return nil, "", contain.Result{}, err
 	}
 	defer pr.Close()
+	er, ew, err := os.Pipe()
+	if err != nil {
+		return nil, "", contain.Result{}, err
+	}
+	defer er.Close()
 	got := make(chan []byte, 1)
 	go func() {
 		b, _ := io.ReadAll(io.LimitReader(pr, apiOutputLimit))
 		_, _ = io.Copy(io.Discard, pr)
 		got <- b
 	}()
+	tail := &tailBuffer{max: incidentEvidenceLimit * 2}
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		_, _ = io.Copy(tail, er)
+	}()
+	finish := func() ([]byte, string) {
+		_ = pw.Close()
+		_ = ew.Close()
+		out := <-got
+		<-drained
+		return out, tail.String()
+	}
 	set := map[string]string{shape.AppDataEnv: dataDir}
 	for k, v := range env {
 		set[k] = v
@@ -471,16 +510,14 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 	if level != contain.LevelSandbox {
 		pol, revoke, err := a.policy(ctx, principal, dataDir, grants)
 		if err != nil {
-			_ = pw.Close()
-			<-got
-			return nil, contain.Result{}, err
+			out, serr := finish()
+			return out, serr, contain.Result{}, err
 		}
 		defer revoke()
 		v, err := boundary.Env(pol)
 		if err != nil {
-			_ = pw.Close()
-			<-got
-			return nil, contain.Result{}, err
+			out, serr := finish()
+			return out, serr, contain.Result{}, err
 		}
 		set[boundary.EnvVar] = v
 	}
@@ -491,9 +528,8 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 	argv := append(append([]string(nil), a.opts.runner()...), "-c", body, "api/"+name)
 	res, runErr := contain.Run(ctx, contain.Spec{
 		Dir: dataDir, Argv: argv, Level: level, OCI: a.opts.OCI, Cap: "read,write", Effects: effects,
-		EnvSet: set, Timeout: timeout, Stdout: pw,
+		EnvSet: set, Timeout: timeout, Stdout: pw, Stderr: ew,
 	})
-	_ = pw.Close()
-	out := <-got
-	return out, res, runErr
+	out, serr := finish()
+	return out, serr, res, runErr
 }

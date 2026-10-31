@@ -100,7 +100,7 @@ func runTidyUnit(ctx context.Context, home string, p src.TidyPlan, opts ShapeOpt
 	req := httptest.NewRequest(http.MethodPost, "/api/"+p.Unit, bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	a.serveAPI(w, req, tr, p.Unit, p.Principal, data)
+	a.serveAPI(w, req, tr, p.Unit, p.Principal, data, "")
 	if w.Code != http.StatusOK {
 		return fmt.Errorf("app tidy unit %s failed: %s", p.Unit, strings.TrimSpace(w.Body.String()))
 	}

@@ -25,6 +25,10 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == boundaryInterpArg {
 		os.Exit(boundaryInterpMain(os.Args[2:]))
 	}
+	// Fixtures serve 5xx on purpose; an automatic repair would outlive the
+	// test and touch its temp dirs. Repair tests call repairIncident directly
+	// or install their own hook.
+	startRepair = func(*shapedApp, string, Incident) {}
 	dir, err := os.MkdirTemp("", "webconsole-apps-")
 	if err != nil {
 		panic(err)
