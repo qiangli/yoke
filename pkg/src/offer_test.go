@@ -1,9 +1,11 @@
 package src_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -55,6 +57,15 @@ func s525a8Commit(t *testing.T, dir, msg string) string {
 		t.Fatalf("rev-parse: %v", err)
 	}
 	return rev.Hash
+}
+
+// s525a8Release tags rev as the app's next release: offerings publish
+// tagged releases only (S526.B8).
+func s525a8Release(t *testing.T, home, rev string) {
+	t.Helper()
+	if _, err := src.Release(home, s525a8App, rev, s525a8Alice, src.ReleaseOptions{}); err != nil {
+		t.Fatalf("release %s: %v", rev[:7], err)
+	}
 }
 
 func s525a8Shape(id, rev, origin string) string {
@@ -120,6 +131,7 @@ func TestS525A8OfferingOptInOutAndSync(t *testing.T) {
 	s525a8WriteFile(t, appDir, "feature.txt", "alice-feature-v1\n")
 	s525a8WriteFile(t, appDir, "shape.yaml", s525a8Shape("demo", "v1", s525a8Alice))
 	rev1 := s525a8Commit(t, appDir, "alice v1")
+	s525a8Release(t, home, rev1)
 
 	// Alice offers to bob only
 	offer1, err := src.Offer(home, s525a8App, rev1, s525a8Alice, src.OfferOptions{
@@ -245,6 +257,7 @@ func TestS525A8OfferingOptInOutAndSync(t *testing.T) {
 	s525a8WriteFile(t, appDir, "feature.txt", "alice-feature-v2\n")
 	s525a8WriteFile(t, appDir, "shape.yaml", s525a8Shape("demo", "v2", s525a8Alice))
 	rev2 := s525a8Commit(t, appDir, "alice v2")
+	s525a8Release(t, home, rev2)
 
 	offer2, err := src.Offer(home, s525a8App, rev2, s525a8Alice, src.OfferOptions{
 		To: []string{s525a8Bob},
@@ -313,6 +326,7 @@ func TestS525A8OfferingOptInOutAndSync(t *testing.T) {
 	s525a8WriteFile(t, appDir, "shared.txt", "alice-modified-shared-v3\n")
 	s525a8WriteFile(t, appDir, "shape.yaml", s525a8Shape("demo", "v3", s525a8Alice))
 	rev3 := s525a8Commit(t, appDir, "alice v3 conflicting")
+	s525a8Release(t, home, rev3)
 
 	if _, err := src.Offer(home, s525a8App, rev3, s525a8Alice, src.OfferOptions{To: []string{s525a8Bob}}); err != nil {
 		t.Fatalf("offer3: %v", err)
@@ -360,6 +374,7 @@ func TestS525A8OfferingOptInOutAndSync(t *testing.T) {
 	s525a8WriteFile(t, appDir, "other.txt", "other-feature-v4\n")
 	s525a8WriteFile(t, appDir, "shape.yaml", s525a8Shape("other", "v4", s525a8Alice))
 	rev4 := s525a8Commit(t, appDir, "alice v4")
+	s525a8Release(t, home, rev4)
 	if _, err := src.Offer(home, s525a8App, rev4, s525a8Alice, src.OfferOptions{To: []string{s525a8Bob}}); err != nil {
 		t.Fatalf("offer4: %v", err)
 	}
@@ -415,8 +430,36 @@ func TestS525A8CLI(t *testing.T) {
 	s525a8WriteFile(t, appDir, "shape.yaml", s525a8Shape("clifeat", "v1", s525a8Alice))
 	rev := s525a8Commit(t, appDir, "cli v1")
 
-	// bashy src offer <app> <rev> --to <bob>
+	// bashy src offer refuses an unreleased revision; bashy src release
+	// <app> <rev> tags it v1.0.0 and bashy src version names it.
 	cmd := src.NewSrcCmd()
+	cmd.SetArgs([]string{"offer", s525a8App, rev, "--to", s525a8Bob})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "not a released version") {
+		t.Fatalf("cli offer of an unreleased revision: err = %v", err)
+	}
+	var out bytes.Buffer
+	cmd = src.NewSrcCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"release", s525a8App, rev})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cli release: %v", err)
+	}
+	if !strings.HasPrefix(out.String(), "released demoapp v1.0.0 initial at ") {
+		t.Fatalf("cli release output = %q", out.String())
+	}
+	out.Reset()
+	cmd = src.NewSrcCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"version", s525a8App, rev})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("cli version: %v", err)
+	}
+	if strings.TrimSpace(out.String()) != "v1.0.0" {
+		t.Fatalf("cli version output = %q", out.String())
+	}
+
+	// bashy src offer <app> <rev> --to <bob>
+	cmd = src.NewSrcCmd()
 	cmd.SetArgs([]string{"offer", s525a8App, rev, "--to", s525a8Bob})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cli offer: %v", err)

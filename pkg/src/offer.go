@@ -17,11 +17,14 @@ import (
 	"github.com/qiangli/yoke/pkg/shape/state"
 )
 
-// Offering records one published host offering for a shaped feature revision.
+// Offering records one published host offering for a shaped feature
+// revision. Offerings publish tagged releases only: Version is the semver
+// release tag Revision carries.
 type Offering struct {
 	ID        string    `json:"id"`
 	App       string    `json:"app"`
 	Revision  string    `json:"revision"`
+	Version   string    `json:"version"`
 	Origin    string    `json:"origin"`
 	BaseRev   string    `json:"base_rev"`
 	Requires  []string  `json:"requires,omitempty"`
@@ -81,8 +84,10 @@ func sanitizeOfferFilename(id string) string {
 	return s
 }
 
-// Offer publishes a revision of a feature as a host offering.
-// Eligible principals receive one notice per offering revision.
+// Offer publishes a released revision of a feature as a host offering.
+// Only a tagged release can be offered: an unreleased revision is refused
+// with its pseudo-version and the release verb to run first. Eligible
+// principals receive one notice per offering revision.
 func Offer(home, app, rev, creator string, opts OfferOptions) (Offering, error) {
 	creator = strings.TrimSpace(creator)
 	if creator == "" {
@@ -102,6 +107,18 @@ func Offer(home, app, rev, creator string, opts OfferOptions) (Offering, error) 
 	if !opts.All && len(opts.To) == 0 {
 		return Offering{}, fmt.Errorf("src: offer requires --to <principals> or --all")
 	}
+	r, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return Offering{}, fmt.Errorf("src: open %s: %w", dir, err)
+	}
+	version, released, err := versionOf(r, revSHA)
+	if err != nil {
+		return Offering{}, err
+	}
+	if !released {
+		return Offering{}, fmt.Errorf("src: offer refused: %s is not a released version (%s); offerings publish tagged releases only, release it first: src release %s %s",
+			shortSHA(revSHA), version, app, shortSHA(revSHA))
+	}
 
 	feat, hasFeat, _ := featureAt(dir, revSHA)
 	id := strings.TrimSpace(opts.ID)
@@ -114,11 +131,8 @@ func Offer(home, app, rev, creator string, opts OfferOptions) (Offering, error) 
 
 	baseSHA, err := mergeBase(dir, revSHA, pristineBranch)
 	if err != nil {
-		r, openErr := gogit.PlainOpen(dir)
-		if openErr == nil {
-			if c, cErr := r.CommitObject(plumbing.NewHash(revSHA)); cErr == nil && len(c.ParentHashes) > 0 {
-				baseSHA = c.ParentHashes[0].String()
-			}
+		if c, cErr := r.CommitObject(plumbing.NewHash(revSHA)); cErr == nil && len(c.ParentHashes) > 0 {
+			baseSHA = c.ParentHashes[0].String()
 		}
 	}
 	if baseSHA == "" {
@@ -155,6 +169,7 @@ func Offer(home, app, rev, creator string, opts OfferOptions) (Offering, error) 
 		ID:        id,
 		App:       app,
 		Revision:  revSHA,
+		Version:   version,
 		Origin:    creator,
 		BaseRev:   baseSHA,
 		Requires:  requires,
@@ -219,7 +234,7 @@ func deliverOfferNotice(home, app string, offer Offering, principal string) erro
 	st.Notices = append(st.Notices, state.Notice{
 		ID:       offer.ID,
 		Revision: offer.Revision,
-		Message:  fmt.Sprintf("Offering %s (%s) from %s", offer.ID, shortSHA(offer.Revision), offer.Origin),
+		Message:  fmt.Sprintf("Offering %s %s (%s) from %s", offer.ID, offer.Version, shortSHA(offer.Revision), offer.Origin),
 	})
 	return store.Write(st)
 }

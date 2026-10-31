@@ -15,9 +15,11 @@ func newOfferCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "offer <app> <rev>",
 		Short: "Publish a revision of a feature as a host offering",
-		Long: `offer publishes a revision of a feature as a host offering.
-The offering carries only the source change plus origin principal, base
-revision, and dependencies. Restricted offerings (--to) are invisible to
+		Long: `offer publishes a released revision of a feature as a host
+offering. Offerings publish tagged releases only: an unreleased revision
+is refused until it is released with src release. The offering carries
+only the source change plus origin principal, base revision, version, and
+dependencies. Restricted offerings (--to) are invisible to
 principals not listed; --all publishes to all principals on the host.
 Eligible principals get one notice per offering revision.`,
 		Args: cobra.ExactArgs(2),
@@ -41,8 +43,8 @@ Eligible principals get one notice per offering revision.`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "offered %s %s revision %s by %s\n",
-				offering.App, offering.ID, shortSHA(offering.Revision), offering.Origin)
+			fmt.Fprintf(cmd.OutOrStdout(), "offered %s %s %s revision %s by %s\n",
+				offering.App, offering.ID, offering.Version, shortSHA(offering.Revision), offering.Origin)
 			return nil
 		},
 	}
@@ -88,8 +90,8 @@ specified app. Restricted offerings not including the principal are hidden.`,
 				if o.All {
 					vis = "all"
 				}
-				fmt.Fprintf(out, "offer %s %s rev %s by %s (%s)\n",
-					o.App, o.ID, shortSHA(o.Revision), o.Origin, vis)
+				fmt.Fprintf(out, "offer %s %s %s rev %s by %s (%s)\n",
+					o.App, o.ID, o.Version, shortSHA(o.Revision), o.Origin, vis)
 			}
 			return nil
 		},

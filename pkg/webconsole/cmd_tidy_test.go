@@ -64,6 +64,10 @@ func TestAppTidySupportWindow(t *testing.T) {
 	if _, err := src.Name(home, "notes", "device:alice", v2, "milestone"); err != nil {
 		t.Fatal(err)
 	}
+	// Offerings publish tagged releases only (S526.B8): release v1 first.
+	if _, err := src.Release(home, "notes", v1, "device:alice", src.ReleaseOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := src.Offer(home, "notes", v1, "device:alice", src.OfferOptions{To: []string{"device:bob"}, ID: "early"}); err != nil {
 		t.Fatal(err)
 	}

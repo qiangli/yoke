@@ -29,6 +29,7 @@ var previewRefspecs = []config.RefSpec{
 type VersionEntry struct {
 	Activation string    `json:"activation"`
 	Revision   string    `json:"revision"`
+	Version    string    `json:"version,omitempty"`
 	Kind       string    `json:"kind"`
 	Request    string    `json:"request,omitempty"`
 	Verdict    string    `json:"verdict,omitempty"`
@@ -62,6 +63,11 @@ type ReviewVersion struct {
 // Versions mirrors Entries under the name the web history view uses, so the
 // app view and `src history --json` are the same history view. Entries
 // stays as an alias for one release.
+//
+// Every entry carries its Version: the semver release tag when that
+// revision was released, else a Go-style pseudo-version. Releases lists
+// the app's published releases, newest version first; they are shared by
+// every principal, since a release is a tag in the app's history.
 type VersionHistory struct {
 	App       string          `json:"app"`
 	Principal string          `json:"principal"`
@@ -73,6 +79,7 @@ type VersionHistory struct {
 	Versions  []VersionEntry  `json:"versions,omitempty"`
 	Named     []NamedVersion  `json:"named,omitempty"`
 	Reviews   []ReviewVersion `json:"reviews,omitempty"`
+	Releases  []ReleaseTag    `json:"releases,omitempty"`
 }
 
 // History reads one principal's version line: who recorded each version,
@@ -103,13 +110,17 @@ func History(home, app, principal string) (VersionHistory, error) {
 	if sha, err := ygit.ResolveCommit(dir, pristineBranch); err == nil {
 		out.Base = sha
 	}
+	out.Releases, err = releaseTags(r)
+	if err != nil {
+		return out, err
+	}
 	tip, ok, err := refTarget(dir, out.Line)
 	if err != nil {
 		return out, err
 	}
 	if ok {
 		out.Tip = tip
-		out.Entries = walkLine(r, tip)
+		out.Entries = walkLine(r, tip, releasedAs(out.Releases))
 		out.Versions = out.Entries
 		if len(out.Entries) > 0 {
 			oldest, err := r.CommitObject(plumbing.NewHash(out.Entries[len(out.Entries)-1].Activation))
@@ -141,8 +152,11 @@ func History(home, app, principal string) (VersionHistory, error) {
 // commits carry the Principal trailer; the first commit without one is the
 // release the line started from, where the walk stops. Revision prefers the
 // Revision trailer and falls back to Request so commits written before the
-// Revision trailer still resolve.
-func walkLine(r *gogit.Repository, tip string) []VersionEntry {
+// Revision trailer still resolve. released maps released commits to their
+// release tag; every other revision is named by its pseudo-version, and a
+// revision that is not a commit (a request line on an old commit) has no
+// version.
+func walkLine(r *gogit.Repository, tip string, released map[string]string) []VersionEntry {
 	var out []VersionEntry
 	hash := plumbing.NewHash(tip)
 	for {
@@ -168,9 +182,16 @@ func walkLine(r *gogit.Repository, tip string) []VersionEntry {
 		if revision == "" {
 			revision = commitTrailer(c.Message, "Request")
 		}
+		version := released[revision]
+		if version == "" {
+			if rc, err := r.CommitObject(plumbing.NewHash(revision)); err == nil {
+				version = pseudoVersion(rc)
+			}
+		}
 		out = append(out, VersionEntry{
 			Activation: c.Hash.String(),
 			Revision:   revision,
+			Version:    version,
 			Kind:       kind,
 			Request:    commitTrailer(c.Message, "Request"),
 			Verdict:    commitTrailer(c.Message, "Verdict"),

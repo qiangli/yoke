@@ -144,6 +144,12 @@ func PlanTidy(home, app, principal string, policy TidyPolicy) (TidyPlan, error) 
 	for _, rev := range offered {
 		protected[rev] = true
 	}
+	// A published release is a supported version other apps and hosts may
+	// depend on (S526.B8): it stays restorable whether or not this
+	// principal offered it, and its tag keeps naming the same tree.
+	for _, rt := range h.Releases {
+		protected[rt.Revision] = true
+	}
 	for i, e := range h.Entries {
 		keep := i == 0 || i < p.KeepLast || protected[e.Revision] || protected[e.Activation]
 		if p.KeepDays > 0 && !e.When.Before(now.AddDate(0, 0, -p.KeepDays)) {
@@ -220,6 +226,9 @@ func PlanTidy(home, app, principal string, policy TidyPolicy) (TidyPlan, error) 
 		supported = append(supported, o.Revision)
 	}
 	supported = append(supported, offered...)
+	for _, rt := range h.Releases {
+		supported = append(supported, rt.Revision)
+	}
 	if err := propertySet(supported, needed); err != nil {
 		return p, err
 	}

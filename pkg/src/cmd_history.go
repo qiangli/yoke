@@ -35,9 +35,11 @@ func newHistoryCmd() *cobra.Command {
 		Use:   "history <app>",
 		Short: "List a principal's version history: who, when, request, verdict, evidence",
 		Long: `history lists every version on the principal's version line,
-newest first: who recorded it, when, the request text, the verifier
-verdict, and the evidence reference, followed by the named labels and
-review versions. The principal comes from --user or $BASHY_PRINCIPAL.`,
+newest first: who recorded it, when, its version (the semver release tag,
+or a pseudo-version when unreleased), the request text, the verifier
+verdict, and the evidence reference, followed by the named labels, review
+versions, and the app's releases. The principal comes from --user or
+$BASHY_PRINCIPAL.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := resolveUser(user)
@@ -74,6 +76,9 @@ review versions. The principal comes from --user or $BASHY_PRINCIPAL.`,
 				fmt.Fprintf(out, "version %s %s rev %s %s %s\n",
 					shortSHA(e.Activation), e.Kind, shortSHA(e.Revision),
 					e.When.Format("2006-01-02T15:04:05Z07:00"), e.Author)
+				if e.Version != "" {
+					fmt.Fprintf(out, "  version: %s\n", e.Version)
+				}
 				fmt.Fprintf(out, "  request: %s\n", e.Request)
 				fmt.Fprintf(out, "  verdict: %s\n", e.Verdict)
 				fmt.Fprintf(out, "  evidence: %s\n", e.Evidence)
@@ -88,6 +93,12 @@ review versions. The principal comes from --user or $BASHY_PRINCIPAL.`,
 				fmt.Fprintln(out, "review:")
 				for _, n := range h.Reviews {
 					fmt.Fprintf(out, "  %s -> %s\n", n.ID, shortSHA(n.Revision))
+				}
+			}
+			if len(h.Releases) > 0 {
+				fmt.Fprintln(out, "releases:")
+				for _, rt := range h.Releases {
+					fmt.Fprintf(out, "  %s -> %s\n", rt.Version, shortSHA(rt.Revision))
 				}
 			}
 			return nil

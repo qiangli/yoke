@@ -33,6 +33,7 @@ import (
 type historyVersion struct {
 	Activation string    `json:"activation"`
 	Revision   string    `json:"revision"`
+	Version    string    `json:"version,omitempty"`
 	Kind       string    `json:"kind"`
 	Request    string    `json:"request,omitempty"`
 	Verdict    string    `json:"verdict,omitempty"`
@@ -59,6 +60,7 @@ type historyView struct {
 	Versions  []historyVersion    `json:"versions,omitempty"`
 	Named     []src.NamedVersion  `json:"named,omitempty"`
 	Reviews   []src.ReviewVersion `json:"reviews,omitempty"`
+	Releases  []src.ReleaseTag    `json:"releases,omitempty"`
 }
 
 func toHistoryView(h src.VersionHistory) historyView {
@@ -69,10 +71,11 @@ func toHistoryView(h src.VersionHistory) historyView {
 	v := historyView{
 		App: h.App, Principal: h.Principal, Line: h.Line,
 		Tip: h.Tip, Active: h.Active, Base: h.Base, Named: h.Named, Reviews: h.Reviews,
+		Releases: h.Releases,
 	}
 	for _, e := range h.Entries {
 		v.Versions = append(v.Versions, historyVersion{
-			Activation: e.Activation, Revision: e.Revision, Kind: e.Kind,
+			Activation: e.Activation, Revision: e.Revision, Version: e.Version, Kind: e.Kind,
 			Request: e.Request, Verdict: e.Verdict, Evidence: e.Evidence,
 			Principal: e.Principal, Author: e.Author, When: e.When,
 			Names: names[e.Revision], Active: e.Revision == h.Active && h.Active != "",
