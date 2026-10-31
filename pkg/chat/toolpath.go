@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"mvdan.cc/sh/v3/pathconv"
+
+	_ "github.com/qiangli/yoke/pkg/nativepath"
 )
 
 // Resolving an agent CLI must not depend on the launcher's inherited PATH.

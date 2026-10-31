@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/broker/door"
+	_ "github.com/qiangli/yoke/pkg/nativepath"
 	"github.com/qiangli/yoke/pkg/toolcmd"
 )
 
