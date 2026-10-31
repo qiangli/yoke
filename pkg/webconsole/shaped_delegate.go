@@ -24,7 +24,7 @@ type BashyDelegate struct {
 	Bashy string
 	// Agent is the tool:model the delegation is pinned to, e.g. codex:<model>.
 	Agent string
-	// Timeout and IdleTimeout default to 20m and 5m.
+	// Timeout and IdleTimeout default to 20m and 15m (delegateTimeouts).
 	Timeout     time.Duration
 	IdleTimeout time.Duration
 }
@@ -59,19 +59,27 @@ func delegateEnv(agent string) []string {
 	return append(env, "BASHY_DELEGATE_CALLER=genie", "BASHY_DELEGATE_ALLOW="+agent)
 }
 
+// delegateTimeouts fills the defaults. The idle watchdog counts agent output,
+// and one model turn over a real app's tree (the ~340 KB launcher) can be
+// silent for several minutes, so idle must outlast a single turn.
+func (d BashyDelegate) delegateTimeouts() (timeout, idle time.Duration) {
+	timeout, idle = d.Timeout, d.IdleTimeout
+	if timeout == 0 {
+		timeout = 20 * time.Minute
+	}
+	if idle == 0 {
+		idle = 15 * time.Minute
+	}
+	return timeout, idle
+}
+
 // Delegate runs the agent and parses the bashy-chat-v1 envelope.
 func (d BashyDelegate) Delegate(ctx context.Context, req DelegateRequest) (DelegateResult, error) {
 	if strings.TrimSpace(d.Agent) == "" {
 		return DelegateResult{}, errors.New("no shaping agent configured (tool:model)")
 	}
 	bin := selfbin.Resolve(d.Bashy)
-	timeout, idle := d.Timeout, d.IdleTimeout
-	if timeout == 0 {
-		timeout = 20 * time.Minute
-	}
-	if idle == 0 {
-		idle = 5 * time.Minute
-	}
+	timeout, idle := d.delegateTimeouts()
 	cmd := exec.CommandContext(ctx, bin, "delegate", "--json", "--agent", d.Agent,
 		"--timeout", timeout.String(), "--idle-timeout", idle.String(), "--cwd", req.Dir, req.Task)
 	cmd.Dir = req.Dir

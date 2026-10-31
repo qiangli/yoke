@@ -6,6 +6,7 @@ package webconsole
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestShapedDelegateEnvAllowListPerOS(t *testing.T) {
@@ -30,5 +31,17 @@ func TestShapedDelegateEnvAllowListPerOS(t *testing.T) {
 	}
 	if len(delegateEnvNames("windows")) != len(delegateEnvAllow)+len(windowsOnly) {
 		t.Fatal("windows allow-list is not exactly the POSIX list plus the Windows profile/system variables")
+	}
+}
+
+// TestDelegateIdleOutlastsOneModelTurn: live on the launcher one silent model
+// turn took 4m38s; the old 5m idle default killed the next one (S526.B1a2).
+func TestDelegateIdleOutlastsOneModelTurn(t *testing.T) {
+	timeout, idle := BashyDelegate{}.delegateTimeouts()
+	if idle < 15*time.Minute || timeout < idle {
+		t.Fatalf("defaults timeout=%v idle=%v; idle must be >= 15m and <= timeout", timeout, idle)
+	}
+	if to, id := (BashyDelegate{Timeout: time.Minute, IdleTimeout: time.Second}).delegateTimeouts(); to != time.Minute || id != time.Second {
+		t.Fatalf("explicit values not kept: %v %v", to, id)
 	}
 }
