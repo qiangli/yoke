@@ -27,6 +27,7 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/kb"
 	"github.com/qiangli/yoke/pkg/llmbudget"
+	"github.com/qiangli/yoke/pkg/nativepath"
 	"github.com/qiangli/yoke/pkg/procguard"
 	"github.com/qiangli/yoke/pkg/recall"
 	"github.com/qiangli/yoke/pkg/reduce"
@@ -1132,23 +1133,32 @@ func ensureShims(bashy string) string {
 // prepended to PATH (when non-empty), and SHELL + CLAUDE_CODE_SHELL pinned to
 // bashy. Pure and deterministic so it can be tested without spawning a process.
 func forcedShellEnv(base []string, bashy, shimDir string) []string {
-	out := make([]string, 0, len(base)+2)
-	pathSet := false
+	return forcedShellEnvFor(base, bashy, shimDir, runtime.GOOS == "windows")
+}
+
+// forcedShellEnvFor is forcedShellEnv for an explicit target OS. PATH is
+// addressed through nativepath so a Windows block spelled "Path=" is edited in
+// place rather than gaining a second "PATH=" entry (see toolPathEnvFor).
+func forcedShellEnvFor(base []string, bashy, shimDir string, windows bool) []string {
+	out := make([]string, 0, len(base)+3)
 	for _, kv := range base {
 		switch {
-		case shimDir != "" && strings.HasPrefix(kv, "PATH="):
-			out = append(out, "PATH="+shimDir+string(os.PathListSeparator)+kv[len("PATH="):])
-			pathSet = true
 		case strings.HasPrefix(kv, "SHELL="), strings.HasPrefix(kv, "CLAUDE_CODE_SHELL="):
 			// re-added canonically below
 		default:
 			out = append(out, kv)
 		}
 	}
-	if shimDir != "" && !pathSet {
-		out = append(out, "PATH="+shimDir)
+	if shimDir != "" {
+		cur, ok := nativepath.LookupPath(out, windows)
+		if ok && cur != "" {
+			cur = shimDir + nativepath.PathListSeparator(windows) + cur
+		} else {
+			cur = shimDir
+		}
+		out = nativepath.SetPath(out, windows, cur)
 	}
-	if runtime.GOOS != "windows" {
+	if !windows {
 		out = append(out, "SHELL="+bashy)
 	}
 	out = append(out, "CLAUDE_CODE_SHELL="+bashy)

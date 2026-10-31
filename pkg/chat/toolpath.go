@@ -10,7 +10,7 @@ import (
 
 	"mvdan.cc/sh/v3/pathconv"
 
-	_ "github.com/qiangli/yoke/pkg/nativepath"
+	"github.com/qiangli/yoke/pkg/nativepath"
 )
 
 // Resolving an agent CLI must not depend on the launcher's inherited PATH.
@@ -132,6 +132,16 @@ func ResolveToolBinary(tool string) string {
 		}
 		return tool
 	}
+	// The first-party agent CLI ("bashy", the genie backend) IS this binary:
+	// resolve it to the running executable before any PATH search. A PATH
+	// lookup can select a DIFFERENT bashy — on elephant (Windows) the shell's
+	// inherited PATH named the outpost-installed bashy ahead of the candidate
+	// the operator was running, so `bashy delegate --agent genie:…` from a new
+	// build launched an old genie. The launcher and its genie must be the same
+	// build; an operator who wants another one names its path in `cli.binary`.
+	if p := lookSelf(tool); p != "" {
+		return p
+	}
 	if p, err := exec.LookPath(tool); err == nil {
 		if abs, err := filepath.Abs(p); err == nil {
 			return abs
@@ -141,10 +151,7 @@ func ResolveToolBinary(tool string) string {
 	if p := lookInPathList(tool, os.Getenv("PATH"), runtime.GOOS == "windows", os.Getenv("PATHEXT")); p != "" {
 		return p
 	}
-	if p := lookInUserBins(tool); p != "" {
-		return p
-	}
-	return lookSelf(tool)
+	return lookInUserBins(tool)
 }
 
 // lookInPathList searches a PATH value exec.LookPath cannot read. Inside the
@@ -183,7 +190,8 @@ func lookInPathList(tool, pathValue string, windows bool, pathext string) string
 }
 
 // lookSelf resolves the agent CLI "bashy" (the genie agent) to the running
-// binary, so it works when bashy was started by absolute path and is on no PATH.
+// binary: it works when bashy was started by absolute path and is on no PATH,
+// and it never picks another install of bashy that happens to be on PATH.
 func lookSelf(tool string) string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -204,43 +212,45 @@ func lookSelf(tool string) string {
 // in the same directory it was itself found in — a launch that half-works is
 // harder to diagnose than one that does not start.
 func toolPathEnv(base []string) []string {
+	return toolPathEnvFor(base, runtime.GOOS == "windows")
+}
+
+// toolPathEnvFor is toolPathEnv for an explicit target OS, so the Windows
+// shape is testable on every host.
+//
+// PATH is located the way the target OS resolves the name, not by the literal
+// "PATH=" prefix: a Windows block spells it "Path", and a prefix match that
+// misses it appends a second entry holding only the bin homes — which os/exec's
+// case-insensitive dedup then lets REPLACE the real one, so the child starts
+// with a PATH of nothing but those homes and its own shell-outs fail with
+// `executable file not found in %PATH%` (sprint 526, story 92f9dc4c: `bashy
+// delegate` → genie → `outpost`). nativepath.SetPath rewrites the entry in
+// place, keeps its spelling and leaves exactly one.
+func toolPathEnvFor(base []string, windows bool) []string {
 	dirs := userBinDirs()
 	if len(dirs) == 0 {
-		return base
+		return nativepath.Collapse(base, windows)
 	}
-	sep := string(os.PathListSeparator)
-	out := make([]string, 0, len(base)+1)
-	found := false
-	for _, kv := range base {
-		if !found && strings.HasPrefix(kv, "PATH=") {
-			found = true
-			cur := kv[len("PATH="):]
-			have := map[string]bool{}
-			for _, d := range filepath.SplitList(cur) {
-				have[d] = true
-			}
-			var extra []string
-			for _, d := range dirs {
-				if !have[d] {
-					extra = append(extra, d)
-				}
-			}
-			if len(extra) > 0 {
-				if cur == "" {
-					cur = strings.Join(extra, sep)
-				} else {
-					cur = cur + sep + strings.Join(extra, sep)
-				}
-			}
-			out = append(out, "PATH="+cur)
-			continue
+	sep := nativepath.PathListSeparator(windows)
+	cur, _ := nativepath.LookupPath(base, windows)
+	have := map[string]bool{}
+	for _, d := range strings.Split(cur, sep) {
+		have[d] = true
+	}
+	var extra []string
+	for _, d := range dirs {
+		if !have[d] {
+			extra = append(extra, d)
 		}
-		out = append(out, kv)
 	}
-	if !found {
-		out = append(out, "PATH="+strings.Join(dirs, sep))
+	if len(extra) > 0 {
+		if cur == "" {
+			cur = strings.Join(extra, sep)
+		} else {
+			cur = cur + sep + strings.Join(extra, sep)
+		}
 	}
-	return out
+	return nativepath.SetPath(base, windows, cur)
 }
 
 // ErrToolNotFound explains a failed resolution in the terms the operator can
