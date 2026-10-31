@@ -3,12 +3,16 @@ id: ac23a2648237
 kind: bug
 title: 'S530.5 bashy oci bridge networking fails on a bare Linux host: netavark needs nft; supply bashy''s pure-Go nft (default build, JSON input) via helper_binaries_dir'
 seq: 2997
-status: todo
+status: done
 priority: p1
 created: 2026-10-31T02:11:22.132737Z
+weave: 752
+assignee: codex-gpt6-sol
 sprint: 530
 sprint_id: 1d6b9478-c054-5b09-961e-c649a3bc1705
 sprint_title: 'Master-provisioned AWS satellites: cloudbox provisions Lightsail satellites from owner-held AWS credentials (S522.5)'
+closed: 2026-10-31T03:58:30.800547Z
+closed_by: s530-manager
 ---
 
 Operator 2026-10-30 (Sprint 530): a real bashy bug, filed in-sprint ("bashy is all you need" must hold on a bare Linux host). Does not gate S530.4 (v0.18.50 uses --network host as a recorded known gap). If it cannot land before the sprint cutoff, the conductor reports it at close.
