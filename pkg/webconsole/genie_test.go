@@ -129,7 +129,7 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 	// button in the header bar; the trust-surface pages are protected.
 	wantTag(t, "launcher", genieTagOf(get(alice, "/", 200).Body.String()), srcAttr, baseAttr,
 		`data-app="console"`, `data-page="/"`, `data-mode="live"`, `data-position="top-right"`,
-		`data-anchor="#bar #nav, #bar"`, `data-hidden="0"`, `data-landing="1"`)
+		`data-anchor="#bar #nav, #bar"`, `data-hidden="0"`, `data-landing="1"`, `data-candidate=""`, `data-mount=""`)
 	wantTag(t, "board", genieTagOf(get(alice, "/sprint/?x=1", 200).Body.String()), baseAttr,
 		`data-app="console"`, `data-page="/sprint/"`, `data-mode="live"`, `data-landing="0"`)
 	wantTag(t, "desktop", genieTagOf(get(alice, "/desktop/"+consoleTestPeer+"/", 200).Body.String()), baseAttr,
@@ -147,7 +147,8 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 	// A registered shaped app's pages: the tag addresses the LAUNCHER's
 	// root, not the app's mount, and the page is app-relative.
 	wantTag(t, "notes", genieTagOf(get(alice, "/notes/", 200).Body.String()), srcAttr, baseAttr,
-		`data-app="notes"`, `data-page="/"`, `data-mode="live"`, `data-position="top-right"`, `data-anchor=""`, `data-landing="1"`)
+		`data-app="notes"`, `data-page="/"`, `data-mode="live"`, `data-position="top-right"`, `data-anchor=""`, `data-landing="1"`,
+		`data-candidate=""`, `data-mount="notes/"`)
 	wantTag(t, "notes index", genieTagOf(get(alice, "/notes/index.html?n=2", 200).Body.String()), baseAttr,
 		`data-app="notes"`, `data-page="/index.html?n=2"`, `data-landing="1"`)
 	if got := get(alice, "/notes/notes.js", 200).Body.String(); strings.Contains(got, "data-bashy-genie") {
@@ -204,14 +205,16 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 		t.Fatalf("verify of a candidate changing genie.js = %+v, want a failing verdict naming public/genie.js", verified.Verdict)
 	}
 	post(alice, "/api/shape/console/candidates/"+cand.ID+"/approve", "", http.StatusConflict)
-	// A preview of the console: the component is there, disabled.
+	// A preview of the console: the component is there in preview mode and
+	// names the candidate it reviews in place (the review bar).
 	clean := consoleCandidate(t, console, alicePrincipal, "fedcba9876543210", baseCommit.Hash.String(), func(work string) {
 		if err := os.WriteFile(filepath.Join(work, "public", "app.css"), []byte("/* candidate */\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	})
 	preview := get(alice, "/shape/console/preview/"+clean.ID+"/sprint/", 200).Body.String()
-	wantTag(t, "console preview", genieTagOf(preview), srcAttr, baseAttr, `data-app="console"`, `data-page="/sprint/"`, `data-mode="preview"`)
+	wantTag(t, "console preview", genieTagOf(preview), srcAttr, baseAttr, `data-app="console"`, `data-page="/sprint/"`, `data-mode="preview"`,
+		`data-candidate="`+clean.ID+`"`, `data-mount=""`)
 
 	// (c) A wish from the notes app carries its page and element into the
 	// record and the agent's brief; the wish still targets the app.
@@ -294,7 +297,8 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 	}
 	notesPreview := get(alice, "/shape/notes/preview/"+placed.ID+"/about.html", 200).Body.String()
 	wantTag(t, "notes preview", genieTagOf(notesPreview), srcAttr, baseAttr, `data-app="notes"`, `data-page="/about.html"`,
-		`data-mode="preview"`, `data-position="bottom-left"`, `data-hidden="1"`, `data-landing="0"`)
+		`data-mode="preview"`, `data-position="bottom-left"`, `data-hidden="1"`, `data-landing="0"`,
+		`data-candidate="`+placed.ID+`"`, `data-mount="notes/"`)
 	placedDir, _ := notesApp.candidateDir(alicePrincipal, placed.ID)
 	if err := (&fakeActivator{home: home}).Activate(context.Background(), ActivateRequest{
 		App: "notes", Principal: alicePrincipal, SourceDir: source, CandidateDir: filepath.Join(placedDir, "work"),
@@ -430,5 +434,44 @@ func TestGenieAssetOpenPathIsOnlyTheScript(t *testing.T) {
 	}
 	if w := send(h, http.MethodPost, "/api/shape/console/candidates", stranger, http.Header{"Content-Type": {"application/json"}}, `{"request":"x","protected":true}`); w.Code == http.StatusAccepted {
 		t.Fatal("a stranger filed a request")
+	}
+}
+
+// TestGenieReviewTagNamesTheCandidate pins the server half of the in-place
+// review: only a preview request carries a candidate, the tag names it and
+// the app's live mount, and a panel's mount is carried relative with a
+// trailing slash ("" for the launcher's root).
+func TestGenieReviewTagNamesTheCandidate(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/about.html?x=1", nil)
+	if id, ok := previewOf(r); ok || id != "" {
+		t.Fatalf("a plain request previews %q", id)
+	}
+	live := genieTagFor(r, "notes", "notes/", nil, "/about.html?x=1", "")
+	if live.Mode != genieLive || live.Candidate != "" || live.Mount != "notes/" {
+		t.Fatalf("live tag = %+v", live)
+	}
+	pr := withPreview(r, "0123456789abcdef")
+	if id, ok := previewOf(pr); !ok || id != "0123456789abcdef" {
+		t.Fatalf("previewOf = %q, %v", id, ok)
+	}
+	tag := genieTagFor(pr, "notes", "notes/", nil, "/about.html?x=1", "")
+	if tag.Mode != geniePreview || tag.Candidate != "0123456789abcdef" {
+		t.Fatalf("preview tag = %+v", tag)
+	}
+	for _, want := range []string{`data-mode="preview"`, `data-candidate="0123456789abcdef"`, `data-mount="notes/"`} {
+		if !strings.Contains(tag.html(), want) {
+			t.Errorf("tag lacks %s: %s", want, tag.html())
+		}
+	}
+	if withPreview(r, "").Context().Value(previewKey{}) != "" {
+		t.Fatal("an empty candidate id is a preview")
+	}
+	if _, ok := previewOf(withPreview(r, "")); ok {
+		t.Fatal("an empty candidate id counts as a preview")
+	}
+	for in, want := range map[string]string{"": "", "/": "", "/notes/": "notes/", "notes": "notes/", "/a/b/": "a/b/"} {
+		if got := panelMount(in); got != want {
+			t.Errorf("panelMount(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

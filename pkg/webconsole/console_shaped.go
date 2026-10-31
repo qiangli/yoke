@@ -273,7 +273,7 @@ func (s *server) consoleGenieTag(r *http.Request, rev *object.Commit, name strin
 	if rev != nil {
 		tree, _ = rev.Tree()
 	}
-	g := genieTagFor(r, consoleApp, tree, geniePage(r.URL.Path, ""), genieConsoleAnchor)
+	g := genieTagFor(r, consoleApp, "", tree, geniePage(r.URL.Path, ""), genieConsoleAnchor)
 	if consoleProtectedAsset(name) && g.Mode == genieLive {
 		g.Mode = genieProtected
 	}
@@ -377,8 +377,9 @@ func (s *server) serveConsolePreview(w http.ResponseWriter, r *http.Request, c *
 	}
 	href := coopauth.BaseHref(r) + strings.TrimPrefix(prefix, "/") + "/"
 	doc := versionAssets(injectChrome(injectBase([]byte(body), href), name, s.openAppsMode()), c.Hash.String()[:12])
-	// The candidate's own placement, disabled: this is a preview.
-	doc = injectGenie(doc, genieTagFor(r, consoleApp, tree, geniePage("/"+rel, ""), genieConsoleAnchor))
+	// The candidate's own placement, in preview mode: the component reviews
+	// the candidate in place (genie.go).
+	doc = injectGenie(doc, genieTagFor(r, consoleApp, "", tree, geniePage("/"+rel, ""), genieConsoleAnchor))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Method == http.MethodHead {
 		return

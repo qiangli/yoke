@@ -115,10 +115,24 @@ type shapedApp struct {
 	// or add relative to its base (guardProtected). Nil for registered apps:
 	// nothing inside an app's own tree is protected from its owner.
 	protected []string
+	// mount is where the app's live pages sit, relative to the launcher's
+	// base and with a trailing slash ("notes/"); "" for the launcher itself.
+	// The common Genie button pairs a previewed page with its live one by it.
+	mount string
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
-	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers}
+	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path)}
+}
+
+// panelMount is a panel's mount path as the Genie tag carries it: relative,
+// trailing slash, "" for the root.
+func panelMount(path string) string {
+	m := strings.Trim(path, "/")
+	if m == "" {
+		return ""
+	}
+	return m + "/"
 }
 
 // store opens the principal's private state. principal must be non-empty.
@@ -308,7 +322,7 @@ func (a *shapedApp) serveTree(w http.ResponseWriter, r *http.Request, c *object.
 	if strings.HasSuffix(rel, ".html") {
 		// Every page of every shaped app carries the common Genie button,
 		// placed as the app's shaped.json says (genie.go).
-		out = injectGenie(out, genieTagFor(r, a.name, tree, geniePage(mountRel(r), r.URL.RawQuery), ""))
+		out = injectGenie(out, genieTagFor(r, a.name, a.mount, tree, geniePage(mountRel(r), r.URL.RawQuery), ""))
 	}
 	_, _ = w.Write(out)
 }

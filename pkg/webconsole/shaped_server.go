@@ -163,7 +163,7 @@ func (a *shapedApp) serveServer(w http.ResponseWriter, r *http.Request, c *objec
 	defer p.touch(-1)
 	tree, _ := c.Tree()
 	shapedServerProxy(p, func(page string) genieTag {
-		return genieTagFor(r, a.name, tree, page, "")
+		return genieTagFor(r, a.name, a.mount, tree, page, "")
 	}).ServeHTTP(w, r)
 }
 

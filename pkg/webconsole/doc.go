@@ -74,7 +74,13 @@
 // proxy), and candidate previews — so a wish can start from inside any app
 // without the app changing. The script is a protected manifest row served
 // from the embedded bytes at /_shape/genie.js; only its placement
-// (shaped.json's genie key) is shaped source.
+// (shaped.json's genie key) is shaped source. On a candidate preview the
+// same component is the in-place review: a bar pinned on top of the
+// candidate's own pages with the wish, what changed, Approve (trusted
+// verifier first, activation only on pass), Reject and Back, outlines of
+// what differs from the live page, a before/after toggle and the code diff
+// one click away; the Shape page stays the list of all wishes and the
+// version history.
 //
 // # Look settings
 //

@@ -1019,7 +1019,7 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, coopauth.PrefixPath(r, prefix+"/"), http.StatusFound)
 		return
 	}
-	r2 := withPreview(r.Clone(r.Context()))
+	r2 := withPreview(r.Clone(r.Context()), c.ID)
 	r2.URL.Path = rest
 	if a.name == consoleApp {
 		// The launcher's pages talk to Go handlers that are not in the tree

@@ -41,6 +41,20 @@ import (
 // Shape page, sign-in and pairing, the terminal, accounts — so the wish is
 // filed as a request and no candidate is built), and preview (a candidate
 // is being previewed; the button is disabled).
+//
+// In preview mode the same component is the IN-PLACE REVIEW (operator
+// 2026-10-31, docs/sprint-526/document-model-shaping-2026-10-31.md): the tag
+// names the candidate (data-candidate) and the app's live mount
+// (data-mount), and the component pins a review bar on top of the page —
+// the wish, "Reviewing candidate <id>", what changed in plain words (the
+// agent's coverage list + the changed files), Approve (the server re-runs
+// the trusted verifier and activates only on pass; a refusal is shown with
+// its reason), Reject, Back — outlines the elements that differ from the
+// live page (best effort), flips before/after, and keeps the code diff one
+// click away. The pages themselves keep every link inside the preview
+// prefix (base href / relative links), and a protected page reached from a
+// review says so: the component remembers the review in the tab's session
+// storage, which is how the live page knows (F4: a preview had no banner).
 
 const (
 	// genieAsset is the embedded component file.
@@ -73,6 +87,13 @@ type genieTag struct {
 	Anchor   string
 	Hidden   bool
 	Landing  bool
+	// Candidate is the candidate being previewed (preview mode only): the
+	// component reviews it in place.
+	Candidate string
+	// Mount is the app's live mount relative to Base, trailing slash; ""
+	// for the launcher itself, whose pages sit at Base. The component builds
+	// the live counterpart of a previewed page from it (before/after).
+	Mount string
 }
 
 // html renders the script tag. Every value is attribute-escaped; the src is
@@ -93,6 +114,7 @@ func (g genieTag) html() string {
 		attr("base", g.Base) + attr("app", g.App) + attr("page", g.Page) + attr("mode", g.Mode) +
 		attr("position", g.Position) + attr("anchor", g.Anchor) +
 		attr("hidden", flag(g.Hidden)) + attr("landing", flag(g.Landing)) +
+		attr("candidate", g.Candidate) + attr("mount", g.Mount) +
 		` defer></script>` + "\n"
 }
 
@@ -160,21 +182,24 @@ func genieConfigOf(tree *object.Tree) (cfg appserver.Genie, ok bool) {
 }
 
 // genieTagFor builds the tag for one page of app from the tree the page is
-// served from. mode is live unless the request is a preview; a caller
-// serving a protected page overrides it.
-func genieTagFor(r *http.Request, app string, tree *object.Tree, page, defaultAnchor string) genieTag {
+// served from. mount is the app's live mount relative to the launcher base
+// ("" for the launcher). mode is live unless the request is a preview, in
+// which case the tag also names the candidate; a caller serving a protected
+// page overrides the mode.
+func genieTagFor(r *http.Request, app, mount string, tree *object.Tree, page, defaultAnchor string) genieTag {
 	cfg, placed := genieConfigOf(tree)
 	anchor := cfg.Anchor
 	if !placed {
 		anchor = defaultAnchor
 	}
-	mode := genieLive
-	if isPreview(r) {
-		mode = geniePreview
+	mode, candidate := genieLive, ""
+	if id, ok := previewOf(r); ok {
+		mode, candidate = geniePreview, id
 	}
 	return genieTag{
 		Base: launcherBase(r), App: app, Page: page, Mode: mode,
 		Position: cfg.Position, Anchor: anchor, Hidden: cfg.Hidden, Landing: genieLanding(page),
+		Candidate: candidate, Mount: mount,
 	}
 }
 
@@ -211,15 +236,16 @@ func launcherBase(r *http.Request) string {
 	return coopauth.BaseHref(r)
 }
 
-// withPreview marks a request as serving a candidate preview; the component
-// is then disabled on the page.
-func withPreview(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), previewKey{}, true))
+// withPreview marks a request as serving a preview of candidate id; the
+// component then reviews that candidate in place instead of taking wishes.
+func withPreview(r *http.Request, id string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), previewKey{}, id))
 }
 
-func isPreview(r *http.Request) bool {
-	v, _ := r.Context().Value(previewKey{}).(bool)
-	return v
+// previewOf reports the candidate a preview request serves.
+func previewOf(r *http.Request) (string, bool) {
+	id, ok := r.Context().Value(previewKey{}).(string)
+	return id, ok && id != ""
 }
 
 // ---- the asset route ---------------------------------------------------------

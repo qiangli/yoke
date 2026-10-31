@@ -78,14 +78,21 @@ function render(c) {
     card.append(coverage);
   }
   if (c.rev) {
-    const diff = el("div", "shape-diff-host");
-    fetch(api("/candidates/" + c.id + "/diff")).then((r) => (r.ok ? r.text() : "")).then((h) => { diff.innerHTML = h; });
-    card.append(diff);
+    // The code diff stays one click away; the review itself happens in
+    // place, in the app, under the common Genie button's review bar.
+    const details = el("details", "shape-diff-host");
+    details.append(el("summary", "", "Code diff"));
+    const diff = el("div");
+    details.addEventListener("toggle", () => {
+      if (!details.open || diff.childNodes.length) return;
+      fetch(api("/candidates/" + c.id + "/diff")).then((r) => (r.ok ? r.text() : "")).then((h) => { diff.innerHTML = h; });
+    }, { once: false });
+    details.append(diff);
+    card.append(details);
     const acts = el("div", "row foot");
-    const prev = el("a", "btn", "Preview");
+    const prev = el("a", "btn", "Review in place");
     prev.href = url("shape/" + encodeURIComponent(app) + "/preview/" + c.id + "/");
-    prev.target = "_blank";
-    prev.rel = "noopener";
+    prev.setAttribute("aria-label", "Review candidate " + c.id + " in place, inside the app");
     acts.append(prev, el("span", "spacer"),
       button("Verify", "", () => call("POST", "/candidates/" + c.id + "/verify")),
       button("Reject", "", () => call("POST", "/candidates/" + c.id + "/reject")),
