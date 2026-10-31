@@ -3,7 +3,7 @@ id: 0afe67cdcd6b
 kind: feature
 title: S530.3 Owner AWS account prerequisites check, generalized setup scripts, static-IP release fix
 seq: 2995
-status: assigned
+status: done
 priority: p1
 labels:
     - cloud
@@ -14,6 +14,8 @@ assignee: codex-gpt6-astra
 sprint: 530
 sprint_id: 1d6b9478-c054-5b09-961e-c649a3bc1705
 sprint_title: 'Master-provisioned AWS satellites: cloudbox provisions Lightsail satellites from owner-held AWS credentials (S522.5)'
+closed: 2026-10-31T01:25:38.254871Z
+closed_by: s530-manager
 ---
 
 Split from S522.5 (operator 2026-10-30). The adapter never creates the staging bucket dhnt-userdata-<acct>-<region> and its budget preflight fails closed without a budget, so a new owner's account fails. (1) Before create, the master checks the owner's account and names exactly what is missing (budget dhnt-monthly-cap, staging bucket, IAM scope, region us-west-2). (2) Generalize docs/sprint-522/aws-budget-guard.sh and aws-userdata-bucket.sh to any account (account from STS, no hard-coded DHNT id); CloudShell as root is the cloud-only path. (3) Fix todo 1d1b54a8bb68: destroy leaves <name>-ip allocated and billed because static IPs are untaggable; allow ReleaseStaticIp/DetachStaticIp only for the satellite's own <name>-ip (adapter-side name check) and update the guard. Gate: prerequisite check fails clearly on a fake empty account; fake destroy releases the static IP. Depends on S530.2.
