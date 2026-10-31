@@ -6,9 +6,6 @@
 package webconsole
 
 import (
-	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,36 +13,19 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// signupShaper grows a blank app's page into a sign-up form, the way an
-// agent answering the first wish on a new app would.
-type signupShaper struct{}
-
-func (signupShaper) Delegate(_ context.Context, req DelegateRequest) (DelegateResult, error) {
-	index := filepath.Join(req.Dir, "public", "index.html")
-	b, err := os.ReadFile(index)
-	if err != nil {
-		return DelegateResult{}, err
-	}
-	grown := strings.Replace(string(b), "</main>", `<form id="signup"><input name="name"> <input name="email"> <button>Sign up</button></form></main>`, 1)
-	if err := os.WriteFile(index, []byte(grown), 0o644); err != nil {
-		return DelegateResult{}, err
-	}
-	return DelegateResult{Agent: "codex:fake-shaper", Identity: "genie-delegate:codex-fake", Receipt: "r-new",
-		Output: "Made a sign-up form.\n\nCOVERED:\n- sign-up form\nNOT COVERED:\n- (none)\n"}, nil
-}
-
-// TestDOMGenieNewApp: a new app is made from the same Genie button as any
-// other wish, on any page. In the wish panel the target switches from
-// "This app" to "New app"; with a name and a wish, the blank app is
-// created, the wish becomes the first step of an edit session on it, and
-// the browser lands in that draft with the result in place, to Save or
-// Cancel like a document.
+// TestDOMGenieNewApp (S526.B1i): a new app is made from the ONE Genie form
+// — no target choice, no name box. The person writes the wish on the
+// launcher; Genie (the fake intentShaper) answers NEW-APP with no change;
+// the server makes the blank app, opens a draft on it and runs the wish
+// there as the first step; the panel says "Genie is making Sign-up sheet…",
+// and the browser lands in /shape/signup/draft/ with the result in place,
+// to Save or Cancel like a document. The launcher lists the new tile.
 func TestDOMGenieNewApp(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
 	t.Setenv("BASHY_APPS_DIR", t.TempDir())
 	base, ctx, errs := domEnv(t, Options{Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(),
-		Delegate: signupShaper{}, Verifier: &fakeVerifier{}, Activator: &fakeActivator{home: home}}})
+		Delegate: &intentShaper{}, Verifier: &fakeVerifier{}, Activator: &fakeActivator{home: home}}})
 
 	until := func(step, expr string) {
 		t.Helper()
@@ -75,17 +55,25 @@ func TestDOMGenieNewApp(t *testing.T) {
 	run("open launcher", chromedp.Navigate(base+"/"))
 	until("genie button", `!!document.querySelector('[data-bashy-genie-btn="live"]')`)
 	run("open panel", chromedp.Click(`[data-bashy-genie-btn="live"]`, chromedp.ByQuery))
-	until("target choice", `!!document.querySelector('[data-bgn-target="new"]')`)
-	run("pick new app", chromedp.Click(`[data-bgn-target="new"]`, chromedp.ByQuery))
-	until("name box", `(() => { const i = document.querySelector('[data-bgn-newapp-name]'); return !!i && !i.hidden; })()`)
-	run("name", chromedp.SendKeys(`[data-bgn-newapp-name]`, "Sign-up sheet", chromedp.ByQuery, chromedp.NodeReady))
-	run("wish", chromedp.SendKeys(`[data-bashy-genie-panel] textarea`, "a sign-up sheet for Saturday's class with name and email", chromedp.ByQuery, chromedp.NodeReady))
-	run("make the app", chromedp.Click(`[data-bashy-genie-panel] .bgn-b.bgn-p`, chromedp.ByQuery, chromedp.NodeReady))
-	until("lands in the new app's draft", `location.pathname.includes('/shape/sign-up-sheet/draft/') && !!document.querySelector('#signup') && !!document.querySelector('[data-bgn-draft]')`)
+	until("one form", `(() => { const p = document.querySelector('[data-bashy-genie-panel]'); return !!p && !p.hidden && !!p.querySelector('textarea'); })()`)
+	var toggles int
+	run("no target choice", chromedp.Evaluate(`document.querySelectorAll('[data-bgn-target], [data-bgn-newapp-name], .bgn-target').length`, &toggles))
+	if toggles != 0 {
+		t.Fatalf("the wish panel still offers a target choice or a name box (%d elements)", toggles)
+	}
+	run("wish", chromedp.SendKeys(`[data-bashy-genie-panel] textarea`, "make a sign-up sheet app for Saturday's class, name and email, waitlist after 20", chromedp.ByQuery, chromedp.NodeReady))
+	run("make the wish", chromedp.Click(`[data-bashy-genie-panel] .bgn-b.bgn-p`, chromedp.ByQuery, chromedp.NodeReady))
+	until("the panel follows Genie into the new app", `location.pathname.includes('/shape/signup/draft/') || ((document.querySelector('[data-bashy-genie-panel] .bgn-status') || {}).textContent || '').includes('Genie is making Sign-up sheet')`)
+	until("lands in the new app's draft", `location.pathname.includes('/shape/signup/draft/') && !!document.querySelector('#signup') && !!document.querySelector('[data-bgn-draft]')`)
 	var bar string
 	run("read bar", chromedp.Evaluate(`document.querySelector('[data-bgn-draft]').textContent`, &bar))
-	assertNoJSErrors(t, "genie new app", errs())
 	if !strings.Contains(bar, "1 wish") {
 		t.Fatalf("draft bar = %q, want one wish applied", bar)
 	}
+	assertNoJSErrors(t, "genie new app", errs())
+
+	// The launcher shows the new tile at once: registered apps are read live.
+	run("back to the launcher", chromedp.Navigate(base+"/"))
+	until("new tile", `[...document.querySelectorAll('.tile .label')].some((e) => e.textContent.trim() === 'Sign-up sheet')`)
+	assertNoJSErrors(t, "launcher after new app", errs())
 }

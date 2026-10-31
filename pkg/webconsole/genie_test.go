@@ -246,16 +246,36 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 	if !strings.Contains(get(alice, "/api/shape/notes", 200).Body.String(), `"page":"/index.html?n=2"`) {
 		t.Fatal("the Shape page's state does not carry the wish's page")
 	}
-	// From a protected page: filed as a request, no agent, no workspace,
-	// nothing to verify or approve; discardable.
+	// From a protected page: filed as a request, nothing built, no
+	// workspace, nothing to verify or approve; discardable. Genie is asked
+	// one thing only — whether the wish is for a new app (S526.B1i) — under
+	// a brief that permits no change; an ordinary answer leaves it filed.
+	shaper.mu.Lock()
 	before := len(shaper.tasks)
+	shaper.mu.Unlock()
 	req := post(alice, "/api/shape/console/candidates",
 		`{"request":"a back button on the wish form","page":"/shape/console/","element":"","protected":true}`, http.StatusAccepted)
-	if req.Status != candRequested || req.Kind != candKindRequest || req.Rev != "" || req.Page != "/shape/console/" {
-		t.Fatalf("protected wish = %+v, want a filed request", req)
+	if req.Status != candRequested || req.Kind != candKindRequest || req.Rev != "" || req.Page != "/shape/console/" || !req.Deciding {
+		t.Fatalf("protected wish = %+v, want a filed request being read for intent", req)
 	}
-	if len(shaper.tasks) != before {
-		t.Fatal("a filed request ran the shaping agent")
+	deadline = time.Now().Add(20 * time.Second)
+	for req.Deciding {
+		if time.Now().After(deadline) {
+			t.Fatalf("the filed request was never decided: %+v", req)
+		}
+		time.Sleep(50 * time.Millisecond)
+		var cur Candidate
+		_ = json.Unmarshal(get(alice, "/api/shape/console/candidates/"+req.ID, 200).Body.Bytes(), &cur)
+		req = cur
+	}
+	if req.Status != candRequested || req.Rev != "" || req.NewApp != nil || req.Error != "" {
+		t.Fatalf("decided filed request = %+v, want still filed, nothing built", req)
+	}
+	shaper.mu.Lock()
+	asked := append([]string(nil), shaper.tasks[before:]...)
+	shaper.mu.Unlock()
+	if len(asked) != 1 || !strings.Contains(asked[0], "Make NO change") || strings.Contains(asked[0], "Make the smallest change") {
+		t.Fatalf("a filed request was briefed as a change: %q", asked)
 	}
 	if dir, _ := console.candidateDir(alicePrincipal, req.ID); dir == "" || fileExists(filepath.Join(dir, "work")) {
 		t.Fatal("a filed request has a workspace")

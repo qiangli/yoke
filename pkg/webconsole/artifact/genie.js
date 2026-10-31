@@ -40,6 +40,14 @@
 // protected page, say an edit session is open and lead back into it.
 // "Start editing" lives in the wish panel on every live page.
 //
+// There is ONE wish form and no target choice (S526.B1i): a wish that asks
+// for a separate new app is understood by Genie, not by this script — the
+// server answers the candidate (or the draft the wish was added to) with
+// status "new_app" and the app it made, and this script follows: "Genie is
+// making <label>…", wait for the wish to land as the new app's first draft
+// step, then land in that draft to Save or Cancel like a document. No
+// keyword is read here; the intent is Genie's answer only.
+//
 // Plain JS, no framework, no CDN, no dependency on the host page's styles:
 // the look is the launcher's design system, carried here so it is the same
 // on every app and every OS. The keyboard shortcut (Alt+Shift+G) opens the
@@ -98,8 +106,6 @@
 .bgn-sheet textarea{width:100%;min-height:5.5rem;font:inherit;color:inherit;background:var(--g-bg);border:1px solid var(--g-border);border-radius:.5rem;padding:.5rem;resize:vertical}
 .bgn-sheet textarea:focus{outline:none;box-shadow:0 0 0 2px var(--g-primary)}
 .bgn-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
-.bgn-target{display:flex;gap:.35rem;margin:.1rem 0 .5rem}.bgn-target .bgn-b[aria-pressed="true"]{box-shadow:0 0 0 2px var(--g-primary)}
-.bgn-sheet input[data-bgn-newapp-name]{width:100%;font:inherit;color:inherit;background:var(--g-bg);border:1px solid var(--g-border);border-radius:.5rem;padding:.45rem .5rem;margin-bottom:.5rem}
 .bgn-row .bgn-sp{flex:1}
 .bgn-b{font:inherit;font-size:.82rem;padding:.3rem .75rem;border-radius:.45rem;border:1px solid var(--g-border);background:var(--g-bg);color:var(--g-fg);cursor:pointer}
 .bgn-b.bgn-p{background:var(--g-primary);color:var(--g-primary-fg);border-color:transparent}
@@ -280,9 +286,6 @@
   let overlay = null, ta = null, status = null, send = null, chip = null, element = "";
   let lastFocus = null;
   let editBtn = null, editNote = null;
-  // The wish target: this app (default) or a new app made from a blank
-  // page, like File > New. Not offered inside an edit session or a preview.
-  let newApp = false, nameInp = null, targetBtns = null, titleSpan = null, protNote = null;
 
   // refreshEditRow labels the edit button after the open draft, if any.
   async function refreshEditRow() {
@@ -325,45 +328,20 @@
     const h = el("h2");
     h.id = "bgn-title";
     h.innerHTML = sparkle;
-    titleSpan = el("span");
-    titleSpan.append(el("span", "", "What should change in "), el("b", "", app), el("span", "", "?"));
-    h.append(titleSpan);
+    h.append(el("span", "", "What should change in "), el("b", "", app), el("span", "", "?"));
     const ctx = el("div", "bgn-ctx");
     ctx.append(el("span", "", "Page "), Object.assign(el("code", "", page), {}), el("span", "", " · "));
     chip = el("span", "bgn-chip");
     chip.hidden = true;
     ctx.append(chip);
     const hint = el("span", "", mode === "draft"
-      ? "The wish applies on your draft so far; undo and redo from the bar."
-      : "The wish is for the whole app; the page and a pointed-at element are context.");
+      ? "The wish applies on your draft so far; undo and redo from the bar. Ask for a new app and Genie makes one."
+      : "The wish is for the whole app; the page and a pointed-at element are context. Ask for a new app and Genie makes one.");
     ctx.append(hint);
     sheet.append(h, ctx);
     if (mode === "protected") {
-      protNote = el("div", "bgn-note", "This page is protected: sign-in, pairing, the Shape page, the terminal and accounts are never shaped. " +
-        "Your wish is filed as a request for the maintainers instead of building a candidate.");
-      sheet.append(protNote);
-    }
-    if (mode === "live" || mode === "protected") {
-      const target = el("div", "bgn-target");
-      target.setAttribute("role", "group");
-      target.setAttribute("aria-label", "What the wish is for");
-      const mk = (key, label) => {
-        const b = el("button", "bgn-b", label);
-        b.type = "button";
-        b.setAttribute("data-bgn-target", key);
-        b.addEventListener("click", () => setTarget(key === "new"));
-        return b;
-      };
-      targetBtns = [mk("this", "This app"), mk("new", "New app")];
-      target.append(...targetBtns);
-      nameInp = el("input");
-      nameInp.type = "text";
-      nameInp.placeholder = "Name of the new app, e.g. Sign-up sheet";
-      nameInp.autocomplete = "off";
-      nameInp.setAttribute("aria-label", "Name of the new app");
-      nameInp.setAttribute("data-bgn-newapp-name", "");
-      nameInp.hidden = true;
-      sheet.append(target, nameInp);
+      sheet.append(el("div", "bgn-note", "This page is protected: sign-in, pairing, the Shape page, the terminal and accounts are never shaped. " +
+        "Your wish is filed as a request for the maintainers instead of building a candidate — unless it asks for a new app, which Genie then makes."));
     }
     ta = el("textarea");
     ta.placeholder = mode === "protected" ? "e.g. a back button on this page" : "e.g. show the newest item first";
@@ -382,7 +360,6 @@
     send = el("button", "bgn-b bgn-p", mode === "protected" ? "File request" : mode === "draft" ? "Add the wish" : "Make the wish");
     send.type = "button";
     send.addEventListener("click", submit);
-    if (targetBtns) setTimeout(() => setTarget(false), 0);
     row.append(pick, el("span", "bgn-sp"), status, cancel, send);
     sheet.append(row);
     if (mode === "live") {
@@ -437,65 +414,48 @@
   }
   function toggle() { (overlay && !overlay.hidden) ? close() : open(); }
 
-  // setTarget switches the panel between a wish for this app and a new
-  // app: the title, the name box, the protected-page note and the button.
-  function setTarget(isNew) {
-    if (!targetBtns) return;
-    newApp = isNew;
-    targetBtns[0].setAttribute("aria-pressed", String(!isNew));
-    targetBtns[1].setAttribute("aria-pressed", String(isNew));
-    nameInp.hidden = !isNew;
-    if (protNote) protNote.hidden = isNew;
-    titleSpan.replaceChildren(...(isNew
-      ? [el("span", "", "What should the "), el("b", "", "new app"), el("span", "", " do?")]
-      : [el("span", "", "What should change in "), el("b", "", app), el("span", "", "?")]));
-    ta.placeholder = isNew ? "e.g. a sign-up sheet with name and email, waitlist after 20"
-      : mode === "protected" ? "e.g. a back button on this page" : "e.g. show the newest item first";
-    send.textContent = isNew ? "Make the app" : mode === "protected" ? "File request" : "Make the wish";
-    (isNew ? nameInp : ta).focus();
-  }
-
-  // appSlug turns a name into the new app's mount: lower case letters,
-  // digits and dashes.
-  const appSlug = (label) => label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-
-  // submitNewApp makes a blank app (api/apps/new), opens an edit session on
-  // it with the wish as the first step, waits for Genie, then lands in the
-  // draft: the new app shown in place, to Save or Cancel like a document.
-  async function submitNewApp(request) {
-    const label = nameInp.value.trim();
-    const name = appSlug(label);
-    if (!name) { status.textContent = "Give the new app a name."; send.disabled = false; nameInp.focus(); return; }
-    const post = async (path, body) => {
-      const res = await fetch(abs(base + path), {
-        method: "POST", credentials: "same-origin",
-        headers: body ? { "Content-Type": "application/json" } : {},
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const text = await res.text();
-      if (!res.ok) throw new Error(text.trim() || res.statusText);
-      return text;
-    };
+  // landInNewApp follows a "new_app" answer: the server made the app and
+  // ran the wish on it as the first step of an edit session; the panel
+  // says so, waits for that step, and lands in the new app's draft — the
+  // result shown in place, to Save or Cancel like a document. A first wish
+  // that made no step says why here instead.
+  async function landInNewApp(na) {
+    const label = na.label || na.app;
+    status.textContent = "Genie is making " + label + " (a few minutes)…";
+    rememberDraft(true, na.app);
     try {
-      status.textContent = "Creating " + label + "…";
-      await post("api/apps/new", { name, label });
-      await post("api/shape/" + encodeURIComponent(name) + "/draft");
-      rememberDraft(true, name);
-      await post("api/shape/" + encodeURIComponent(name) + "/draft/wishes", { request, page: "/", element: "", protected: false });
-      status.textContent = "Genie is building " + label + " (a few minutes)…";
       for (;;) {
-        const st = await draftState(name);
+        const st = await draftState(na.app);
         if (st === null) throw new Error("the draft of " + label + " is gone");
         if (st && !st.busy) {
-          if (st.last_error) throw new Error("No step: " + st.last_error);
+          if (st.last_error) throw new Error(label + " was made, but the first wish made no step: " + st.last_error);
           break;
         }
         await new Promise((r) => setTimeout(r, 1000));
       }
-      location.assign(abs(base + "shape/" + encodeURIComponent(name) + "/draft/").href);
+      location.assign(abs(base + "shape/" + encodeURIComponent(na.app) + "/draft/").href);
     } catch (e) {
       status.textContent = e.message || "The new app could not be made";
       send.disabled = false;
+    }
+  }
+
+  // followCandidate watches a wish the live (or protected) page sent until
+  // Genie has answered. Only one answer changes anything here: new_app,
+  // which this page follows into the new app's draft; the rest is for the
+  // Shape page, where the "Follow it" link already points.
+  async function followCandidate(id) {
+    for (;;) {
+      let c;
+      try {
+        const res = await fetch(api("/" + encodeURIComponent(id)), { credentials: "same-origin" });
+        if (res.status === 404) return;
+        if (!res.ok) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+        c = await res.json();
+      } catch (_) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+      if (c.status === "new_app" && c.new_app) { send.disabled = true; await landInNewApp(c.new_app); return; }
+      if (c.status !== "running" && !c.deciding) return;
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
@@ -505,7 +465,6 @@
     send.disabled = true;
     status.textContent = "Sending…";
     if (mode === "draft") { await submitStep(request); return; }
-    if (newApp) { await submitNewApp(request); return; }
     try {
       const res = await fetch(api(), {
         method: "POST", credentials: "same-origin",
@@ -526,6 +485,7 @@
       const a = el("a", "", "Follow it");
       a.href = reviewURL();
       status.append(a);
+      if (c.id) followCandidate(c.id);
     } catch (e) {
       status.textContent = e.message || "The wish could not be sent";
     }
@@ -550,6 +510,7 @@
       if (barState) barState.watch();
       const st = await settle();
       if (!st) throw new Error("the draft is gone");
+      if (st.new_app) { await landInNewApp(st.new_app); return; }
       if (st.last_error) { status.textContent = "No step: " + st.last_error; send.disabled = false; return; }
       close();
       toast("Wish applied to your draft.");
@@ -1118,6 +1079,13 @@
         return;
       }
       if (onDone) onDone(s2);
+      if (s2.new_app) {
+        // The wish made a new app instead of a step: the panel (if open)
+        // is already on its way there; from the bar, go the same way.
+        setBusy(true, "Genie is making " + (s2.new_app.label || s2.new_app.app) + "…");
+        if (!overlay || overlay.hidden) location.assign(abs(base + "shape/" + encodeURIComponent(s2.new_app.app) + "/draft/").href);
+        return;
+      }
       if (s2.last_error) { render(s2); return; }
       location.reload();
     }

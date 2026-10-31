@@ -69,7 +69,10 @@ type draftStep struct {
 	Identity string           `json:"agent_identity,omitempty"`
 	Receipt  string           `json:"agent_receipt,omitempty"`
 	Coverage *CoverageSummary `json:"coverage,omitempty"`
-	Created  time.Time        `json:"created"`
+	// First marks the first wish on a new app Genie made for it: the brief
+	// says the app was just created for this request (shaped_newapp.go).
+	First   bool      `json:"first,omitempty"`
+	Created time.Time `json:"created"`
 }
 
 // Draft is the stored edit session of one principal on one app.
@@ -89,7 +92,11 @@ type Draft struct {
 	// LastError is the last wish that produced no step, with why.
 	LastError string `json:"last_error,omitempty"`
 	// Verdict is the last Save's verifier answer (a refusal keeps the draft).
-	Verdict *Verdict  `json:"verdict,omitempty"`
+	Verdict *Verdict `json:"verdict,omitempty"`
+	// NewApp is set when the last wish produced no step because Genie read
+	// it as "make a separate new app" and the server made it: the browser
+	// follows it into the new app's draft. Cleared by the next wish.
+	NewApp  *NewApp   `json:"new_app,omitempty"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 }
@@ -312,10 +319,11 @@ func (s *server) addDraftWish(a *shapedApp, principal string, w wish) (Draft, er
 		d.Dropped = append(d.Dropped, d.Steps[d.Cursor:]...)
 		d.Steps = append([]draftStep{}, d.Steps[:d.Cursor]...)
 		step = draftStep{ID: hex.EncodeToString(idb[:]), Request: w.Request, Page: w.Page, Element: w.Element,
-			Status: stepRunning, Parent: d.tip(), Created: time.Now().UTC()}
+			Status: stepRunning, Parent: d.tip(), First: w.first, Created: time.Now().UTC()}
 		d.Steps = append(d.Steps, step)
 		d.Cursor = len(d.Steps) - 1
 		d.LastError = ""
+		d.NewApp = nil
 		return nil
 	})
 	if err != nil {
@@ -324,7 +332,7 @@ func (s *server) addDraftWish(a *shapedApp, principal string, w wish) (Draft, er
 	s.shapes.wg.Add(1)
 	go func() {
 		defer s.shapes.wg.Done()
-		s.runDraftStep(a, principal, step)
+		s.runDraftStep(a, principal, step, w.operator)
 	}()
 	return d, nil
 }
@@ -332,7 +340,7 @@ func (s *server) addDraftWish(a *shapedApp, principal string, w wish) (Draft, er
 // runDraftStep is the background half of a wish: the work clone is put at
 // the step's parent, the agent runs there, and the result becomes the
 // step's commit. A failed wish leaves no step, only the reason.
-func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep) {
+func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, operator bool) {
 	ctx := s.opts.Ctx
 	dir, err := a.draftDir(principal)
 	if err != nil {
@@ -372,9 +380,29 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep) {
 		return
 	}
 	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work,
-		Task: shapingTaskFor(a.name, wish{Request: step.Request, Page: step.Page, Element: step.Element})})
+		Task: shapingTaskFor(a.name, wish{Request: step.Request, Page: step.Page, Element: step.Element, first: step.First})})
 	if err != nil {
 		fail(fmt.Errorf("shaping agent: %w", err))
+		return
+	}
+	// Genie may have answered that the wish is for a new app: no step on
+	// this draft, the app is made, and the draft points at it.
+	na, err := s.newAppIntent(ctx, repo, step.Parent, principal, step.Request, res.Output, operator, step.First)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if na != nil {
+		_, _ = s.updateDraft(a, principal, func(d *Draft) error {
+			if i := d.find(step.ID); i >= 0 {
+				d.Steps = append(d.Steps[:i:i], d.Steps[i+1:]...)
+				if d.Cursor > len(d.Steps) {
+					d.Cursor = len(d.Steps)
+				}
+			}
+			d.NewApp = na
+			return nil
+		})
 		return
 	}
 	rev, err := commitCandidate(repo, Candidate{Request: step.Request, Principal: principal, Agent: res.Agent, BaseRev: step.Parent})
@@ -569,6 +597,7 @@ func (s *server) handleShapeDraftWish(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	in.operator = s.operatorSession(r)
 	if in.Protected {
 		// A protected page is never part of the draft: the wish is filed as
 		// a request for the maintainers, exactly as outside a session.

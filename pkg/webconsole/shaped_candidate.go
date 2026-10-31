@@ -275,7 +275,13 @@ type Candidate struct {
 	Receipt  string           `json:"agent_receipt,omitempty"`
 	Coverage *CoverageSummary `json:"coverage,omitempty"`
 	Verdict  *Verdict         `json:"verdict,omitempty"`
-	Created  time.Time        `json:"created"`
+	// NewApp is set, with Status "new_app", when Genie read the wish as
+	// "make a separate new app" and the server made it (shaped_newapp.go).
+	NewApp *NewApp `json:"new_app,omitempty"`
+	// Deciding is true on a filed request while Genie reads it for that
+	// intent; it ends with NewApp set or with the request simply filed.
+	Deciding bool      `json:"deciding,omitempty"`
+	Created  time.Time `json:"created"`
 }
 
 // CoverageSummary is the agent's account of the request, not a verifier verdict.
@@ -423,6 +429,13 @@ type wish struct {
 	// Protected is set by the common Genie button on a protected page: the
 	// wish is filed as a request instead of building a candidate.
 	Protected bool `json:"protected"`
+	// operator is the admission the wish arrived with: an operator session
+	// (not a paired device) may have a new app made from a wish, exactly
+	// as it alone could post to the New-app API. Never read from the body.
+	operator bool
+	// first marks the wish re-run on a new app as its first step: the
+	// brief says so, and a NEW-APP answer is not acted on there.
+	first bool
 }
 
 const (
@@ -493,6 +506,7 @@ func shapingTaskFor(app string, w wish) string {
 		"  val=\"${item_display_name:-${item_name:-}}\"\n" +
 		"Do not rename or remove existing stored data fields, flags, arguments, routes, or unit names.\n" +
 		"The common Genie button (public/genie.js and anything under _shape/) is protected: never edit it. To move or hide the button, edit only the \"genie\" key of shaped.json at the app root, for example {\"genie\": {\"position\": \"bottom-left\"}}; position is one of top-right, top-left, bottom-right, bottom-left; \"hidden\": true hides it; \"anchor\" is a CSS selector to place it inside.\n\n" +
+		newAppBrief(w.first) +
 		shapingContext(w.Page, w.Element) +
 		"End your final response with a short coverage list against every part of the user's request. Use these exact headings and bullet format; write - (none) when a section is empty:\n" +
 		"COVERED:\n- what you completed\nNOT COVERED:\n- what you did not complete\n\n" +
@@ -528,17 +542,94 @@ func (s *server) startCandidate(a *shapedApp, principal string, w wish) (Candida
 	s.shapes.wg.Add(1)
 	go func() {
 		defer s.shapes.wg.Done()
-		s.runCandidate(a, dir, c)
+		s.runCandidate(a, dir, c, w.operator)
 	}()
 	return c, nil
 }
 
 // fileRequest records a wish made from a protected page as a request: the
-// Shape page lists it for the maintainers, nothing is built, and no agent
-// runs. The page and element say what it is about.
+// Shape page lists it for the maintainers and nothing is built on this app.
+// The page and element say what it is about. Genie still reads the wish
+// once, in the background, for one thing only — whether it asks for a
+// separate new app (shaped_newapp.go) — because a new app is not the
+// protected page; the record says so (Deciding) until it has answered.
 func (s *server) fileRequest(a *shapedApp, principal string, w wish) (Candidate, error) {
-	c, _, err := a.recordWish(principal, w, candRequested, candKindRequest)
-	return c, err
+	c, dir, err := a.recordWish(principal, w, candRequested, candKindRequest)
+	if err != nil {
+		return c, err
+	}
+	if a.opts.Delegate == nil || !w.operator {
+		return c, nil
+	}
+	c.Deciding = true
+	if err := saveCandidate(dir, c); err != nil {
+		return c, err
+	}
+	s.shapes.wg.Add(1)
+	go func() {
+		defer s.shapes.wg.Done()
+		s.readIntent(a, dir, c)
+	}()
+	return c, nil
+}
+
+// readIntent is the background half of a filed request: Genie reads the
+// wish in a scratch clone of the principal's version — never a workspace
+// of the request, which has none — under a brief that permits no change,
+// and a NEW-APP answer makes the app as it would from a live page. Any
+// other answer leaves the request filed as it was; an agent that could
+// not be asked is logged, not held against the request.
+func (s *server) readIntent(a *shapedApp, dir string, c Candidate) {
+	ctx := s.opts.Ctx
+	settle := func(na *NewApp, err error) {
+		s.shapes.mu.Lock()
+		defer s.shapes.mu.Unlock()
+		if _, statErr := os.Stat(dir); statErr != nil {
+			return // discarded while Genie was reading
+		}
+		c.Deciding = false
+		if err != nil {
+			c.Error = err.Error()
+		}
+		if na != nil {
+			c.NewApp, c.Status = na, candNewApp
+		}
+		_ = saveCandidate(dir, c)
+	}
+	skip := func(err error) {
+		slog.Warn("shape: filed request not read for intent", "app", a.name, "err", err)
+		settle(nil, nil)
+	}
+	repo, err := a.open()
+	if err != nil {
+		skip(err)
+		return
+	}
+	from, err := a.active(repo, c.Principal)
+	if err != nil {
+		skip(err)
+		return
+	}
+	scratch, err := os.MkdirTemp(filepath.Dir(dir), "intent-*")
+	if err != nil {
+		skip(err)
+		return
+	}
+	defer os.RemoveAll(scratch)
+	work := filepath.Join(scratch, "work")
+	wr, err := cloneAt(ctx, a.repo, work, from.Hash.String())
+	if err != nil {
+		skip(fmt.Errorf("prepare scratch clone: %w", err))
+		return
+	}
+	w := wish{Request: c.Request, Page: c.Page, Element: c.Element, operator: true}
+	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work, Task: intentTaskFor(a.name, w)})
+	if err != nil {
+		skip(fmt.Errorf("shaping agent: %w", err))
+		return
+	}
+	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
+	settle(s.newAppIntent(ctx, wr, from.Hash.String(), c.Principal, c.Request, res.Output, true, false))
 }
 
 // recordWish allocates a candidate id and directory and writes the record.
@@ -564,7 +655,7 @@ func (a *shapedApp) recordWish(principal string, w wish, status, kind string) (C
 	return c, dir, nil
 }
 
-func (s *server) runCandidate(a *shapedApp, dir string, c Candidate) {
+func (s *server) runCandidate(a *shapedApp, dir string, c Candidate, operator bool) {
 	ctx := s.opts.Ctx
 	fail := func(err error) {
 		s.shapes.mu.Lock()
@@ -588,6 +679,24 @@ func (s *server) runCandidate(a *shapedApp, dir string, c Candidate) {
 	}
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	c.Coverage = parseCoverageSummary(res.Output)
+	// Genie may have answered that the wish is for a new app: then nothing
+	// changed here, the app is made, and this record points at it.
+	na, err := s.newAppIntent(ctx, wr, c.BaseRev, c.Principal, c.Request, res.Output, operator, false)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if na != nil {
+		s.shapes.mu.Lock()
+		defer s.shapes.mu.Unlock()
+		if _, statErr := os.Stat(dir); statErr != nil {
+			return
+		}
+		_ = os.RemoveAll(work) // no revision to keep
+		c.NewApp, c.Status = na, candNewApp
+		_ = saveCandidate(dir, c)
+		return
+	}
 	rev, err := commitCandidate(wr, c)
 	if err != nil {
 		fail(err)
@@ -793,9 +902,11 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	in.operator = s.operatorSession(r)
 	if in.Protected {
 		// A wish from a protected page (the common Genie button says which):
-		// filed, not built (F2 of the operator findings).
+		// filed, not built (F2 of the operator findings) — unless Genie
+		// reads it as a new app, which is not the protected page.
 		c, err := s.fileRequest(a, principal, in)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -810,6 +921,15 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, c)
+}
+
+// operatorSession reports whether the request comes from an operator
+// session rather than a paired device: the admission for making apps,
+// the same one the registry routes apply (registryWriter).
+func (s *server) operatorSession(r *http.Request) bool {
+	user, _ := s.userOf(r)
+	_, _, device := splitDeviceSubject(user)
+	return !device
 }
 
 func (s *server) candidateFor(w http.ResponseWriter, r *http.Request) (*shapedApp, Candidate, string, bool) {

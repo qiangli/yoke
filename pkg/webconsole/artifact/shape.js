@@ -58,7 +58,8 @@ function render(c) {
   head.append(el("b", "", c.request), el("span", "spacer"), el("span", "shape-status " + c.status, c.status));
   card.append(head);
   const meta = [];
-  if (c.kind === "request") meta.push("filed as a request from a protected page: nothing is built; a maintainer takes it from here");
+  if (c.new_app) meta.push("Genie made a new app for this wish: " + (c.new_app.label || c.new_app.app) + " (its first wish is on the new app's draft)");
+  else if (c.kind === "request") meta.push("filed as a request from a protected page: nothing is built; a maintainer takes it from here" + (c.deciding ? " (Genie is reading whether it asks for a new app)" : ""));
   if (c.page) meta.push("from page " + c.page);
   if (c.element) meta.push("pointing at " + c.element);
   if (c.agent) meta.push("by " + c.agent);
@@ -100,7 +101,14 @@ function render(c) {
     card.append(acts);
   } else if (c.status !== "running") {
     const acts = el("div", "row foot");
-    acts.append(el("span", "spacer"), button("Discard", "", () => call("POST", "/candidates/" + c.id + "/reject")));
+    acts.append(el("span", "spacer"));
+    if (c.new_app) {
+      const open = el("a", "btn primary", "Open the draft of " + (c.new_app.label || c.new_app.app));
+      open.href = url("shape/" + encodeURIComponent(c.new_app.app) + "/draft/");
+      open.setAttribute("aria-label", "Continue in the edit session of the new app " + c.new_app.app);
+      acts.append(open);
+    }
+    acts.append(button("Discard", "", () => call("POST", "/candidates/" + c.id + "/reject")));
     card.append(acts);
   }
   return card;
@@ -263,7 +271,7 @@ async function refresh() {
   list.replaceChildren(...(st.candidates || []).sort((a, b) => (a.created < b.created ? 1 : -1)).map(render));
   if (st.draft) list.prepend(renderDraft(st.draft));
   clearTimeout(polling);
-  if ((st.candidates || []).some((c) => c.status === "running")) polling = setTimeout(refresh, 3000);
+  if ((st.candidates || []).some((c) => c.status === "running" || c.deciding)) polling = setTimeout(refresh, 3000);
   refreshHistory();
 }
 

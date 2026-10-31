@@ -4,12 +4,17 @@
 package fleet
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrAppExists is why NewBlankShapedApp refuses a name that is already
+// registered or already has a managed checkout.
+var ErrAppExists = errors.New("app already exists")
 
 // NewBlankShapedApp makes a shaped app from nothing, the way a document
 // editor makes a new document: a managed checkout whose base revision is an
@@ -22,22 +27,23 @@ import (
 // The catalog's own record check (with the console's WithAppValidate:
 // reserved mounts, builtin names) runs before anything is written, so a
 // refused name leaves nothing behind. A name that is already registered or
-// already has a managed checkout is refused: `app new` never overwrites an
-// app.
+// already has a managed checkout is refused with ErrAppExists: `app new`
+// never overwrites an app, and a caller that picks names (the console's
+// Genie, on "make a new app") can tell a taken name from a refused one.
 func NewBlankShapedApp(c *Catalog, a App) (App, error) {
 	a.Name = strings.TrimSpace(a.Name)
 	if err := validName(a.Name); err != nil {
 		return App{}, err
 	}
 	if _, ok := c.App(a.Name); ok {
-		return App{}, fmt.Errorf("fleet: app %q already exists", a.Name)
+		return App{}, fmt.Errorf("fleet: app %q: %w", a.Name, ErrAppExists)
 	}
 	dest, err := filepath.Abs(shapedManagedDir(a.Name))
 	if err != nil {
 		return App{}, fmt.Errorf("fleet: app %q: managed source: %w", a.Name, err)
 	}
 	if _, err := os.Stat(dest); err == nil {
-		return App{}, fmt.Errorf("fleet: app %q: a managed checkout already exists at %s", a.Name, dest)
+		return App{}, fmt.Errorf("fleet: app %q: a managed checkout already exists at %s: %w", a.Name, dest, ErrAppExists)
 	} else if !os.IsNotExist(err) {
 		return App{}, fmt.Errorf("fleet: app %q: managed source: %w", a.Name, err)
 	}

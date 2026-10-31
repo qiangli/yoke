@@ -4,6 +4,7 @@
 package fleet
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,9 +60,13 @@ func TestNewBlankShapedApp(t *testing.T) {
 		t.Fatalf("blank app has no %s base branch: %v", shapedBaseBranch, err)
 	}
 
-	// A second `app new` with the same name must not overwrite the app.
-	if _, err := NewBlankShapedApp(cat, App{Name: "signup"}); err == nil {
-		t.Fatal("a second app new with a taken name was accepted")
+	// A second `app new` with the same name must not overwrite the app, and
+	// the refusal is recognisable (the console picks a suffixed name then).
+	if _, err := NewBlankShapedApp(cat, App{Name: "signup"}); !errors.Is(err, ErrAppExists) {
+		t.Fatalf("a second app new with a taken name: err = %v, want ErrAppExists", err)
+	}
+	if _, err := NewBlankShapedApp(cat, App{Name: "signup-2"}); err != nil {
+		t.Fatalf("a suffixed name is a new app: %v", err)
 	}
 	// The registry's own validation still applies, before anything is written.
 	strict := New(WithRoot(filepath.Join(home, "registry")), WithoutCloudOverlay(),

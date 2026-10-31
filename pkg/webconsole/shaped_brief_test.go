@@ -62,3 +62,35 @@ func TestShapingBriefRequestsCoverageList(t *testing.T) {
 		}
 	}
 }
+
+// TestShapingBriefNewAppIntent (S526.B1i): the brief lets Genie say a wish
+// is for a separate new app — one NEW-APP line, no change — and the first
+// wish on an app made that way is briefed as such instead, so one wish
+// makes at most one app. The protected-page brief permits no change at all.
+func TestShapingBriefNewAppIntent(t *testing.T) {
+	brief := ShapingBrief("notes", "make a sign-up sheet app for Saturday's class")
+	for _, want := range []string{"SEPARATE NEW APP", "NEW-APP: <short name> | <label>", "make no change at all", "e.g. signup", "e.g. Sign-up sheet"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q", want)
+		}
+	}
+	if strings.Contains(brief, "just created, blank") {
+		t.Error("an ordinary wish is briefed as the first wish on a new app")
+	}
+	first := shapingTaskFor("signup", wish{Request: "make a sign-up sheet app", first: true})
+	if !strings.Contains(first, "just created, blank, for this very request") || !strings.Contains(first, "never answer NEW-APP") {
+		t.Errorf("first wish brief does not say the app was just made for it:\n%s", first)
+	}
+	if strings.Contains(first, "SEPARATE NEW APP") {
+		t.Error("the first wish on a new app is still offered NEW-APP")
+	}
+	intent := intentTaskFor("console", wish{Request: "make a sign-up sheet app", Page: "/pair"})
+	for _, want := range []string{"Make NO change", "NEW-APP: <short name> | <label>", "FILED", "page: /pair", "<<<REQUEST\nmake a sign-up sheet app\nREQUEST>>>"} {
+		if !strings.Contains(intent, want) {
+			t.Errorf("intent brief missing %q", want)
+		}
+	}
+	if strings.Contains(intent, "Make the smallest change") {
+		t.Error("the intent brief asks for a change")
+	}
+}
