@@ -3,13 +3,15 @@ id: cbc93ba6aecc
 kind: feature
 title: S546.2 AWS EC2 GPU worker adapter in yoke/pkg/provider/aws with budget and GPU guard preflight
 seq: 2988
-status: todo
+status: assigned
 priority: p0
 labels:
     - cloud
     - aws
     - gpu
 created: 2026-10-30T23:46:49.607077Z
+weave: 745
+assignee: muse-conductor
 sprint: 546
 sprint_id: ae111a75-889f-50a4-a423-de1bab0fbca6
 sprint_title: On-demand cloud GPU workers for large/custom Ollama models via Cloudbox and Outpost (AWS EC2 first)
