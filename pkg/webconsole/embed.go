@@ -14,6 +14,9 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
 )
@@ -59,13 +62,20 @@ var assetRef = regexp.MustCompile(`(src|href)="([A-Za-z0-9_./-]+\.(?:js|css))"`)
 //
 // This is why a fixed bug can keep reproducing on the reporter's machine while
 // every server-side check says the fix shipped.
-func versionAssets(doc []byte) []byte {
+//
+// A page served from a principal's shaped revision (console_shaped.go) is
+// stamped with that revision instead: every asset it names resolves per
+// principal, so the embedded content tags would pin the wrong bytes.
+func versionAssets(doc []byte, revision string) []byte {
 	return assetRef.ReplaceAllFunc(doc, func(m []byte) []byte {
 		g := assetRef.FindSubmatch(m)
 		name := string(g[2])
-		tag := strings.Trim(etagFor(name), `"`)
-		if tag == "0" {
-			return m // not an embedded asset; leave it alone
+		tag := revision
+		if tag == "" {
+			tag = strings.Trim(etagFor(name), `"`)
+			if tag == "0" {
+				return m // not an embedded asset; leave it alone
+			}
 		}
 		return []byte(string(g[1]) + `="` + name + `?v=` + tag + `"`)
 	})
@@ -116,27 +126,60 @@ func (s *server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/")
 	if name != "" {
-		if f, err := spaFS.Open(name); err == nil {
-			defer f.Close()
-			if st, err := f.Stat(); err == nil && !st.IsDir() {
-				// Embedded files carry a ZERO modtime, so without an explicit
-				// validator a browser has nothing to revalidate against and
-				// applies heuristic caching — it keeps serving the previous
-				// build's script forever. That is not a cosmetic staleness: the
-				// launcher shipped a version whose tiles opened apps in an
-				// iframe, and after the fix the old script kept running from
-				// cache, so the bug looked unfixed.
-				//
-				// no-cache means "revalidate every time", not "do not store":
-				// with the content ETag below an unchanged asset costs a 304.
-				w.Header().Set("ETag", etagFor(name))
-				w.Header().Set("Cache-Control", "no-cache")
-				http.ServeFileFS(w, r, spaFS, name)
-				return
-			}
+		// A principal's shaped revision supplies the asset when it has one
+		// (console_shaped.go); protected assets and everyone else come from
+		// the embedded bytes.
+		if body, c, ok := s.consoleAsset(r, name); ok {
+			serveRevisionAsset(w, r, name, body, c)
+			return
+		}
+		if serveEmbeddedAsset(w, r, name) {
+			return
 		}
 	}
 	s.servePageFile(w, r, "index.html")
+}
+
+// serveEmbeddedAsset writes an embedded non-page asset and reports whether
+// name was one. A page name falls through to the caller.
+func serveEmbeddedAsset(w http.ResponseWriter, r *http.Request, name string) bool {
+	if spaFS == nil {
+		return false
+	}
+	f, err := spaFS.Open(name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		return false
+	}
+	// Embedded files carry a ZERO modtime, so without an explicit
+	// validator a browser has nothing to revalidate against and
+	// applies heuristic caching — it keeps serving the previous
+	// build's script forever. That is not a cosmetic staleness: the
+	// launcher shipped a version whose tiles opened apps in an
+	// iframe, and after the fix the old script kept running from
+	// cache, so the bug looked unfixed.
+	//
+	// no-cache means "revalidate every time", not "do not store":
+	// with the content ETag below an unchanged asset costs a 304.
+	w.Header().Set("ETag", etagFor(name))
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFileFS(w, r, spaFS, name)
+	return true
+}
+
+// serveRevisionAsset writes an asset from a principal's shaped revision:
+// per-principal content behind one URL, so no shared cache may keep it, and
+// the blob hash is the validator.
+func serveRevisionAsset(w http.ResponseWriter, r *http.Request, name string, body []byte, c *object.Commit) {
+	w.Header().Set("ETag", `"`+c.Hash.String()[:16]+`"`)
+	w.Header().Set("Cache-Control", "no-cache, private")
+	w.Header().Set("Vary", "Cookie")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
 }
 
 // servePageFile writes an embedded HTML page with <base href> injected for the
@@ -152,20 +195,34 @@ func (s *server) servePageFile(w http.ResponseWriter, r *http.Request, name stri
 		http.Error(w, "console UI missing from this build", http.StatusInternalServerError)
 		return
 	}
-	f, err := spaFS.Open(name)
-	if err != nil {
-		http.Error(w, "console UI missing from this build", http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
-	doc, err := io.ReadAll(f)
-	if err != nil {
-		http.Error(w, "console UI unreadable", http.StatusInternalServerError)
-		return
+	// The page is the principal's shaped revision when they have one and the
+	// page is shapeable; otherwise the embedded bytes (console_shaped.go).
+	var doc []byte
+	revision := ""
+	if body, c, ok := s.consoleAsset(r, name); ok {
+		doc, revision = body, c.Hash.String()[:12]
+		w.Header().Set("Vary", "Cookie")
+	} else {
+		f, err := spaFS.Open(name)
+		if err != nil {
+			http.Error(w, "console UI missing from this build", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+		doc, err = io.ReadAll(f)
+		if err != nil {
+			http.Error(w, "console UI unreadable", http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(versionAssets(injectChrome(injectBase(doc, coopauth.BaseHref(r)), name, s.openAppsMode())))
+	out := versionAssets(injectChrome(injectBase(doc, coopauth.BaseHref(r)), name, s.openAppsMode()), revision)
+	if consoleProtectedAsset(name) {
+		// A protected page loads only embedded assets, whoever is asking.
+		out = rebaseAssets(out)
+	}
+	_, _ = w.Write(out)
 }
 
 // injectChrome adds the console's shared chrome — the copyright footer on
@@ -195,6 +252,8 @@ func injectChrome(doc []byte, name, openApps string) []byte {
 			mode = OpenNewTab
 		}
 		doc = bytes.Replace(doc, []byte("<body>"), []byte(`<body data-open-apps="`+mode+`">`), 1)
+		// The way into shaping the launcher itself (console_shaped.go).
+		doc = injectShapeButton(doc)
 		// index.html's own <footer id="foot"> already carries the version
 		// detail (#foot-left / #foot-build / #foot-right) — leave it alone
 		// and only append the copyright line inside it.

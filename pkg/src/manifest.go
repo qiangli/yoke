@@ -119,6 +119,18 @@ func ProtectedManifest() []ProtEntry {
 		{Repo: "yoke", Path: "pkg/shape/verify", Reason: "reserved: the shaping verifier decides whether a candidate activates"},
 		{Repo: "yoke", Path: "pkg/shape/evidence", Reason: "reserved: the evidence store a verifier verdict is read from"},
 		{Repo: "yoke", Path: "pkg/shape/state", Reason: "reserved: shape state code tracks activation and rollback"},
+		// Sprint 526.B1a: the launcher's presentation is a shaped app whose
+		// base tree is the embedded artifact/ directory, so a principal's
+		// revision can replace index, desktop, board, inbox and mb. These
+		// three pages stay out of reach: a tree that overrides or drops them
+		// is refused (webconsole console_shaped.go reads these rows). The
+		// Go handlers behind them are protected above.
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/shape.html", Reason: "the shaping review page; a shaped review UI could hide what is being approved"},
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/shape.js", Reason: "the shaping review page script; it drives verify and approve"},
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/term.html", Reason: "the terminal page is shell access"},
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/term.js", Reason: "the terminal page script carries the shell session"},
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/accounts.html", Reason: "the accounts page handles credentials"},
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/accounts.js", Reason: "the accounts page script handles credentials"},
 	}
 }
 

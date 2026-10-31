@@ -15,6 +15,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -168,6 +169,13 @@ type server struct {
 	shapes        shapeHub
 	calls         callBroker    // cross-app unit calls (shaped_call.go)
 	servers       shapedServers // declared shaped app servers (shaped_server.go)
+	// consoleSeed runs the launcher presentation's source seed once per
+	// process (console_shaped.go); consoleSeedErr is its memoized outcome.
+	consoleSeed    sync.Once
+	consoleSeedErr error
+	// root is the complete gated handler, for the console preview to route a
+	// candidate page's API calls back through (console_shaped.go).
+	root http.Handler
 }
 
 // consoleGuard mirrors meet's: an SSO secret, when configured, makes the vouch
@@ -332,6 +340,9 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// Not a panel: it rides with the Neighborhood and keeps the console-wide
 	// login ladder.
 	mux.HandleFunc("/desktop/", s.handleDesktop)
+	// The embedded launcher assets by a principal-independent route: what the
+	// protected pages load (console_shaped.go). Gated like the root assets.
+	mux.HandleFunc("GET /"+consoleBaseMount+"/", s.handleBaseAsset)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
 	mux.HandleFunc("GET /meta", s.handleMeta)
@@ -468,6 +479,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		stripInboundPrincipal(coopauth.StripSpoofedTrustHeaders(s.consoleGate(mux))),
 		otelServiceName,
 	)
+	s.root = h
 	closer := func() error {
 		s.shapes.wg.Wait()
 		err := s.calls.close()

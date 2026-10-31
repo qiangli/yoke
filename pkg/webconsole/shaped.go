@@ -108,6 +108,13 @@ type shapedApp struct {
 	opts    ShapeOptions
 	calls   *callBroker
 	servers *shapedServers
+	// seed, when set, makes the checkout exist before it is opened: the
+	// seam for an app whose base tree the host embeds (console_shaped.go).
+	seed func() error
+	// protected are tree-relative paths a revision may not override, drop
+	// or add relative to its base (guardProtected). Nil for registered apps:
+	// nothing inside an app's own tree is protected from its owner.
+	protected []string
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
@@ -124,6 +131,11 @@ func (a *shapedApp) store(principal string) (*shape.Store, error) {
 }
 
 func (a *shapedApp) open() (*gogit.Repository, error) {
+	if a.seed != nil {
+		if err := a.seed(); err != nil {
+			return nil, fmt.Errorf("shaped app %s: seed source: %w", a.name, err)
+		}
+	}
 	r, err := gogit.PlainOpen(a.repo)
 	if err != nil {
 		return nil, fmt.Errorf("shaped app %s: open source: %w", a.name, err)
@@ -149,8 +161,9 @@ func resolveCommit(r *gogit.Repository, rev string) (*object.Commit, error) {
 }
 
 // active resolves the revision a request is served from. No principal means
-// the base app, full stop. A recorded revision the checkout cannot resolve
-// falls back to last-known-good, then to base — never to another principal's.
+// the base app, full stop. A recorded revision the checkout cannot resolve,
+// or that the protected-path guard refuses, falls back to last-known-good,
+// then to base — never to another principal's.
 func (a *shapedApp) active(r *gogit.Repository, principal string) (*object.Commit, error) {
 	b, err := base(r)
 	if err != nil || principal == "" {
@@ -169,9 +182,14 @@ func (a *shapedApp) active(r *gogit.Repository, principal string) (*object.Commi
 		if rev == "" {
 			continue
 		}
-		if c, err := resolveCommit(r, rev); err == nil {
-			return c, nil
+		c, err := resolveCommit(r, rev)
+		if err != nil {
+			continue
 		}
+		if err := a.guardProtected(r, c); err != nil {
+			continue
+		}
+		return c, nil
 	}
 	return b, nil
 }

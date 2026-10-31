@@ -63,8 +63,10 @@ func consoleWidePath(p string) bool {
 		"/vendor/xterm.css", "/vendor/xterm.js", "/vendor/xterm-addon-fit.js":
 		return true
 	}
-	// The SPA's own assets live at the root and belong to no panel.
-	return strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/static/")
+	// The SPA's own assets live at the root and belong to no panel; the
+	// embedded copies behind /base/ are the same assets (console_shaped.go).
+	return strings.HasPrefix(p, "/assets/") || strings.HasPrefix(p, "/static/") ||
+		strings.HasPrefix(p, "/"+consoleBaseMount+"/")
 }
 
 // scopeSegment reduces a request path to the panel segment that owns it.

@@ -565,6 +565,11 @@ func (s *server) shapedPanel(r *http.Request) (*shapedApp, bool) {
 			return s.shapedApp(p), true
 		}
 	}
+	if name == consoleApp {
+		// The launcher's own presentation: shaped by name, never a Panel
+		// (console_shaped.go).
+		return s.consoleShaped(), true
+	}
 	return nil, false
 }
 
@@ -669,6 +674,20 @@ func (s *server) handleShapeDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) verifyCandidate(ctx context.Context, a *shapedApp, c *Candidate, dir string) error {
+	// A candidate that touches one of the app's protected paths is refused
+	// before anyone is asked to judge it: the verdict names the paths and
+	// nothing can approve it. This is the same rule the serving side applies
+	// to an already-recorded revision (guardProtected), stated at the point
+	// where it is cheapest to act on.
+	if len(a.protected) > 0 {
+		if err := candidateTouchesProtected(filepath.Join(dir, "work"), c.BaseRev, c.Rev, a.protected); err != nil {
+			c.Verdict = &Verdict{Pass: false, Detail: err.Error()}
+			if c.Status == candVerified {
+				c.Status = candReady
+			}
+			return saveCandidate(dir, *c)
+		}
+	}
 	if a.opts.Verifier == nil {
 		return errors.New("no verifier is configured on this console; nothing can be approved")
 	}
@@ -684,6 +703,42 @@ func (s *server) verifyCandidate(ctx context.Context, a *shapedApp, c *Candidate
 		c.Status = candVerified
 	}
 	return saveCandidate(dir, *c)
+}
+
+// candidateTouchesProtected compares the candidate's protected paths against
+// the revision it was shaped from, in the candidate's own clone.
+func candidateTouchesProtected(work, baseRev, rev string, protected []string) error {
+	repo, err := gogit.PlainOpen(work)
+	if err != nil {
+		return fmt.Errorf("candidate unavailable: %w", err)
+	}
+	baseTree, err := treeOf(repo, baseRev)
+	if err != nil {
+		return fmt.Errorf("candidate base %s: %w", shortRev(baseRev), err)
+	}
+	tree, err := treeOf(repo, rev)
+	if err != nil {
+		return fmt.Errorf("candidate %s: %w", shortRev(rev), err)
+	}
+	if err := protectedDiff(baseTree, tree, protected); err != nil {
+		return fmt.Errorf("candidate touches protected paths: %w", err)
+	}
+	return nil
+}
+
+func treeOf(repo *gogit.Repository, rev string) (*object.Tree, error) {
+	c, err := repo.CommitObject(plumbing.NewHash(rev))
+	if err != nil {
+		return nil, err
+	}
+	return c.Tree()
+}
+
+func shortRev(rev string) string {
+	if len(rev) > 12 {
+		return rev[:12]
+	}
+	return rev
 }
 
 func (s *server) handleShapeVerify(w http.ResponseWriter, r *http.Request) {
@@ -799,6 +854,12 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = rest
+	if a.name == consoleApp {
+		// The launcher's pages talk to Go handlers that are not in the tree
+		// (console_shaped.go).
+		s.serveConsolePreview(w, r2, commit, prefix)
+		return
+	}
 	a.serveTree(w, r2, commit, mountRel(r2), c.Principal, data)
 }
 

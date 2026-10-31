@@ -218,18 +218,8 @@ func ensureShapedBase(dir string) error {
 		return err
 	}
 	if _, err := ygit.ResolveCommit(dir, "HEAD"); err != nil {
-		if _, err := ygit.Add(ygit.AddOptions{RepoPath: dir, All: true}); err != nil {
+		if err := commitShapedBase(dir, "Import shaped app"); err != nil {
 			return err
-		}
-		// Respect a configured identity. A fresh host has none, so retry with
-		// bashy's service identity instead of asking the user to configure git.
-		if _, err := ygit.Commit(ygit.CommitOptions{RepoPath: dir, Message: "Import shaped app"}); err != nil {
-			if _, fallbackErr := ygit.Commit(ygit.CommitOptions{
-				RepoPath: dir, Message: "Import shaped app",
-				AuthorName: shapedAuthorName, AuthorEmail: shapedAuthorMail,
-			}); fallbackErr != nil {
-				return fallbackErr
-			}
 		}
 	}
 	if _, err := ygit.ResolveCommit(dir, shapedBaseBranch); err == nil {

@@ -98,6 +98,9 @@ type AppMeta struct {
 // `login` and shadow the console's own sign-in page.
 var consoleReserved = map[string]bool{
 	"meta": true, "login": true, "shell": true, "term": true, "shape": true,
+	// The launcher's own shaped presentation and its embedded-asset route
+	// (console_shaped.go).
+	consoleApp: true, consoleBaseMount: true,
 }
 
 // iconPath accepts only what is safe to interpolate into an SVG `d=` attribute.
