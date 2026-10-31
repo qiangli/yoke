@@ -3,12 +3,14 @@ id: 315705acc9c4
 kind: feature
 title: 'S526.B1g Common Genie button: one protected component embedded on every shaped app page'
 seq: 3044
-status: todo
+status: assigned
 priority: p1
 labels:
     - shaping
     - launcher
 created: 2026-10-31T06:50:55.875784Z
+weave: 758
+assignee: claude-fable5.1
 sprint: 526
 sprint_id: a9ea1d04-f39a-569f-8949-81dcb6aa864a
 sprint_title: 'Software Shaping dogfooding: all eligible Bashy built-in apps'
@@ -37,6 +39,4 @@ Acceptance: red/green tests (injection on each shaped app page; the protected pa
 
 Manager constraints (S526): yoke pkg/webconsole (inject the component where pages are served: servePageFile / shaped app page path / preview); add the protected path to pkg/src ProtectedManifest; reuse F3a preview handling (yoke e0898d17). NO podman/docker/make test/full suites on Dragon: focused go test + go vet only. Desk apps (notepad, form) are shaped apps served via the public path; inject there too. Manager runs the live zoo check.
 
-Operator update 2026-10-31: button TOP-RIGHT by default; its position and hidden state come from the app's shaped config (e.g. a small shaped.json / app config key), so a wish can move or hide it while the component itself stays protected.
-
-Placement decisions of record: dhnt docs/sprint-526/b1g-genie-button-placement-2026-10-31.md @ 2a3a694f1 (every page; top-right default; shaped.json genie:{position,hidden} read by the protected component; shortcut always opens; protected pages file a request; preview disables). Acceptance addition: a wish to move/hide the button yields a config-only candidate that passes Verify, component unchanged.
+Scope addition (operator 2026-10-31, docs/sprint-526/document-model-shaping-2026-10-31.md @ a14f5caef): the same protected component also shows an IN-PLACE REVIEW BAR for a ready candidate (wish text, "Reviewing candidate <id>", plain-words change summary incl. F3b coverage, Approve [runs trusted verifier first, activates only on pass, shows refusal reason], Reject, Back), best-effort outline of changed elements + before/after toggle, code diff one click away; navigation stays inside the candidate until approve/reject/leave; protected pages say so (fixes F4: preview had no banner). The Shape page stays the list of all wishes + history. Edit sessions (many wishes, undo/redo, Save/Cancel) are B1h, not this story.
