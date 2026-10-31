@@ -100,13 +100,13 @@ type cudaReleaseMetadata struct {
 // reviewed, puppy-proven, promoted release; until then a CUDA selection fails
 // closed with a message naming the missing pins.
 const (
-	cudaReleaseVersion  = "bashy-v0.21.2-16"
+	cudaReleaseVersion  = "bashy-v0.21.2-18"
 	cudaReleaseIdentity = "https://github.com/qiangli/ollama/.github/workflows/bashy-build.yml@refs/tags/" + cudaReleaseVersion
 	cudaReleaseBaseURL  = "https://github.com/qiangli/ollama/releases/download/" + cudaReleaseVersion + "/"
 
-	cudaRunnerSHA256   = ""
-	cudaLibCUDASHA256  = ""
-	cudaLibBaseSHA256  = ""
+	cudaRunnerSHA256   = "18789219931d07dcaaf37d2aea7b8f01ed4818f9b8cdd78dacbf21e6070d2301"
+	cudaLibCUDASHA256  = "3fd0b212a441441b28bd4275010429964a4b98a5c40e65d92956d066bc632e5e"
+	cudaLibBaseSHA256  = "b889dd066e3bcbeba55a6385875ecf53b870eae0d6bb2bccbb4ee61232d6939d"
 	cudaLibCUDAName    = "libggml-cuda.so"
 	cudaLibBaseName    = "libggml-base.so.0"
 	cudaLibDirRel      = "lib/ollama"
