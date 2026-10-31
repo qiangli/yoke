@@ -135,8 +135,33 @@ func writeConsoleBase(root string) error {
 	if spaFS == nil {
 		return errors.New("console UI missing from this build")
 	}
-	return os.CopyFS(filepath.Join(root, "public"), spaFS)
+	if err := os.CopyFS(filepath.Join(root, "public"), spaFS); err != nil {
+		return err
+	}
+	// Like any shaped app the base carries its contract and checks: the
+	// verifier refuses a candidate whose base declares no effect cap. The
+	// launcher presentation is static, so the cap is read-only.
+	if err := os.WriteFile(filepath.Join(root, "contract.bsh"), []byte(consoleContract), 0o644); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(root, "checks"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(root, "checks", "smoke.bsh"), []byte(consoleSmoke), 0o644)
 }
+
+const consoleContract = `# The bashy app launcher presentation: static pages, no api units.
+@effects("read")
+`
+
+// consoleSmoke is the base check every candidate must keep passing: the
+// launcher pages it serves and the protected scripts it must not drop.
+const consoleSmoke = `set -eu
+for f in index.html app.js app.css board.html board.js inbox.html inbox.js mb.html mb.js shape.js term.js accounts.js; do
+	test -f "public/$f"
+done
+grep -q 'data-bashy-console' public/index.html
+`
 
 // consoleRevision resolves the commit the request's principal is served
 // from, or nil when the embedded bytes apply: no principal, no recorded

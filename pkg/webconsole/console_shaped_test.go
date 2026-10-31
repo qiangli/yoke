@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/qiangli/yoke/pkg/shape/verify"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -379,4 +380,26 @@ func consoleCandidate(t *testing.T, app *shapedApp, principal, id, baseRev strin
 		t.Fatal(err)
 	}
 	return c
+}
+
+// TestConsoleBaseDeclaresAnEffectCap: the verifier refuses any candidate whose
+// base declares no effect cap, so a console base without a contract made every
+// launcher wish unapprovable (S526.B1a3, found live).
+func TestConsoleBaseDeclaresAnEffectCap(t *testing.T) {
+	root := t.TempDir()
+	if err := writeConsoleBase(root); err != nil {
+		t.Fatal(err)
+	}
+	c, err := verify.DecoratorReader{}.ReadContract(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cap() == "" {
+		t.Fatal("console base declares no effect cap")
+	}
+	for _, f := range []string{"checks/smoke.bsh", "public/index.html"} {
+		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
+			t.Fatalf("console base lacks %s: %v", f, err)
+		}
+	}
 }
