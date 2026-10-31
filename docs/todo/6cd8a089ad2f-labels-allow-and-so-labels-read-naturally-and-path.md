@@ -10,7 +10,7 @@ labels:
 created: 2026-10-31T01:44:00.066706Z
 ---
 
-Operator 2026-10-30: include ':' and '/' in bashy labels so they read naturally (timebox:20m, priority:high, area/ui) and so a PATH can be a label (bashy/examples/tutor, docs/lern-psic). Labels stay a bashy classifier token: no spaces, no commas (comma splits --label a,b), no quoting.
+Operator 2026-10-30: include ':' and '/' in bashy labels so they read naturally (timebox:20m, priority:high, area/ui) and so a PATH can be a label (bashy/examples/tutor, docs/guides). Labels stay a bashy classifier token: no spaces, no commas (comma splits --label a,b), no quoting.
 DECIDED (operator delegated 2026-10-30, 'go with your defaults'):
 - length: max 128 bytes (was 32).
 - case: plain words still lowercase-normalised; a label containing '/' keeps its case (paths are case-sensitive).
