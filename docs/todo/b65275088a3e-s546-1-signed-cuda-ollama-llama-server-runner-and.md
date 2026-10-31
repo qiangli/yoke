@@ -3,7 +3,7 @@ id: b65275088a3e
 kind: feature
 title: S546.1 Signed CUDA Ollama/llama-server runner and persistent gp3 EBS model volume layout
 seq: 2987
-status: assigned
+status: done
 priority: p0
 labels:
     - cloud
@@ -16,6 +16,8 @@ assignee: claude-opus5.5
 sprint: 546
 sprint_id: ae111a75-889f-50a4-a423-de1bab0fbca6
 sprint_title: On-demand cloud GPU workers for large/custom Ollama models via Cloudbox and Outpost (AWS EC2 first)
+closed: 2026-10-31T18:39:38.395755Z
+closed_by: s546-manager
 ---
 
 Qualify and wire the permissive-licensed, bashy-built and signed CUDA-enabled Ollama/llama-server runner for Linux x86_64 NVIDIA L4 (g6.xlarge/g6.2xlarge, 24 GB VRAM) and L40S (g6e.xlarge, 48 GB VRAM) per docs/bashy-service-supply-chain-policy.md. Define the persistent AWS EBS gp3 volume layout (<=200 GB per aws-gpu-guard.sh, provisioned throughput up to 1,000 MB/s) mounted at /var/lib/ollama (or /mnt/models) so custom GGUF and Ollama blobs persist across EC2 Stop/Start cycles without re-downloading.
