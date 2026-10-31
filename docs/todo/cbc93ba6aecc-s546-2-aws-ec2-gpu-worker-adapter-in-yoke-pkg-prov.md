@@ -3,7 +3,7 @@ id: cbc93ba6aecc
 kind: feature
 title: S546.2 AWS EC2 GPU worker adapter in yoke/pkg/provider/aws with budget and GPU guard preflight
 seq: 2988
-status: assigned
+status: done
 priority: p0
 labels:
     - cloud
@@ -15,6 +15,8 @@ assignee: muse-conductor
 sprint: 546
 sprint_id: ae111a75-889f-50a4-a423-de1bab0fbca6
 sprint_title: On-demand cloud GPU workers for large/custom Ollama models via Cloudbox and Outpost (AWS EC2 first)
+closed: 2026-10-31T01:30:17.916555Z
+closed_by: s546-manager
 ---
 
 Extend stdlib SigV4 yoke/pkg/provider/aws to support EC2 GPU worker operations (OpPlan, OpCreate, OpInspect, OpList, OpStart, OpStop, OpDestroy) in us-west-2 under the dhnt-automation-ec2-gpu IAM policy (allowlisted g6.xlarge, g6.2xlarge, g6e.xlarge, g5.xlarge; dhnt:managed=true tag at launch; <=200 GB gp3 volume; egress-only default security group since Outpost dials out; S3-staged presigned user-data bootstrap; dhnt-monthly-cap and dhnt-gpu-daily budget preflight). Include fakeec2 unit/conformance tests with zero cloud spend.
