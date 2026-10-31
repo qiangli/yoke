@@ -136,7 +136,63 @@ func ResolveToolBinary(tool string) string {
 		}
 		return p
 	}
-	return lookInUserBins(tool)
+	if p := lookInPathList(tool, os.Getenv("PATH"), runtime.GOOS == "windows", os.Getenv("PATHEXT")); p != "" {
+		return p
+	}
+	if p := lookInUserBins(tool); p != "" {
+		return p
+	}
+	return lookSelf(tool)
+}
+
+// lookInPathList searches a PATH value exec.LookPath cannot read. Inside the
+// bashy shell on Windows PATH is often the POSIX spelling ("/c/bashy:/c/Windows",
+// ':'-separated), which LookPath splits on ';' and so never finds a directory
+// it holds. Each element is converted to a native path first.
+func lookInPathList(tool, pathValue string, windows bool, pathext string) string {
+	exts := []string{""}
+	if windows {
+		exts = nil
+		for _, e := range filepath.SplitList(pathext) {
+			exts = append(exts, strings.ToLower(e))
+		}
+		if len(exts) == 0 {
+			exts = []string{".exe", ".bat", ".cmd"}
+		}
+		if filepath.Ext(tool) != "" {
+			exts = append([]string{""}, exts...)
+		}
+	}
+	for _, dir := range pathconv.SplitPathList(pathValue, windows) {
+		if dir == "" {
+			continue
+		}
+		if windows {
+			dir = pathconv.NativePath(dir)
+		}
+		for _, ext := range exts {
+			p := filepath.Join(dir, tool+ext)
+			if executableFile(p) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// lookSelf resolves the agent CLI "bashy" (the genie agent) to the running
+// binary, so it works when bashy was started by absolute path and is on no PATH.
+func lookSelf(tool string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	base := strings.ToLower(filepath.Base(exe))
+	base = strings.TrimSuffix(base, ".exe")
+	if strings.ToLower(strings.TrimSuffix(tool, ".exe")) != base {
+		return ""
+	}
+	return exe
 }
 
 // toolPathEnv returns base with the per-user binary homes appended to PATH.

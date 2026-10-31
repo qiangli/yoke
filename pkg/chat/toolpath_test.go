@@ -150,3 +150,19 @@ func slicesContain(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+func TestLookInPathListSplitsBothSpellings(t *testing.T) {
+	dir := t.TempDir()
+	name := "agentx"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sep := string(os.PathListSeparator)
+	if got := lookInPathList("agentx", "/nonexistent"+sep+dir, runtime.GOOS == "windows", ".EXE"); got != p {
+		t.Fatalf("got %q want %q", got, p)
+	}
+}
