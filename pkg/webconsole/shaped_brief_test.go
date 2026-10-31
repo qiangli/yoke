@@ -94,3 +94,16 @@ func TestShapingBriefNewAppIntent(t *testing.T) {
 		t.Error("the intent brief asks for a change")
 	}
 }
+
+// G1 (operator live, 2026-10-31): "make a shooting game" on the launcher was
+// built as a page + link inside the launcher. The brief must say that a
+// self-contained thing such as a game is a separate new app, and that a
+// separate thing is never built inside this app as a page or a link.
+func TestShapingBriefSelfContainedThingIsNewApp(t *testing.T) {
+	brief := shapingTask("console", "make a shooting game")
+	for _, want := range []string{"a game", "IS a separate new app", "Never build a separate thing inside this app as a new page or a link"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief lacks %q", want)
+		}
+	}
+}

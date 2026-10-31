@@ -238,5 +238,7 @@ func newAppBrief(first bool) string {
 	return "If the request asks for a SEPARATE NEW APP of its own rather than a change to this one, make no change at all and answer with exactly one line:\n" +
 		newAppMarker + " <short name> | <label>\n" +
 		"(short name: lower-case letters, digits and dashes, e.g. signup; label: what the launcher tile shows, e.g. Sign-up sheet), " +
-		"followed by the coverage list. Only the request decides this; a change to this app, however large, is never a new app.\n\n"
+		"followed by the coverage list. Something self-contained that a person would open on its own (a game, a sign-up sheet, a tracker, a calculator, a tool) IS a separate new app, even when the request does not say \"app\"; " +
+		"it is a change to this app only when the request clearly asks to change, add to or remove from THIS app (for example \"add a clock to this page\", \"make the tiles bigger\"). " +
+		"Never build a separate thing inside this app as a new page or a link.\n\n"
 }
