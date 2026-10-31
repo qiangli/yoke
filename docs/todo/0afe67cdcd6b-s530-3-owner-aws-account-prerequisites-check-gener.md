@@ -3,7 +3,7 @@ id: 0afe67cdcd6b
 kind: feature
 title: S530.3 Owner AWS account prerequisites check, generalized setup scripts, static-IP release fix
 seq: 2995
-status: todo
+status: doing
 priority: p1
 labels:
     - cloud
