@@ -837,3 +837,12 @@ func TestPairedDeviceLandsOnTheAppsLauncher(t *testing.T) {
 		t.Errorf("paired device lands on %q, want %q (the apps launcher)", got, "/")
 	}
 }
+
+// TestConsoleAppIsAGrantableScope: the launcher presentation is the shaped
+// app "console" (S526.B1a). The gate tells a device to re-pair with
+// `--allow console`, so pairing must accept that name (S526.B1a1).
+func TestConsoleAppIsAGrantableScope(t *testing.T) {
+	if err := ValidateScope([]string{consoleApp}, Discover()); err != nil {
+		t.Fatalf("--allow %s was rejected: %v", consoleApp, err)
+	}
+}

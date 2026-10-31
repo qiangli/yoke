@@ -167,8 +167,10 @@ func ValidateScope(names []string, panels []Panel) error {
 	if len(names) == 0 {
 		return nil
 	}
-	known := map[string]bool{}
-	var list []string
+	// The launcher presentation is the shaped app "console" (console_shaped.go);
+	// the gate scopes its shaping API by that name, so pairing must grant it.
+	known := map[string]bool{consoleApp: true}
+	list := []string{consoleApp}
 	for _, p := range panels {
 		known[strings.ToLower(p.Name)] = true
 		list = append(list, p.Name)
