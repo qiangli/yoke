@@ -25,7 +25,7 @@ func TestNetavarkJSONNetlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	table := fmt.Sprintf("bashy_netavark_test_%d", os.Getpid())
-	tx := fmt.Sprintf(`{"nftables":[{"add":{"table":{"family":"inet","name":%q}}},{"add":{"chain":{"family":"inet","table":%q,"name":"POSTROUTING","type":"nat","hook":"postrouting","prio":100,"policy":"accept"}}},{"add":{"rule":{"family":"inet","table":%q,"chain":"POSTROUTING","expr":[{"match":{"left":{"payload":{"protocol":"ip","field":"saddr"}},"right":{"prefix":{"addr":"10.88.0.0","len":16}},"op":"=="}},{"masquerade":null}]}}}]}`, table, table, table)
+	tx := fmt.Sprintf(`{"nftables":[{"add":{"table":{"family":"inet","name":%q}}},{"add":{"chain":{"family":"inet","table":%q,"name":"POSTROUTING","type":"nat","hook":"postrouting","prio":100,"policy":"accept"}}},{"add":{"rule":{"family":"inet","table":%q,"chain":"POSTROUTING","expr":[{"match":{"left":{"payload":{"protocol":"ip","field":"saddr"}},"right":{"prefix":{"addr":"10.88.0.0","len":16}},"op":"=="}},{"match":{"left":{"payload":{"protocol":"ip","field":"daddr"}},"right":{"prefix":{"addr":"224.0.0.0","len":4}},"op":"!="}},{"masquerade":null}]}}}]}`, table, table, table)
 	if err := nft.RunJSON(b, []byte(tx), false); err != nil {
 		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
 			t.Skipf("CAP_NET_ADMIN unavailable: %v", err)

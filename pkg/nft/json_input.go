@@ -25,7 +25,7 @@ func JSONToText(input []byte) (string, error) {
 		return "", err
 	}
 	if len(doc.Nftables) == 0 {
-		return "", fmt.Errorf("empty nftables transaction")
+		return "", nil
 	}
 	var lines []string
 	for i, wrapper := range doc.Nftables {
@@ -212,6 +212,9 @@ func RunJSON(b Backend, input []byte, check bool) error {
 	script, err := JSONToText(input)
 	if err != nil {
 		return err
+	}
+	if script == "" {
+		return nil
 	}
 	cmds, err := Parse(script)
 	if err != nil {

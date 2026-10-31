@@ -52,6 +52,13 @@ func TestNetavarkJSONTransaction(t *testing.T) {
 	}
 }
 
+func TestNetavarkEmptyJSONBatch(t *testing.T) {
+	fake(t)
+	if _, errb, code := runNft(t, `{"nftables":[]}`, "-j", "-f", "-"); code != 0 {
+		t.Fatalf("empty netavark batch should succeed: %d %s", code, errb)
+	}
+}
+
 func TestNetavarkJSONForwardAndPortRules(t *testing.T) {
 	fake(t)
 	tx := `{"nftables":[{"add":{"table":{"family":"inet","name":"netavark"}}},{"add":{"chain":{"family":"inet","table":"netavark","name":"FORWARD","type":"filter","hook":"forward","prio":0,"policy":"accept"}}},{"add":{"chain":{"family":"inet","table":"netavark","name":"NETAVARK-HOSTPORT-SETMARK"}}},{"add":{"chain":{"family":"inet","table":"netavark","name":"NETAVARK-HOSTPORT-DNAT"}}},{"add":{"rule":{"family":"inet","table":"netavark","chain":"FORWARD","expr":[{"match":{"left":{"ct":{"key":"state"}},"right":"invalid","op":"in"}},{"drop":null}]}}},{"add":{"rule":{"family":"inet","table":"netavark","chain":"FORWARD","expr":[{"match":{"left":{"&":[{"ct":{"key":"mark"}},4096]},"right":4096,"op":"=="}},{"accept":null}]}}},{"add":{"rule":{"family":"inet","table":"netavark","chain":"NETAVARK-HOSTPORT-SETMARK","expr":[{"mangle":{"key":{"meta":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},8192]}}}]}}},{"add":{"rule":{"family":"inet","table":"netavark","chain":"NETAVARK-HOSTPORT-DNAT","expr":[{"match":{"left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8080,"op":"=="}},{"mangle":{"key":{"ct":{"key":"mark"}},"value":{"|":[{"meta":{"key":"mark"}},4096]}}},{"dnat":{"addr":"10.88.0.2","family":"ip","port":80}}]}}}]}`

@@ -3,8 +3,11 @@
 package nft
 
 import (
+	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/google/nftables"
@@ -405,11 +408,24 @@ func (b *netlinkBackend) addRule(r *RuleSpec, insert bool) {
 		exprs = append(exprs, x)
 	}
 	nr := &nftables.Rule{Table: nlTable(r.Family, r.Table), Chain: &nftables.Chain{Name: r.Chain}, Exprs: exprs}
-	if len(r.JSONExpr) > 0 {
-		nr.UserData = appendRuleJSON(nr.UserData, r.JSONExpr)
-	}
 	if r.Comment != "" {
+		if len(r.Comment) > 254 {
+			b.fail(fmt.Errorf("nft rule comment exceeds 254-byte userdata item limit"))
+			return
+		}
 		nr.UserData = userdata.AppendString(nr.UserData, userdata.TypeComment, r.Comment)
+	}
+	if len(r.JSONExpr) > 0 {
+		var err error
+		nr.UserData, err = appendRuleJSON(nr.UserData, r.JSONExpr)
+		if err != nil {
+			b.fail(err)
+			return
+		}
+	}
+	if len(nr.UserData) > unix.NFT_USERDATA_MAXLEN {
+		b.fail(fmt.Errorf("nft rule userdata exceeds %d-byte kernel limit", unix.NFT_USERDATA_MAXLEN))
+		return
 	}
 	if insert {
 		b.conn.InsertRule(nr)
@@ -424,22 +440,45 @@ func (b *netlinkBackend) InsertRule(r *RuleSpec) {
 	b.addRule(r, true)
 }
 
-// Rule JSON is kept in nft rule userdata so subsequent netavark processes can
-// compare the expressions they previously installed. Each userdata item has
-// a one-byte length; reserve consecutive private types for chunks.
-func appendRuleJSON(dst, src []byte) []byte {
-	for i := 0; len(src) > 0; i++ {
-		n := len(src)
-		if n > 240 {
-			n = 240
-		}
-		dst = userdata.Append(dst, userdata.Type(128+i), src[:n])
-		src = src[n:]
+// Rule JSON is kept in rule userdata so netavark can find its rules on the
+// next invocation. Linux caps the entire NFTA_RULE_USERDATA at 256 bytes;
+// chunking TLVs does not bypass that cap. Compress longer expressions and
+// reject anything that still cannot fit before sending a netlink batch.
+func appendRuleJSON(dst, src []byte) ([]byte, error) {
+	if len(src) > 1<<16 {
+		return nil, fmt.Errorf("netavark rule JSON exceeds 64 KiB limit")
 	}
-	return dst
+	if len(dst)+2+len(src) <= unix.NFT_USERDATA_MAXLEN && len(src) <= 255 {
+		return userdata.Append(dst, 128, src), nil
+	}
+	var compressed bytes.Buffer
+	w := zlib.NewWriter(&compressed)
+	if _, err := w.Write(src); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	if len(dst)+2+compressed.Len() > unix.NFT_USERDATA_MAXLEN || compressed.Len() > 255 {
+		return nil, fmt.Errorf("netavark rule JSON exceeds %d-byte kernel userdata limit after compression", unix.NFT_USERDATA_MAXLEN)
+	}
+	return userdata.Append(dst, 127, compressed.Bytes()), nil
 }
 
 func readRuleJSON(src []byte) []byte {
+	if compressed := userdata.Get(src, 127); len(compressed) > 0 {
+		r, err := zlib.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			return nil
+		}
+		defer r.Close()
+		out, err := io.ReadAll(io.LimitReader(r, 1<<16+1))
+		if err != nil || len(out) > 1<<16 {
+			return nil
+		}
+		return out
+	}
+	// Read rules written by earlier builds, which stored multiple TLVs.
 	var out []byte
 	for i := 0; i < 128; i++ {
 		chunk := userdata.Get(src, userdata.Type(128+i))
