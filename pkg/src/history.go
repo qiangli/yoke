@@ -111,7 +111,7 @@ func History(home, app, principal string) (VersionHistory, error) {
 	if sha, err := ygit.ResolveCommit(dir, pristineBranch); err == nil {
 		out.Base = sha
 	}
-	out.Releases, err = releaseTags(r)
+	out.Releases, err = releaseTags(r, principal)
 	if err != nil {
 		return out, err
 	}

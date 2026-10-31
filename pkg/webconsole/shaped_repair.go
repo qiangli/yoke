@@ -200,7 +200,7 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 	if err != nil {
 		return c, dir, err.Error(), false, ""
 	}
-	releases, err := src.Releases(home, a.name)
+	releases, err := src.Releases(home, a.name, principal)
 	if err != nil {
 		return c, dir, err.Error(), false, ""
 	}

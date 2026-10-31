@@ -1,6 +1,8 @@
 package src
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,7 +60,10 @@ type ReleaseTag struct {
 // rename into a major release. When overrides the tag time; zero means the
 // server clock now (UTC).
 type ReleaseOptions struct {
-	Repair   bool
+	Repair bool
+	// Shared publishes an app-wide release. Only the operator CLI sets this;
+	// self-repair leaves it false and creates a principal-private tag.
+	Shared   bool
 	Contract []string
 	When     time.Time
 }
@@ -76,17 +81,62 @@ type ReleaseResult struct {
 	Contracted []string `json:"contracted,omitempty"`
 }
 
-// isReleaseTag reports whether name is a canonical release tag: vX.Y.Z,
-// no prerelease, no build metadata.
+// isReleaseTag reports whether name is a canonical semver release tag.
 func isReleaseTag(name string) bool {
 	return semver.IsValid(name) && semver.Canonical(name) == name &&
-		semver.Prerelease(name) == "" && semver.Build(name) == ""
+		semver.Build(name) == ""
+}
+
+// releaseSlug is a single SemVer prerelease identifier. Lossy or truncated
+// names carry a digest of the full principal so distinct identities that
+// sanitize alike do not share a tag namespace.
+func releaseSlug(principal string) string {
+	full := strings.ToLower(strings.TrimSpace(principal))
+	var b strings.Builder
+	dash := false
+	for _, r := range full {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
+			if r != '-' || !dash {
+				b.WriteRune(r)
+			}
+			dash = r == '-'
+		} else if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	lossy := slug != full
+	if len(slug) > 48 {
+		slug = strings.TrimRight(slug[:48], "-")
+		lossy = true
+	}
+	if slug == "" {
+		slug = "user"
+		lossy = true
+	}
+	if strings.Trim(slug, "0123456789") == "" {
+		slug = "u" + slug
+	}
+	if lossy {
+		sum := sha256.Sum256([]byte(principal))
+		slug += "-" + hex.EncodeToString(sum[:5])
+	}
+	return slug
+}
+
+func visibleRelease(name, principal string) bool {
+	pre := semver.Prerelease(name)
+	if pre == "" {
+		return true
+	}
+	return principal != "" && pre == "-"+releaseSlug(principal)
 }
 
 // releaseTags lists every release tag in the repo at r, newest version
 // first. Annotated tags are peeled to the commit they name; a tag that
 // does not name a commit is not a release.
-func releaseTags(r *gogit.Repository) ([]ReleaseTag, error) {
+func releaseTags(r *gogit.Repository, principal string) ([]ReleaseTag, error) {
 	iter, err := r.Tags()
 	if err != nil {
 		return nil, fmt.Errorf("src: list tags: %w", err)
@@ -95,7 +145,7 @@ func releaseTags(r *gogit.Repository) ([]ReleaseTag, error) {
 	var out []ReleaseTag
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
 		name := ref.Name().Short()
-		if !isReleaseTag(name) {
+		if !isReleaseTag(name) || !visibleRelease(name, principal) {
 			return nil
 		}
 		rt := ReleaseTag{Version: name}
@@ -146,7 +196,11 @@ func releasedAs(tags []ReleaseTag) map[string]string {
 }
 
 // Releases lists an app's published releases, newest version first.
-func Releases(home, app string) ([]ReleaseTag, error) {
+func Releases(home, app string, principal ...string) ([]ReleaseTag, error) {
+	who := ""
+	if len(principal) > 0 {
+		who = strings.TrimSpace(principal[0])
+	}
 	if home == "" {
 		home = Home()
 	}
@@ -158,7 +212,7 @@ func Releases(home, app string) ([]ReleaseTag, error) {
 	if err != nil {
 		return nil, fmt.Errorf("src: open %s: %w", dir, err)
 	}
-	return releaseTags(r)
+	return releaseTags(r, who)
 }
 
 // pseudoVersion names an unreleased commit the way Go names an untagged
@@ -172,7 +226,11 @@ func pseudoVersion(c *object.Commit) string {
 // Version names a revision of app: its release tag when the commit was
 // released, else a Go-style pseudo-version. The boolean reports whether
 // the revision is a published release.
-func Version(home, app, rev string) (string, bool, error) {
+func Version(home, app, rev string, principal ...string) (string, bool, error) {
+	who := ""
+	if len(principal) > 0 {
+		who = strings.TrimSpace(principal[0])
+	}
 	if home == "" {
 		home = Home()
 	}
@@ -188,12 +246,12 @@ func Version(home, app, rev string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("src: open %s: %w", dir, err)
 	}
-	return versionOf(r, revSHA)
+	return versionOf(r, revSHA, who)
 }
 
 // versionOf is Version over an open repository and a resolved commit.
-func versionOf(r *gogit.Repository, revSHA string) (string, bool, error) {
-	tags, err := releaseTags(r)
+func versionOf(r *gogit.Repository, revSHA, principal string) (string, bool, error) {
+	tags, err := releaseTags(r, principal)
 	if err != nil {
 		return "", false, err
 	}
@@ -209,7 +267,7 @@ func versionOf(r *gogit.Repository, revSHA string) (string, bool, error) {
 
 // bump returns the next version after prev for kind.
 func bump(prev, kind string) (string, error) {
-	parts := strings.Split(strings.TrimPrefix(prev, "v"), ".")
+	parts := strings.Split(strings.TrimPrefix(strings.SplitN(prev, "-", 2)[0], "v"), ".")
 	if len(parts) != 3 {
 		return "", fmt.Errorf("src: release tag %q is not vX.Y.Z", prev)
 	}
@@ -334,7 +392,11 @@ func Release(home, app, rev, principal string, opts ReleaseOptions) (ReleaseResu
 	if err != nil {
 		return out, fmt.Errorf("src: open %s: %w", dir, err)
 	}
-	tags, err := releaseTags(r)
+	who := principal
+	if opts.Shared {
+		who = ""
+	}
+	tags, err := releaseTags(r, who)
 	if err != nil {
 		return out, err
 	}
@@ -378,6 +440,9 @@ func Release(home, app, rev, principal string, opts ReleaseOptions) (ReleaseResu
 		if out.Version, err = bump(prev.Version, out.Kind); err != nil {
 			return out, err
 		}
+	}
+	if !opts.Shared {
+		out.Version += "-" + releaseSlug(principal)
 	}
 	when := opts.When
 	if when.IsZero() {

@@ -120,7 +120,7 @@ func Offer(home, app, rev, creator string, opts OfferOptions) (Offering, error) 
 	if err != nil {
 		return Offering{}, fmt.Errorf("src: open %s: %w", dir, err)
 	}
-	version, released, err := versionOf(r, revSHA)
+	version, released, err := versionOf(r, revSHA, "")
 	if err != nil {
 		return Offering{}, err
 	}

@@ -12,7 +12,7 @@ import (
 
 func newReleaseCmd() *cobra.Command {
 	var user string
-	var repair, asJSON bool
+	var repair, asJSON, shared bool
 	var contract []string
 	c := &cobra.Command{
 		Use:   "release <app> <rev>",
@@ -33,7 +33,7 @@ $BASHY_PRINCIPAL.`,
 			if err != nil {
 				return err
 			}
-			res, err := Release("", args[0], args[1], p, ReleaseOptions{Repair: repair, Contract: contract})
+			res, err := Release("", args[0], args[1], p, ReleaseOptions{Repair: repair, Contract: contract, Shared: shared})
 			if err != nil {
 				return err
 			}
@@ -62,19 +62,25 @@ $BASHY_PRINCIPAL.`,
 	}
 	userFlag(c, &user)
 	c.Flags().BoolVar(&repair, "repair", false, "the revision is a repair: same declared surface, patch bump")
+	c.Flags().BoolVar(&shared, "shared", false, "publish an app-wide release (operator use); default is private to --user")
 	c.Flags().StringArrayVar(&contract, "contract", nil, "surface element approved for dropping (repeatable), e.g. \"property:title\"; makes the release a major")
 	c.Flags().BoolVar(&asJSON, "json", false, "print the release as JSON")
 	return c
 }
 
 func newReleasesCmd() *cobra.Command {
+	var user string
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "releases <app>",
 		Short: "List an app's published releases, newest version first",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tags, err := Releases("", args[0])
+			p := strings.TrimSpace(user)
+			if p == "" {
+				p = strings.TrimSpace(os.Getenv(principalEnv))
+			}
+			tags, err := Releases("", args[0], p)
 			if err != nil {
 				return err
 			}
@@ -105,6 +111,7 @@ func newReleasesCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "print the releases as JSON")
+	userFlag(c, &user)
 	return c
 }
 
@@ -140,7 +147,11 @@ principal is set or none is active.`,
 			if rev == "" {
 				rev = "HEAD"
 			}
-			v, _, err := Version("", args[0], rev)
+			p := strings.TrimSpace(user)
+			if p == "" {
+				p = strings.TrimSpace(os.Getenv(principalEnv))
+			}
+			v, _, err := Version("", args[0], rev, p)
 			if err != nil {
 				return err
 			}
