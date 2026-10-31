@@ -1190,10 +1190,28 @@ func normalize(err error) *provider.Error {
 		case "NotFoundException", "ResourceNotFoundException", "DoesNotExistException":
 			e.Code = provider.ErrNotFound
 		case "ThrottlingException", "TooManyRequestsException",
-			"RequestThrottledException", "LimitExceededException":
+			"RequestThrottledException", "LimitExceededException",
+			"Throttling", "RequestLimitExceeded":
 			e.Code, e.Retryable = provider.ErrRateLimited, true
-		case "InvalidInputException", "ValidationException", "InvalidParameterException":
+		case "InvalidInputException", "ValidationException", "InvalidParameterException",
+			"InvalidParameterValue", "InvalidParameterCombination", "MissingParameter",
+			"InvalidAMIID.NotFound", "InvalidGroup.NotFound", "InvalidSubnetID.NotFound",
+			"InvalidKeyPair.NotFound", "NoSuchResourceException":
 			e.Code = provider.ErrInvalidRequest
+		case "InvalidInstanceID.NotFound", "InvalidInstanceID.Malformed":
+			// Malformed reads oddly as not-found, but an ID EC2
+			// will not shape-match names no instance either: the
+			// EC2 adapter issues no format check of its own, so
+			// "999999" and its friends answer not_found here.
+			e.Code = provider.ErrNotFound
+		case "UnauthorizedOperation", "AccessDenied":
+			e.Code = provider.ErrInvalidCredentials
+		case "InsufficientInstanceCapacity", "InstanceLimitExceeded":
+			// Capacity, not a bad request: the call may succeed
+			// later in the same place. The EC2 adapter reports
+			// these with the AZ attached rather than recreating
+			// the worker elsewhere.
+			e.Code, e.Retryable = provider.ErrProvider, true
 		case "OperationFailureException", "ServiceException",
 			"AccountSetupInProgressException", "RegionSetupInProgressException",
 			"UnauthenticatedException2":

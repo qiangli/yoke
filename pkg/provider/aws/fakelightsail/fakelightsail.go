@@ -136,10 +136,13 @@ type Server struct {
 	// bundlePrice is the monthly price GetBundles reports for
 	// TestBundleID.
 	bundles []map[string]any
-	// budget is what DescribeBudget answers, or nil for an account with
-	// no such budget (NotFoundException). The default budget has no
-	// evaluated spend, so spend still falls back to Cost Explorer.
-	budget       *Budget
+	// budgets is what DescribeBudget answers, keyed by budget name (or
+	// NotFoundException for an account with no such budget). A fresh
+	// fake carries the default budget with no evaluated spend, so spend
+	// still falls back to Cost Explorer; a test that wants the budget
+	// source says so with SetBudget. Several budgets may coexist (the GPU
+	// preflight reads a monthly cap and a daily budget).
+	budgets      map[string]*Budget
 	bucketStatus int
 	rootIdentity bool
 
@@ -185,7 +188,7 @@ func New(t *testing.T) *Server {
 		calls:        map[string]int{},
 		objects:      map[string]*S3Object{},
 		monthToDate:  3.50,
-		budget:       &Budget{Name: aws.DefaultBudgetName, LimitUSD: 50, NoSpend: true},
+		budgets:      map[string]*Budget{aws.DefaultBudgetName: {Name: aws.DefaultBudgetName, LimitUSD: 50, NoSpend: true}},
 		bucketStatus: http.StatusOK,
 		nextIP:       10,
 	}
@@ -249,7 +252,8 @@ type Budget struct {
 	Name string
 	// LimitUSD is BudgetLimit, the operator's cap.
 	LimitUSD float64
-	// ActualSpendUSD is CalculatedSpend.ActualSpend, month-to-date.
+	// ActualSpendUSD is CalculatedSpend.ActualSpend, month-to-date (or
+	// today-to-date for a DAILY budget).
 	ActualSpendUSD float64
 	// NoSpend omits CalculatedSpend entirely, the way a budget AWS has
 	// not evaluated yet looks.
@@ -260,6 +264,9 @@ type Budget struct {
 	IncludeCredit bool
 	// Unit overrides the money unit ("USD" when empty).
 	Unit string
+	// TimeUnit overrides the budget period ("MONTHLY" when empty). The
+	// GPU preflight's daily budget is served with "DAILY".
+	TimeUnit string
 }
 
 // SetBucketStatus sets the status returned by HeadBucket (200 by default).
@@ -277,18 +284,24 @@ func (s *Server) SetRootIdentity(root bool) {
 }
 
 // SetBudget makes DescribeBudget answer with b (matched by name).
+// Budgets accumulate by name: setting the monthly cap and the daily
+// budget is two calls, and setting the same name twice replaces it.
 func (s *Server) SetBudget(b Budget) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.budget = &b
+	if s.budgets == nil {
+		s.budgets = map[string]*Budget{}
+	}
+	cp := b
+	s.budgets[b.Name] = &cp
 }
 
-// ClearBudget removes the budget, so DescribeBudget answers
+// ClearBudget removes every budget, so DescribeBudget answers
 // NotFoundException the way an account without one does.
 func (s *Server) ClearBudget() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.budget = nil
+	s.budgets = map[string]*Budget{}
 }
 
 // TestAccountID is the account id STS GetCallerIdentity reports.
@@ -942,15 +955,15 @@ func (s *Server) dispatch(op string, in map[string]any, reply func(int, any)) bo
 				"operationType": "ReleaseStaticIp", "isTerminal": true},
 		}})
 	case "DescribeBudget":
-		s.mu.Lock()
-		b := s.budget
-		s.mu.Unlock()
 		name, _ := in["BudgetName"].(string)
+		s.mu.Lock()
+		b := s.budgets[name]
+		s.mu.Unlock()
 		account, _ := in["AccountId"].(string)
 		if account != TestAccountID {
 			return s.invalid(reply, "AccountId "+account+" is not this account")
 		}
-		if b == nil || b.Name != name {
+		if b == nil {
 			awsErrorReply(reply, http.StatusBadRequest, "NotFoundException",
 				"Unable to get budget: "+name+" - the budget doesn't exist.")
 			return true
@@ -959,10 +972,14 @@ func (s *Server) dispatch(op string, in map[string]any, reply func(int, any)) bo
 		if unit == "" {
 			unit = "USD"
 		}
+		period := b.TimeUnit
+		if period == "" {
+			period = "MONTHLY"
+		}
 		out := map[string]any{
 			"BudgetName":  b.Name,
 			"BudgetType":  "COST",
-			"TimeUnit":    "MONTHLY",
+			"TimeUnit":    period,
 			"BudgetLimit": map[string]string{"Amount": money(b.LimitUSD), "Unit": unit},
 			"CostTypes":   map[string]any{"IncludeCredit": b.IncludeCredit, "IncludeRefund": false},
 		}

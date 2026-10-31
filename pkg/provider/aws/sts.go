@@ -49,7 +49,7 @@ const stsAPIVersion = "2011-06-15"
 // contentTypeForm is the AWS query protocol's content type.
 const contentTypeForm = "application/x-www-form-urlencoded; charset=utf-8"
 
-// queryClient is one signed AWS QUERY-protocol endpoint (STS).
+// queryClient is one signed AWS QUERY-protocol endpoint (STS, EC2).
 type queryClient struct {
 	endpoint   string
 	region     string
@@ -58,11 +58,26 @@ type queryClient struct {
 	creds      Credentials
 	httpClient *http.Client
 	now        func() time.Time
+	// parseErr reads an error envelope the queryError shape does not
+	// cover. EC2 answers errors as <Response><Errors><Error> rather
+	// than STS's <ErrorResponse><Error>, so the EC2 client sets this
+	// (ec2.go); nil keeps the STS behavior.
+	parseErr func(body []byte) (typ, msg string)
 }
 
 // call POSTs one Action and decodes the XML answer into out.
 func (c *queryClient) call(ctx context.Context, action string, out any) error {
+	return c.callWith(ctx, action, nil, out)
+}
+
+// callWith POSTs one Action with extra form parameters and decodes the
+// XML answer into out. EC2 is also a query-protocol service, but every
+// one of its calls carries parameters beyond Action and Version.
+func (c *queryClient) callWith(ctx context.Context, action string, params url.Values, out any) error {
 	form := url.Values{"Action": {action}, "Version": {c.version}}
+	for k, vs := range params {
+		form[k] = append([]string(nil), vs...)
+	}
 	body := []byte(form.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -86,6 +101,9 @@ func (c *queryClient) call(ctx context.Context, action string, out any) error {
 	}
 	if resp.StatusCode/100 != 2 {
 		typ, msg := queryError(data)
+		if typ == "" && c.parseErr != nil {
+			typ, msg = c.parseErr(data)
+		}
 		if typ == "" {
 			typ = errorType(resp, data)
 		}
