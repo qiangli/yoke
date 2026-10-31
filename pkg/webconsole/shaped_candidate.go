@@ -339,6 +339,11 @@ type shapeHub struct {
 	// no wish, undo, redo or cancel lands on a draft while the verifier
 	// judges it. In-memory on purpose: a crash mid-save leaves no stuck flag.
 	saving map[string]bool
+	// suggestions is the example-wish cache (shaped_suggest.go), keyed per
+	// (app, active revision, page); its own lock, so a slow Genie call
+	// never holds up a candidate write.
+	suggestMu   sync.Mutex
+	suggestions map[suggestKey]*suggestEntry
 }
 
 // principalKey is a filesystem-safe, non-reversible directory name: workspace
@@ -1217,6 +1222,7 @@ func (s *server) shapedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/verify", s.handleShapeVerify)
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/approve", s.handleShapeApprove)
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/reject", s.handleShapeReject)
+	mux.HandleFunc("GET /api/shape/{app}/suggest", s.handleShapeSuggest)
 	s.historyRoutes(mux)
 	s.draftRoutes(mux)
 }

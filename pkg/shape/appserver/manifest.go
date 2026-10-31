@@ -27,9 +27,11 @@
 // position is a corner (top-right by default); anchor is an optional CSS
 // selector list the button is placed inside when one matches; hidden keeps
 // the button off every page but the app's landing page (the keyboard
-// shortcut still opens the wish panel). Placement is shaped source — a wish
-// to move or hide the button is a config-only candidate — while the
-// component itself stays protected.
+// shortcut still opens the wish panel); examples are the app's own example
+// wishes for the form's placeholder, in place of the ones Genie generates
+// from the page. Placement is shaped source — a wish to move or hide the
+// button is a config-only candidate — while the component itself stays
+// protected.
 package appserver
 
 import (
@@ -68,7 +70,19 @@ type Genie struct {
 	Anchor string `json:"anchor,omitempty"`
 	// Hidden keeps the button off every page except the app's landing page.
 	Hidden bool `json:"hidden,omitempty"`
+	// Examples are the app's own example wishes, shown in the wish form's
+	// placeholder instead of the ones Genie would generate from the page
+	// (Sprint 526.B1g, api/shape/<app>/suggest). Short, one wish each.
+	Examples []string `json:"examples,omitempty"`
 }
+
+// GenieExamplesMax bounds the examples an app may declare, and
+// GenieExampleLen the length of each; the same bounds apply to generated
+// examples.
+const (
+	GenieExamplesMax = 6
+	GenieExampleLen  = 120
+)
 
 // GeniePositions are the corners a Genie placement may name.
 var GeniePositions = []string{"top-right", "top-left", "bottom-right", "bottom-left"}
@@ -124,6 +138,16 @@ func Parse(b []byte) (Manifest, error) {
 		}
 		if strings.ContainsAny(m.Genie.Anchor, "<>\"'") || len(m.Genie.Anchor) > 200 {
 			return Manifest{}, fmt.Errorf("%s: genie.anchor must be a short CSS selector list", File)
+		}
+		if len(m.Genie.Examples) > GenieExamplesMax {
+			return Manifest{}, fmt.Errorf("%s: genie.examples lists at most %d wishes", File, GenieExamplesMax)
+		}
+		for i, e := range m.Genie.Examples {
+			e = strings.TrimSpace(e)
+			if e == "" || len(e) > GenieExampleLen || strings.ContainsAny(e, "\n\r<>") {
+				return Manifest{}, fmt.Errorf("%s: genie.examples[%d] must be one short line of plain text", File, i)
+			}
+			m.Genie.Examples[i] = e
 		}
 	}
 	if m.Server == nil {

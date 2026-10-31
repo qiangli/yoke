@@ -53,10 +53,17 @@ func TestParseGenie(t *testing.T) {
 	if err != nil || m.Genie.Position != "bottom-left" || m.Genie.Anchor != "#toolbar, header" || len(m.Properties) != 1 {
 		t.Fatalf("genie placed = %+v, %v", m.Genie, err)
 	}
+	m, err = Parse([]byte(`{"genie": {"examples": [" make the ship faster ", "add a high score table"]}}`))
+	if err != nil || len(m.Genie.Examples) != 2 || m.Genie.Examples[0] != "make the ship faster" {
+		t.Fatalf("genie examples = %+v, %v", m.Genie, err)
+	}
 	for _, bad := range []string{
 		`{"genie": {"position": "middle"}}`,
 		`{"genie": {"anchor": "<script>"}}`,
 		`{"genie": {"shortcut": "g"}}`,
+		`{"genie": {"examples": [""]}}`,
+		`{"genie": {"examples": ["<b>bold</b>"]}}`,
+		`{"genie": {"examples": ["a", "b", "c", "d", "e", "f", "g"]}}`,
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("Parse(%s) accepted", bad)

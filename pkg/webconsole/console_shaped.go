@@ -108,7 +108,7 @@ func (s *server) consoleShaped() *shapedApp {
 	dir, _ := s.consoleSourceDir()
 	return &shapedApp{
 		name: consoleApp, repo: dir, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers,
-		seed: s.seedConsoleSource, protected: consoleProtectedPaths(),
+		seed: s.seedConsoleSource, protected: consoleProtectedPaths(), label: "the apps console (launcher)",
 	}
 }
 

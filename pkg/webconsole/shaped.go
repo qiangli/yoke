@@ -70,6 +70,9 @@ type ShapeOptions struct {
 	// ServerIdle stops a shaped app server no request has used for this
 	// long. Zero = 10m.
 	ServerIdle time.Duration
+	// SuggestTimeout bounds the read-only Genie call that generates the
+	// wish form's example wishes (shaped_suggest.go). Zero = 10s.
+	SuggestTimeout time.Duration
 
 	Delegate  Delegator
 	Verifier  Verifier
@@ -119,10 +122,13 @@ type shapedApp struct {
 	// base and with a trailing slash ("notes/"); "" for the launcher itself.
 	// The common Genie button pairs a previewed page with its live one by it.
 	mount string
+	// label is what the launcher tile shows; Genie is told it beside the
+	// name when it generates example wishes (shaped_suggest.go).
+	label string
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
-	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path)}
+	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path), label: p.Label}
 }
 
 // panelMount is a panel's mount path as the Genie tag carries it: relative,
