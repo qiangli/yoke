@@ -33,3 +33,6 @@ Placement (operator agreed 2026-10-31):
 - Inside a preview: the button is disabled with "you're previewing a candidate".
 
 Acceptance: red/green tests (injection on each shaped app page; the protected path cannot be changed by a candidate; the wish carries app + page). Live on zoo: the operator starts a wish from inside the form app (wish #1, "Other" with a reason box) and from the launcher, both through the same button.
+
+
+Manager constraints (S526): yoke pkg/webconsole (inject the component where pages are served: servePageFile / shaped app page path / preview); add the protected path to pkg/src ProtectedManifest; reuse F3a preview handling (yoke e0898d17). NO podman/docker/make test/full suites on Dragon: focused go test + go vet only. Desk apps (notepad, form) are shaped apps served via the public path; inject there too. Manager runs the live zoo check.
