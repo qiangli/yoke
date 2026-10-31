@@ -3,11 +3,12 @@ id: 9629f3527fbd
 kind: feature
 title: S526.B8 Semver release tags for shaped apps (patch=repair, minor=additive, major=contract)
 seq: 2920
-status: todo
+status: assigned
 priority: p2
 labels:
     - shaping
 created: 2026-10-29T19:28:23.720198Z
+weave: 747
 sprint: 526
 sprint_id: a9ea1d04-f39a-569f-8949-81dcb6aa864a
 sprint_title: 'Software Shaping dogfooding: all eligible Bashy built-in apps'

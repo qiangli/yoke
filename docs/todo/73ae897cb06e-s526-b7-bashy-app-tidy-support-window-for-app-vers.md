@@ -3,11 +3,13 @@ id: 73ae897cb06e
 kind: feature
 title: 'S526.B7 bashy app tidy: support window for app versions; app-defined cleanup'
 seq: 2919
-status: todo
+status: assigned
 priority: p2
 labels:
     - shaping
 created: 2026-10-29T19:22:32.108382Z
+weave: 746
+assignee: codex-gpt6-sol
 sprint: 526
 sprint_id: a9ea1d04-f39a-569f-8949-81dcb6aa864a
 sprint_title: 'Software Shaping dogfooding: all eligible Bashy built-in apps'
