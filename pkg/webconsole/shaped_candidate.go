@@ -491,7 +491,8 @@ func shapingTaskFor(app string, w wish) string {
 		"  val = item.display_name ?? item.name ?? \"\"\n" +
 		"or in Bash#:\n" +
 		"  val=\"${item_display_name:-${item_name:-}}\"\n" +
-		"Do not rename or remove existing stored data fields, flags, arguments, routes, or unit names.\n\n" +
+		"Do not rename or remove existing stored data fields, flags, arguments, routes, or unit names.\n" +
+		"The common Genie button (public/genie.js and anything under _shape/) is protected: never edit it. To move or hide the button, edit only the \"genie\" key of shaped.json at the app root, for example {\"genie\": {\"position\": \"bottom-left\"}}; position is one of top-right, top-left, bottom-right, bottom-left; \"hidden\": true hides it; \"anchor\" is a CSS selector to place it inside.\n\n" +
 		shapingContext(w.Page, w.Element) +
 		"End your final response with a short coverage list against every part of the user's request. Use these exact headings and bullet format; write - (none) when a section is empty:\n" +
 		"COVERED:\n- what you completed\nNOT COVERED:\n- what you did not complete\n\n" +
