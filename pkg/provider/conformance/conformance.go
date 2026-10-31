@@ -44,6 +44,9 @@ type ExistenceChecker interface {
 // TempID skips the temporary-authorization-honored check; the
 // temporary-authorization-refused check always runs.
 type Setup struct {
+	// Region overrides the fixture region for adapters restricted to a real region.
+	// Empty keeps the suite's default region.
+	Region     string
 	Dispatcher *provider.Dispatcher
 	Counter    CallCounter
 	RunningID  string
@@ -396,6 +399,11 @@ type checker struct {
 
 func (c *checker) do(req provider.Request) (provider.Result, error) {
 	c.T.Helper()
+	if req.Spec != nil && c.running.Region != "" {
+		spec := *req.Spec
+		spec.Region = c.running.Region
+		req.Spec = &spec
+	}
 	if req.ProtocolVersion == "" {
 		req.ProtocolVersion = provider.ProtocolVersion
 	}

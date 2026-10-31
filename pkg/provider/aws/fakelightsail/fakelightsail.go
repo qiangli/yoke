@@ -52,9 +52,8 @@ import (
 const (
 	TestAccessKeyID     = "AKIDEXAMPLE"
 	TestSecretAccessKey = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-	// TestRegion is what the fake pretends to be. It matches the region
-	// the conformance suite's specs name.
-	TestRegion = "r1"
+	// TestRegion is the only supported satellite region.
+	TestRegion = "us-west-2"
 	// TestBundleID and TestBlueprintID are what the conformance suite's
 	// specs name (spec.size / spec.image).
 	TestBundleID    = "s-1vcpu-1gb"
@@ -138,10 +137,11 @@ type Server struct {
 	// TestBundleID.
 	bundles []map[string]any
 	// budget is what DescribeBudget answers, or nil for an account with
-	// no such budget (NotFoundException). A fresh fake has NONE: the
-	// Cost-Explorer-only path is the historical behavior, and a test that
-	// wants the budget source says so with SetBudget.
-	budget *Budget
+	// no such budget (NotFoundException). The default budget has no
+	// evaluated spend, so spend still falls back to Cost Explorer.
+	budget       *Budget
+	bucketStatus int
+	rootIdentity bool
 
 	creates  int
 	deletes  int
@@ -178,14 +178,16 @@ type Server struct {
 func New(t *testing.T) *Server {
 	t.Helper()
 	s := &Server{
-		instances:   map[string]*Instance{},
-		staticIPs:   map[string]*StaticIP{},
-		faults:      map[string]*fault{},
-		scopes:      map[string]string{},
-		calls:       map[string]int{},
-		objects:     map[string]*S3Object{},
-		monthToDate: 3.50,
-		nextIP:      10,
+		instances:    map[string]*Instance{},
+		staticIPs:    map[string]*StaticIP{},
+		faults:       map[string]*fault{},
+		scopes:       map[string]string{},
+		calls:        map[string]int{},
+		objects:      map[string]*S3Object{},
+		monthToDate:  3.50,
+		budget:       &Budget{Name: aws.DefaultBudgetName, LimitUSD: 50, NoSpend: true},
+		bucketStatus: http.StatusOK,
+		nextIP:       10,
 	}
 	s.bundles = []map[string]any{
 		{"bundleId": TestBundleID, "name": "Tiny", "instanceType": "tiny", "price": 5.0,
@@ -258,6 +260,20 @@ type Budget struct {
 	IncludeCredit bool
 	// Unit overrides the money unit ("USD" when empty).
 	Unit string
+}
+
+// SetBucketStatus sets the status returned by HeadBucket (200 by default).
+func (s *Server) SetBucketStatus(status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bucketStatus = status
+}
+
+// SetRootIdentity makes STS report the account root rather than the scoped user.
+func (s *Server) SetRootIdentity(root bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rootIdentity = root
 }
 
 // SetBudget makes DescribeBudget answer with b (matched by name).
@@ -579,10 +595,16 @@ func (s *Server) serveQuery(w http.ResponseWriter, r *http.Request, action strin
 	}
 	switch action {
 	case "GetCallerIdentity":
+		s.mu.Lock()
+		principal := ":user/dhnt-automation"
+		if s.rootIdentity {
+			principal = ":root"
+		}
+		s.mu.Unlock()
 		writeXML(w, http.StatusOK,
 			"<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\">"+
 				"<GetCallerIdentityResult>"+
-				"<Arn>arn:aws:iam::"+TestAccountID+":user/dhnt-automation</Arn>"+
+				"<Arn>arn:aws:iam::"+TestAccountID+principal+"</Arn>"+
 				"<UserId>AIDAFAKEUSERID</UserId>"+
 				"<Account>"+TestAccountID+"</Account>"+
 				"</GetCallerIdentityResult>"+
@@ -621,7 +643,7 @@ func expectedScope(op string) (service, region string) {
 		return "budgets", "us-east-1"
 	case "GetCallerIdentity":
 		return "sts", "us-east-1"
-	case "PutObject", "DeleteObject", "GetObject":
+	case "PutObject", "DeleteObject", "GetObject", "HeadBucket":
 		// S3 is regional and signed for the bucket's own region, which
 		// for this fake is the instance's region.
 		return "s3", TestRegion
@@ -1141,6 +1163,7 @@ func s3ErrorXML(w http.ResponseWriter, status int, code, msg string) {
 // serveS3 answers PutObject, DeleteObject and a presigned GetObject.
 func (s *Server) serveS3(w http.ResponseWriter, r *http.Request) {
 	op := map[string]string{
+		http.MethodHead:   "HeadBucket",
 		http.MethodPut:    "PutObject",
 		http.MethodDelete: "DeleteObject",
 		http.MethodGet:    "GetObject",
@@ -1150,6 +1173,10 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bucket, key, ok := splitS3Path(r.URL.EscapedPath())
+	if op == "HeadBucket" {
+		bucket = strings.Trim(r.URL.Path, "/")
+		key, ok = "", bucket != "" && !strings.Contains(bucket, "/")
+	}
 	if !ok {
 		s3ErrorXML(w, http.StatusBadRequest, "InvalidRequest",
 			"the fake is addressed path-style: /<bucket>/<key>, got "+r.URL.Path)
@@ -1196,6 +1223,11 @@ func (s *Server) serveS3(w http.ResponseWriter, r *http.Request) {
 
 	path := bucket + "/" + key
 	switch op {
+	case "HeadBucket":
+		s.mu.Lock()
+		status := s.bucketStatus
+		s.mu.Unlock()
+		w.WriteHeader(status)
 	case "PutObject":
 		// The staging bucket's policy requires server-side encryption,
 		// so a write without the header is a refusal, not a success.

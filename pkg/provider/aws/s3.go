@@ -18,12 +18,12 @@
 //
 // WHAT THE IAM POLICY ALLOWS, and therefore what this file may do:
 // s3:PutObject / s3:GetObject / s3:DeleteObject on
-// dhnt-userdata-<accountId>-<region>/* and nothing else — no ListBucket,
-// no CreateBucket. So this client never lists and never creates a bucket:
+// dhnt-userdata-<accountId>-<region>/* plus s3:ListBucket on that bucket
+// for the prerequisite HeadBucket check; no CreateBucket. This client
+// never lists and never creates a bucket:
 // the bucket is provisioned out of band (private, public access blocked,
 // SSE default, a lifecycle rule expiring objects after one day), and the
-// key is remembered on the instance as a TAG because listing it back is
-// not permitted.
+// key is remembered on the instance as a TAG, avoiding an object listing.
 package aws
 
 import (
@@ -116,6 +116,9 @@ func (c *s3Client) objectURL(key string) (*url.URL, error) {
 // do signs and runs one S3 request, reading and discarding the answer.
 func (c *s3Client) do(ctx context.Context, method, key string, body []byte, headers map[string]string) error {
 	u, err := c.objectURL(key)
+	if method == http.MethodHead && key == "" {
+		u, err = url.Parse(c.root + "/")
+	}
 	if err != nil {
 		return err
 	}

@@ -116,11 +116,11 @@ func TestCostExplorerDataUnavailableWithABudgetProceeds(t *testing.T) {
 	mustEnd(t, fake)
 }
 
-// Losing BOTH sources still refuses, and the refusal names what went wrong
-// with each one — an operator reading it has to be able to tell "no such
-// budget" from "not allowed to read the budget".
-func TestBothSpendSourcesUnavailableRefuses(t *testing.T) {
-	fake := fakelightsail.New(t) // no budget on this account
+// With both sources unavailable, create now reports the missing prerequisite
+// before consulting spend sources, including the one-time setup fix.
+func TestMissingBudgetRefusesBeforeSpendLookup(t *testing.T) {
+	fake := fakelightsail.New(t)
+	fake.ClearBudget() // no budget on this account
 	fake.Inject("GetCostAndUsage", fakelightsail.FaultDataUnavailable, 100)
 	a := open(t, fake, nil)
 
@@ -131,8 +131,8 @@ func TestBothSpendSourcesUnavailableRefuses(t *testing.T) {
 		t.Fatalf("err = %v, want %s", err, provider.ErrInvalidRequest)
 	}
 	for _, want := range []string{
-		"budget preflight refused create", "month-to-date spend is unknown",
-		"budget: ", "NotFoundException", "cost explorer: ", "DataUnavailableException",
+		"account prerequisites refused create", "budget dhnt-monthly-cap is missing",
+		"aws-budget-guard.sh",
 	} {
 		if res.Error == nil || !strings.Contains(res.Error.Message, want) {
 			t.Fatalf("refusal %q does not name %q", res.Error, want)

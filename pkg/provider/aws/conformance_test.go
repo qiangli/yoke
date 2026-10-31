@@ -45,6 +45,7 @@ func setup(t *testing.T, fake *fakelightsail.Server, s seeds) conformance.Setup 
 					CostExplorerURL: fake.URL,
 					BudgetsURL:      fake.URL,
 					STSURL:          fake.URL,
+					S3URL:           fake.URL,
 					PollInterval:    time.Millisecond,
 					WaitTimeout:     5 * time.Second,
 					Sprint:          "522",
@@ -66,6 +67,7 @@ func setup(t *testing.T, fake *fakelightsail.Server, s seeds) conformance.Setup 
 		t.Fatal(err)
 	}
 	return conformance.Setup{
+		Region:     fakelightsail.TestRegion,
 		Dispatcher: d,
 		Counter:    counter{fake},
 		RunningID:  s.running,
