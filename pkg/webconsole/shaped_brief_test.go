@@ -63,6 +63,22 @@ func TestShapingBriefRequestsCoverageList(t *testing.T) {
 	}
 }
 
+// TestShapingBriefRequestsNextSteps (S526.B1g revision): the brief asks
+// for two or three likely follow-up wishes under NEXT:, beside the
+// coverage list, so the wish form's suggestions come with the version and
+// no model call is made when the panel opens.
+func TestShapingBriefRequestsNextSteps(t *testing.T) {
+	brief := ShapingBrief("notes", "Add sorting")
+	for _, want := range []string{"two or three likely follow-up wishes", "NEXT:\n- a follow-up wish this user is likely to ask next", "as they would type it"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q", want)
+		}
+	}
+	if strings.Index(brief, "NEXT:") < strings.Index(brief, "NOT COVERED:") {
+		t.Error("NEXT: must follow the coverage list")
+	}
+}
+
 // TestShapingBriefNewAppIntent (S526.B1i): the brief lets Genie say a wish
 // is for a separate new app — one NEW-APP line, no change — and the first
 // wish on an app made that way is briefed as such instead, so one wish

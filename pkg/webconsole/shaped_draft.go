@@ -69,6 +69,8 @@ type draftStep struct {
 	Identity string           `json:"agent_identity,omitempty"`
 	Receipt  string           `json:"agent_receipt,omitempty"`
 	Coverage *CoverageSummary `json:"coverage,omitempty"`
+	// Next is Genie's follow-up wishes for this step (Candidate.Next).
+	Next []string `json:"next,omitempty"`
 	// First marks the first wish on a new app Genie made for it: the brief
 	// says the app was just created for this request (shaped_newapp.go).
 	First   bool      `json:"first,omitempty"`
@@ -405,7 +407,8 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, op
 		})
 		return
 	}
-	rev, err := commitCandidate(repo, Candidate{Request: step.Request, Principal: principal, Agent: res.Agent, BaseRev: step.Parent})
+	next := parseNextSteps(res.Output)
+	rev, err := commitCandidate(repo, Candidate{Request: step.Request, Principal: principal, Agent: res.Agent, BaseRev: step.Parent, Next: next})
 	if err != nil {
 		fail(err)
 		return
@@ -419,6 +422,7 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, op
 		st.Rev, st.Status = rev, stepReady
 		st.Agent, st.Identity, st.Receipt = res.Agent, res.Identity, res.Receipt
 		st.Coverage = parseCoverageSummary(res.Output)
+		st.Next = next
 		d.Cursor = i + 1
 		return nil
 	})

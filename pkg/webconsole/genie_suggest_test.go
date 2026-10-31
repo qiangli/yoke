@@ -15,49 +15,42 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
-	"github.com/qiangli/yoke/pkg/websession"
 )
 
-// fakeSuggester answers the read-only example-wish call: a fixed output,
-// or a hang until the caller's deadline when block is set. It records what
-// it was given so the test can check what it was NOT given.
-type fakeSuggester struct {
-	mu     sync.Mutex
-	tasks  []string
-	dirs   []string
-	output string
-	block  bool
+// nextShaper is fakeShaper whose answer ends with the follow-up list
+// (NEXT: lines) in next, when set.
+type nextShaper struct {
+	fakeShaper
+	nmu  sync.Mutex
+	next string
 }
 
-func (f *fakeSuggester) Delegate(ctx context.Context, req DelegateRequest) (DelegateResult, error) {
-	f.mu.Lock()
-	f.tasks, f.dirs = append(f.tasks, req.Task), append(f.dirs, req.Dir)
-	block, output := f.block, f.output
-	f.mu.Unlock()
-	if block {
-		<-ctx.Done()
-		return DelegateResult{}, ctx.Err()
+func (n *nextShaper) Delegate(ctx context.Context, req DelegateRequest) (DelegateResult, error) {
+	res, err := n.fakeShaper.Delegate(ctx, req)
+	if err != nil {
+		return res, err
 	}
-	return DelegateResult{Agent: "codex:fake-suggester", Output: output}, nil
+	n.nmu.Lock()
+	res.Output += n.next
+	n.nmu.Unlock()
+	return res, nil
 }
 
-func (f *fakeSuggester) calls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.tasks)
+func (n *nextShaper) setNext(s string) {
+	n.nmu.Lock()
+	n.next = s
+	n.nmu.Unlock()
 }
 
-func (f *fakeSuggester) lastTask() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.tasks) == 0 {
-		return ""
-	}
-	return f.tasks[len(f.tasks)-1]
+func (n *nextShaper) calls() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.tasks)
 }
 
 // commitFile adds one file to the source checkout as a new commit and
@@ -85,49 +78,57 @@ func commitFile(t *testing.T, dir, name, body string) string {
 	return h.String()
 }
 
-// TestGenieSuggestExamples is the S526.B1g example-wishes proof.
-// GET api/shape/<app>/suggest?page= answers the fake delegate's examples,
-// generated from a brief that carries the app, the page and its STATIC
-// source only — never the principal's data directory, never the principal
-// — in an empty scratch directory; the answer is cached per (app, active
-// revision, page) and a new version is asked again; a protected page's
-// brief asks for request phrasing; a timeout answers [] silently; and an
-// app that declares genie.examples in shaped.json is never asked.
-func TestGenieSuggestExamples(t *testing.T) {
+// TestGenieSuggestNextSteps is the S526.B1g (revision) example-wishes
+// proof: opening the wish panel never calls the delegate. A finished wish
+// whose answer lists NEXT: lines stores them with the version — on the
+// draft step and as Shape-Next trailers of its commit — and the next panel
+// open shows them; a version without NEXT derives follow-ups from its own
+// wish; a version with neither (the base) answers the cached copy for this
+// app and page, or nothing; shaped.json genie.examples wins over all.
+func TestGenieSuggestNextSteps(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
 	source := newNotesSource(t)
-	genie := &fakeSuggester{output: "- make the heading bigger\n2. \"add a delete button\"\n\nsort notes by date\n"}
+	shaper := &nextShaper{next: "NEXT:\n- Add a delete button\n* \"make the heading bigger\"\n- (none)\n"}
 	notes := Panel{Name: "notes", Label: "Notes", Path: "/notes/", ShapedSource: source,
 		Auth: AuthSystem, Source: "registered", Available: true}
-	workRoot := filepath.Join(t.TempDir(), "shape-work")
-	_, h, closer, err := newHandler(Options{
-		Ctx: context.Background(), RequireLogin: true,
-		Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
-		Panels:   []Panel{notes},
-		Shape: ShapeOptions{
-			Home: home, WorkRoot: workRoot, Runner: []string{"/bin/sh"},
-			Level: contain.LevelProcess, Delegate: genie, SuggestTimeout: 200 * time.Millisecond,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = closer() })
-	cloud := func(email string) http.Header {
-		return http.Header{"X-Forwarded-Prefix": {"/cloud/apps"}, "Remote-User": {email}, "Remote-Email": {email}}
-	}
-	alice := cloud("alice@example.test")
-	const alicePrincipal = "cloud:alice@example.test"
+	opts := Options{Panels: []Panel{notes}, Shape: ShapeOptions{
+		Home: home, WorkRoot: filepath.Join(t.TempDir(), "shape-work"), Runner: []string{"/bin/sh"},
+		Level: contain.LevelProcess, Delegate: shaper, Verifier: &switchVerifier{pass: true}, Activator: &fakeActivator{home: home},
+	}}
+	h := newTestHandler(t, opts)
 	const peer = "127.0.0.1:5555"
-	suggest := func(who http.Header, path string) []string {
+	get := func(path string, want int) string {
 		t.Helper()
-		w := do(h, http.MethodGet, path, peer, who)
+		w := do(h, http.MethodGet, path, peer, nil)
+		if w.Code != want {
+			t.Fatalf("GET %s = %d, want %d: %s", path, w.Code, want, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	post := func(path, body string, want int) string {
+		t.Helper()
+		hdr := http.Header{}
+		if body != "" {
+			hdr.Set("Content-Type", "application/json")
+		}
+		w := send(h, http.MethodPost, path, peer, hdr, body)
+		if w.Code != want {
+			t.Fatalf("POST %s = %d, want %d: %s", path, w.Code, want, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	suggest := func(path string) []string {
+		t.Helper()
+		w := do(h, http.MethodGet, path, peer, nil)
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d: %s", path, w.Code, w.Body.String())
 		}
 		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 			t.Errorf("GET %s Cache-Control = %q, want no-store", path, cc)
+		}
+		if !strings.Contains(w.Body.String(), `"examples":[`) {
+			t.Errorf("GET %s: examples must be a JSON array, got %s", path, w.Body.String())
 		}
 		var body struct {
 			Examples []string `json:"examples"`
@@ -135,217 +136,248 @@ func TestGenieSuggestExamples(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatalf("GET %s: %v: %s", path, err, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), `"examples":[`) {
-			t.Errorf("GET %s: examples must be a JSON array, got %s", path, w.Body.String())
-		}
 		return body.Examples
 	}
-
-	// Something of alice's that must never reach the brief.
-	st, err := shape.OpenAt(home, "notes", alicePrincipal)
+	expect := func(what string, got []string, want ...string) {
+		t.Helper()
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("%s = %q, want %q", what, got, want)
+		}
+	}
+	noCall := func(what string, want int) {
+		t.Helper()
+		if n := shaper.calls(); n != want {
+			t.Fatalf("delegate calls after %s = %d, want %d (a panel open never calls Genie)", what, n, want)
+		}
+	}
+	settle := func() draftView {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			var v draftView
+			if err := json.Unmarshal([]byte(get("/api/shape/notes/draft", http.StatusOK)), &v); err != nil {
+				t.Fatal(err)
+			}
+			if !v.Busy {
+				if v.LastError != "" {
+					t.Fatalf("the wish made no step: %s", v.LastError)
+				}
+				return v
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the wish never settled: %+v", v)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	var state struct {
+		Principal string `json:"principal"`
+	}
+	if err := json.Unmarshal([]byte(get("/api/shape/notes", http.StatusOK)), &state); err != nil || state.Principal == "" {
+		t.Fatalf("principal: %v %q", err, state.Principal)
+	}
+	st, err := shape.OpenAt(home, "notes", state.Principal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const secret = "SECRET-NOTE-9f3a"
-	if err := st.WriteData("notes.txt", []byte(secret+"\n")); err != nil {
-		t.Fatal(err)
+	activeMessage := func() string {
+		t.Helper()
+		s, err := st.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := gogit.PlainOpen(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := r.CommitObject(plumbing.NewHash(s.ActiveRevision))
+		if err != nil {
+			t.Fatalf("active %s: %v", s.ActiveRevision, err)
+		}
+		return c.Message
 	}
 
 	// Admission: the same as every Shape route.
-	if w := do(h, http.MethodGet, "/api/shape/nothere/suggest?page=/", peer, alice); w.Code != http.StatusNotFound {
-		t.Errorf("unknown app = %d, want 404", w.Code)
-	}
-	if w := do(h, http.MethodGet, "/api/shape/notes/suggest?page=/", peer, nil); w.Code != http.StatusForbidden && w.Code != http.StatusUnauthorized && w.Code != http.StatusSeeOther {
-		t.Errorf("no principal = %d, want refused", w.Code)
+	get("/api/shape/nothere/suggest?page=/", http.StatusNotFound)
+
+	// 4. The base: nothing stored, nothing cached — the neutral placeholder
+	// — and Genie was not asked.
+	expect("base", suggest("/api/shape/notes/suggest?page=/"))
+	noCall("the first open", 0)
+
+	// 1. A wish in the edit session: Genie's NEXT: lines land on the step
+	// (cleaned: markers, quotes, "(none)" dropped) and the draft's panel
+	// shows them; the active version is still the base.
+	post("/api/shape/notes/draft", "", http.StatusCreated)
+	post("/api/shape/notes/draft/wishes", `{"request":"show newest notes first","page":"/","element":""}`, http.StatusAccepted)
+	v := settle()
+	noCall("one wish", 1)
+	expect("draft panel", suggest("/api/shape/notes/suggest?page=/&draft=1"), "Add a delete button", "make the heading bigger")
+	noCall("the draft open", 1)
+	if len(v.Steps) != 1 || strings.Join(v.Steps[0].Next, "|") != "Add a delete button|make the heading bigger" {
+		t.Errorf("draft step next = %+v", v.Steps)
 	}
 
-	// The fake's examples, parsed: bullets, numbering and quotes dropped.
-	got := suggest(alice, "/api/shape/notes/suggest?page=/")
-	want := []string{"make the heading bigger", "add a delete button", "sort notes by date"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("examples = %q, want %q", got, want)
+	// Saved: the version's commit carries the follow-ups as trailers and
+	// every page of the app shows them on open, without Genie.
+	post("/api/shape/notes/draft/save", "", http.StatusOK)
+	msg := activeMessage()
+	if !strings.Contains(msg, "\nShape-Next: Add a delete button\nShape-Next: make the heading bigger\n") {
+		t.Errorf("active commit message lacks the Shape-Next trailers:\n%s", msg)
 	}
-	task := genie.lastTask()
-	for _, s := range []string{`"Notes" (notes)`, "page /", "Title: Notes", "Headings: Notes", "Labels: Add", "Hints: A new note", "read-only", "<<<PAGE"} {
-		if !strings.Contains(task, s) {
-			t.Errorf("brief lacks %q:\n%s", s, task)
-		}
-	}
-	for _, s := range []string{secret, "alice", "notes.txt", "PROTECTED"} {
-		if strings.Contains(task, s) {
-			t.Errorf("brief carries %q:\n%s", s, task)
-		}
-	}
-	// The scratch directory was empty, under the work root, and is gone.
-	dir := genie.dirs[0]
-	if !strings.HasPrefix(dir, workRoot) || strings.HasPrefix(dir, home) {
-		t.Errorf("scratch dir %q, want under %q and never under the home", dir, workRoot)
-	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("scratch dir %q still exists", dir)
-	}
+	expect("saved version", suggest("/api/shape/notes/suggest?page=/"), "Add a delete button", "make the heading bigger")
+	expect("saved version, another page", suggest("/api/shape/notes/suggest?page=/about.html"), "Add a delete button", "make the heading bigger")
+	expect("saved version, draft flag with no draft", suggest("/api/shape/notes/suggest?page=/&draft=1"), "Add a delete button", "make the heading bigger")
+	noCall("the saved version's opens", 1)
 
-	// Cached per (app, revision, page): the same page asks nobody again,
-	// another page does, and a new active version does.
-	suggest(alice, "/api/shape/notes/suggest?page=/")
-	suggest(alice, "/api/shape/notes/suggest?page=/?q=1")
-	if n := genie.calls(); n != 1 {
-		t.Fatalf("calls after a repeat = %d, want 1 (cached)", n)
+	// 2. A version without NEXT (an older Genie, a terse answer): simple
+	// follow-ups from its own wish, no model call.
+	shaper.setNext("")
+	post("/api/shape/notes/draft", "", http.StatusCreated)
+	post("/api/shape/notes/draft/wishes", `{"request":"Add a delete button to each note.","page":"/","element":""}`, http.StatusAccepted)
+	settle()
+	noCall("two wishes", 2)
+	expect("derived on the draft", suggest("/api/shape/notes/suggest?page=/&draft=1"), "Change the delete button to each note", "Undo add a delete button to each note")
+	post("/api/shape/notes/draft/save", "", http.StatusOK)
+	if msg := activeMessage(); strings.Contains(msg, "Shape-Next:") {
+		t.Errorf("a version without NEXT carries Shape-Next:\n%s", msg)
 	}
-	suggest(alice, "/api/shape/notes/suggest?page=/index.html")
-	if n := genie.calls(); n != 2 {
-		t.Fatalf("calls after another page = %d, want 2", n)
-	}
-	rev := commitFile(t, source, "public/about.html", "<title>About notes</title><h1>About</h1><button>Back</button>")
-	if err := st.Write(shape.State{ActiveRevision: rev, LastKnownGood: rev}); err != nil {
-		t.Fatal(err)
-	}
-	suggest(alice, "/api/shape/notes/suggest?page=/")
-	if n := genie.calls(); n != 3 {
-		t.Fatalf("calls after a new version = %d, want 3", n)
-	}
-	// The static source is the page's own file in the active revision.
-	suggest(alice, "/api/shape/notes/suggest?page=/about.html")
-	if task := genie.lastTask(); !strings.Contains(task, "Title: About notes") || !strings.Contains(task, "Labels: Back") {
-		t.Errorf("about brief:\n%s", task)
-	}
-	// Bob is on base, which alice's first call already answered for: the
-	// answer carries nothing personal, so one revision's examples are
-	// everyone's, and Genie is not asked again.
-	if got := suggest(cloud("bob@example.test"), "/api/shape/notes/suggest?page=/"); strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("bob's examples = %q", got)
-	}
-	if n := genie.calls(); n != 4 {
-		t.Fatalf("calls after bob = %d, want 4 (shared with alice's base answer)", n)
-	}
+	expect("derived on the version", suggest("/api/shape/notes/suggest?page=/"), "Change the delete button to each note", "Undo add a delete button to each note")
+	noCall("the derived opens", 2)
 
-	// A protected page asks for request phrasing; the launcher's own trust
-	// page is known protected without being told.
-	suggest(alice, "/api/shape/notes/suggest?page=/&protected=1")
-	if task := genie.lastTask(); !strings.Contains(task, "PROTECTED") || !strings.Contains(task, "filed as a request") {
-		t.Errorf("protected brief:\n%s", task)
-	}
-	// A page with no static file of its own: the app's pages by name,
-	// never a 404.
-	if got := suggest(alice, "/api/shape/notes/suggest?page=/nowhere/"); len(got) != 3 {
-		t.Errorf("unknown page examples = %q", got)
-	}
-	if task := genie.lastTask(); !strings.Contains(task, "no static file of its own") || !strings.Contains(task, "public/index.html") {
-		t.Errorf("unknown page brief:\n%s", task)
-	}
-
-	// Timeout: [] silently, and asked again later (a failure is not pinned).
-	genie.mu.Lock()
-	genie.block = true
-	genie.mu.Unlock()
-	before := genie.calls()
-	start := time.Now()
-	if got := suggest(alice, "/api/shape/notes/suggest?page=/slow.html"); len(got) != 0 {
-		t.Errorf("timed-out examples = %q, want none", got)
-	}
-	if took := time.Since(start); took > 5*time.Second {
-		t.Errorf("timed-out call took %v", took)
-	}
-	if n := genie.calls(); n != before+1 {
-		t.Errorf("calls after timeout = %d, want %d", n, before+1)
-	}
-	genie.mu.Lock()
-	genie.block = false
-	genie.mu.Unlock()
-
-	// No delegate configured: [] and no error.
-	_, h2, closer2, err := newHandler(Options{
-		Ctx: context.Background(), RequireLogin: true,
-		Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
-		Panels:   []Panel{notes},
-		Shape:    ShapeOptions{Home: home, WorkRoot: workRoot, Runner: []string{"/bin/sh"}, Level: contain.LevelProcess},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = closer2() })
-	if w := do(h2, http.MethodGet, "/api/shape/notes/suggest?page=/", peer, cloud("carol@example.test")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"examples":[]`) {
-		t.Errorf("no delegate = %d %s", w.Code, w.Body.String())
-	}
-
-	// shaped.json genie.examples: the app's own, and Genie is not asked.
-	rev = commitFile(t, source, "shaped.json", `{"genie": {"examples": ["make the ship faster", "add a high-score table"]}}`)
-	if err := st.Write(shape.State{ActiveRevision: rev, LastKnownGood: rev}); err != nil {
-		t.Fatal(err)
-	}
-	before = genie.calls()
-	got = suggest(alice, "/api/shape/notes/suggest?page=/")
-	if strings.Join(got, "|") != "make the ship faster|add a high-score table" {
-		t.Errorf("declared examples = %q", got)
-	}
-	if n := genie.calls(); n != before {
-		t.Errorf("declared examples still asked Genie (%d → %d)", before, n)
-	}
-
-}
-
-// TestParseExamples: Genie's answer in the shapes it comes — lines, a
-// fenced JSON array, prose around it — becomes a bounded list of plain
-// wishes.
-func TestParseExamples(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"make the ship faster\nadd a high score\n", []string{"make the ship faster", "add a high score"}},
-		{"Here are some wishes:\n1. make the ship faster\n2) add lives\n- *bold*\n", []string{"make the ship faster", "add lives"}},
-		{"```\n[\"a bigger board\", \"a bigger board\", \"\"]\n```", []string{"a bigger board"}},
-		{"[\"one wish\", \"two wish\"]", []string{"one wish", "two wish"}},
-		{"\"quoted wish\"\n“smart quotes”\n", []string{"quoted wish", "smart quotes"}},
-		{"<script>alert(1)</script>\nok wish\n", []string{"ok wish"}},
-		{"a\nb\nc\nd\ne\nf\ng\nh\n", nil},
-		{"w1 one\nw2 two\nw3 three\nw4 four\nw5 five\nw6 six\nw7 seven\n", []string{"w1 one", "w2 two", "w3 three", "w4 four", "w5 five", "w6 six"}},
-		{"", nil},
-	}
-	for _, c := range cases {
-		got := parseExamples(c.in)
-		if strings.Join(got, "|") != strings.Join(c.want, "|") {
-			t.Errorf("parseExamples(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-	if got := parseExamples(strings.Repeat("x", 200) + "\nfine wish\n"); len(got) != 1 || got[0] != "fine wish" {
-		t.Errorf("overlong line kept: %q", got)
-	}
-}
-
-// TestStaticExcerpt: the brief's page excerpt is bounded and carries no
-// script or style body.
-func TestStaticExcerpt(t *testing.T) {
-	source := newNotesSource(t)
-	big := "<!doctype html><title>Big</title><style>body{color:red}</style><script>const SECRET_JS = 1;</script><h1>Big page</h1>" + strings.Repeat("<p>lorem ipsum</p>", 2000)
-	rev := commitFile(t, source, "public/big.html", big)
+	// 3. Back on the base (a restore): the cached copy for this app and
+	// page; a page never opened has none.
 	r, err := gogit.PlainOpen(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree, err := treeOf(r, rev)
+	head, err := r.Head()
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := staticExcerpt(tree, "/big.html", suggestPageFile("notes", "/big.html"))
-	if len(got) > suggestExcerptLimit+64 {
-		t.Errorf("excerpt is %d bytes, want ≤ %d", len(got), suggestExcerptLimit)
+	baseRev := head.Hash().String()
+	if err := st.Write(shape.State{ActiveRevision: baseRev, LastKnownGood: baseRev}); err != nil {
+		t.Fatal(err)
 	}
-	for _, s := range []string{"Title: Big", "Headings: Big page", "Markup:"} {
-		if !strings.Contains(got, s) {
-			t.Errorf("excerpt lacks %q:\n%s", s, got)
+	expect("cached copy", suggest("/api/shape/notes/suggest?page=/"), "Change the delete button to each note", "Undo add a delete button to each note")
+	expect("cached copy, unseen page", suggest("/api/shape/notes/suggest?page=/never.html"))
+	noCall("the cached opens", 2)
+
+	// After a restart the cache is gone: the base answers nothing — the
+	// generic placeholder — and still no call.
+	h2 := newTestHandler(t, opts)
+	if w := do(h2, http.MethodGet, "/api/shape/notes/suggest?page=/", peer, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"examples":[]`) {
+		t.Errorf("after restart = %d %s", w.Code, w.Body.String())
+	}
+	noCall("the restart open", 2)
+
+	// shaped.json genie.examples: the app's own, before every other source.
+	rev := commitFile(t, source, "shaped.json", `{"genie": {"examples": ["make the ship faster", "add a high-score table"]}}`)
+	if err := st.Write(shape.State{ActiveRevision: rev, LastKnownGood: rev}); err != nil {
+		t.Fatal(err)
+	}
+	expect("declared examples", suggest("/api/shape/notes/suggest?page=/"), "make the ship faster", "add a high-score table")
+	noCall("the declared open", 2)
+
+	// No delegate configured at all: still a plain answer.
+	h3 := newTestHandler(t, Options{Panels: []Panel{notes}, Shape: ShapeOptions{
+		Home: home, WorkRoot: filepath.Join(t.TempDir(), "shape-work"), Runner: []string{"/bin/sh"}, Level: contain.LevelProcess}})
+	if w := do(h3, http.MethodGet, "/api/shape/notes/suggest?page=/", peer, nil); w.Code != http.StatusOK {
+		t.Errorf("no delegate = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSuggestCachePerPrincipal: the cached copy (source 3) is one
+// principal's — a derived follow-up repeats their wish — and a non-empty
+// answer replaces it.
+func TestSuggestCachePerPrincipal(t *testing.T) {
+	s := &server{}
+	alice := suggestKey{app: "notes", principal: "device:alice", page: "/"}
+	bob := suggestKey{app: "notes", principal: "device:bob", page: "/"}
+	if got := s.rememberSuggestions(alice, nil); got == nil || len(got) != 0 {
+		t.Errorf("empty cache = %#v, want []", got)
+	}
+	s.rememberSuggestions(alice, []string{"Undo add a secret page"})
+	if got := s.rememberSuggestions(bob, nil); len(got) != 0 {
+		t.Errorf("bob reads alice's copy: %q", got)
+	}
+	if got := s.rememberSuggestions(alice, nil); strings.Join(got, "|") != "Undo add a secret page" {
+		t.Errorf("alice's copy = %q", got)
+	}
+	s.rememberSuggestions(alice, []string{"newer"})
+	if got := s.rememberSuggestions(alice, nil); strings.Join(got, "|") != "newer" {
+		t.Errorf("alice's replaced copy = %q", got)
+	}
+}
+
+// TestParseNextSteps: Genie's follow-up list in the shapes it comes —
+// after the coverage list, with markers, quotes, "(none)" and prose —
+// becomes a bounded list of plain wishes, and the coverage list before it
+// is still read whole.
+func TestParseNextSteps(t *testing.T) {
+	answer := "Changed the list.\n\nCOVERED:\n- newest first\nNOT COVERED:\n- export remains to do\nNEXT:\n- add a delete button\n- \"show a count of notes\"\n- (none)\n"
+	if got := parseNextSteps(answer); strings.Join(got, "|") != "add a delete button|show a count of notes" {
+		t.Errorf("parseNextSteps = %q", got)
+	}
+	cov := parseCoverageSummary(answer)
+	if cov == nil || strings.Join(cov.NotCovered, "|") != "export remains to do" || strings.Join(cov.Covered, "|") != "newest first" {
+		t.Errorf("coverage with NEXT after it = %+v", cov)
+	}
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"COVERED:\n- a\nNOT COVERED:\n- (none)\n", nil},
+		{"**NEXT:**\n* make the ship faster\n* add lives\n\nsome prose\n- not a wish\n", []string{"make the ship faster", "add lives"}},
+		{"NEXT:\n- first list\nNEXT:\n- the last list wins\n", []string{"the last list wins"}},
+		{"NEXT:\n- <script>alert(1)</script>\n- ok wish\n- ok wish\n", []string{"ok wish"}},
+		{"NEXT:\n- w1 one\n- w2 two\n- w3 three\n- w4 four\n- w5 five\n- w6 six\n- w7 seven\n", []string{"w1 one", "w2 two", "w3 three", "w4 four", "w5 five", "w6 six"}},
+		{"NEXT:\n- " + strings.Repeat("x", 200) + "\n- fine wish\n", []string{"fine wish"}},
+	}
+	for _, c := range cases {
+		if got := parseNextSteps(c.in); strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("parseNextSteps(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	for _, s := range []string{"SECRET_JS", "color:red"} {
-		if strings.Contains(got, s) {
-			t.Errorf("excerpt carries %q", s)
+}
+
+// TestDeriveFollowUps: the follow-ups built from a wish, and the trailer
+// reader they rest on.
+func TestDeriveFollowUps(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"add a delete button", []string{"Change the delete button", "Undo add a delete button"}},
+		{"Make the ship faster.", []string{"Change the ship faster", "Undo make the ship faster"}},
+		{"show   newest\nnotes first", []string{"Change newest notes first", "Undo show newest notes first"}},
+		{"please add an export link", []string{"Change the export link", "Undo please add an export link"}},
+		{"dark mode", []string{"Change dark mode", "Undo dark mode"}},
+		{"CSV export", []string{"Change CSV export", "Undo CSV export"}},
+		{"   ", nil},
+	}
+	for _, c := range cases {
+		if got := deriveFollowUps(c.in); strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Errorf("deriveFollowUps(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	if f := suggestPageFile(consoleApp, "sprint/"); f != "board.html" {
-		t.Errorf("console sprint page file = %q", f)
+	msg := "shape: add a delete button\n\nShape-Request: add a delete button\nShape-Principal: device:x\nShape-Agent: codex\nShape-Next: show a count\nShape-Next: undo the button\n"
+	c := &object.Commit{Message: msg}
+	if got := versionSuggestions(c); strings.Join(got, "|") != "show a count|undo the button" {
+		t.Errorf("versionSuggestions(next) = %q", got)
 	}
-	if f := suggestPageFile("notes", "/sprint/"); f != "sprint/index.html" {
-		t.Errorf("notes sprint page file = %q", f)
+	c.Message = "shape: add a delete button\n\nShape-Request: add a delete button\nShape-Principal: device:x\n"
+	if got := versionSuggestions(c); strings.Join(got, "|") != "Change the delete button|Undo add a delete button" {
+		t.Errorf("versionSuggestions(derived) = %q", got)
+	}
+	c.Message = "notes: base\n"
+	if got := versionSuggestions(c); got != nil {
+		t.Errorf("versionSuggestions(base) = %q", got)
+	}
+	// Trailers are read from the last paragraph only.
+	if got := trailerValues("Shape-Next: in the body\n\nShape-Request: x\n", "Shape-Next:"); got != nil {
+		t.Errorf("body line read as a trailer: %q", got)
 	}
 	if p := suggestPage("/a/../b?x=1#f"); p != "/b" {
 		t.Errorf("suggestPage = %q", p)

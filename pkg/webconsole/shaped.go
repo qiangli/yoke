@@ -70,10 +70,6 @@ type ShapeOptions struct {
 	// ServerIdle stops a shaped app server no request has used for this
 	// long. Zero = 10m.
 	ServerIdle time.Duration
-	// SuggestTimeout bounds the read-only Genie call that generates the
-	// wish form's example wishes (shaped_suggest.go). Zero = 10s.
-	SuggestTimeout time.Duration
-
 	Delegate  Delegator
 	Verifier  Verifier
 	Activator Activator

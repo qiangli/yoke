@@ -274,7 +274,12 @@ type Candidate struct {
 	Identity string           `json:"agent_identity,omitempty"`
 	Receipt  string           `json:"agent_receipt,omitempty"`
 	Coverage *CoverageSummary `json:"coverage,omitempty"`
-	Verdict  *Verdict         `json:"verdict,omitempty"`
+	// Next is Genie's two or three likely follow-up wishes (the NEXT: lines
+	// of its answer, shaped_suggest.go): stored with the version as
+	// Shape-Next trailers of its commit and shown as the wish form's
+	// placeholder on the next panel open — no model call then.
+	Next    []string `json:"next,omitempty"`
+	Verdict *Verdict `json:"verdict,omitempty"`
 	// NewApp is set, with Status "new_app", when Genie read the wish as
 	// "make a separate new app" and the server made it (shaped_newapp.go).
 	NewApp *NewApp `json:"new_app,omitempty"`
@@ -308,8 +313,15 @@ func parseCoverageSummary(output string) *CoverageSummary {
 				section = "not_covered"
 			}
 			continue
+		case nextHeading:
+			// The follow-up list (parseNextSteps) ends the coverage list;
+			// its bullets are not NOT COVERED items.
+			if section == "not_covered" {
+				section = "done"
+			}
+			continue
 		}
-		if summary == nil || section == "" {
+		if summary == nil || section == "" || section == "done" {
 			continue
 		}
 		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
@@ -325,7 +337,7 @@ func parseCoverageSummary(output string) *CoverageSummary {
 			summary.NotCovered = append(summary.NotCovered, item)
 		}
 	}
-	if section != "not_covered" || len(summary.Covered) == 0 || len(summary.NotCovered) == 0 {
+	if (section != "not_covered" && section != "done") || len(summary.Covered) == 0 || len(summary.NotCovered) == 0 {
 		return nil
 	}
 	return summary
@@ -339,11 +351,10 @@ type shapeHub struct {
 	// no wish, undo, redo or cancel lands on a draft while the verifier
 	// judges it. In-memory on purpose: a crash mid-save leaves no stuck flag.
 	saving map[string]bool
-	// suggestions is the example-wish cache (shaped_suggest.go), keyed per
-	// (app, active revision, page); its own lock, so a slow Genie call
-	// never holds up a candidate write.
+	// suggestions is the cached copy of the last example wishes shown
+	// (shaped_suggest.go), keyed per (app, principal, page); its own lock.
 	suggestMu   sync.Mutex
-	suggestions map[suggestKey]*suggestEntry
+	suggestions map[suggestKey][]string
 }
 
 // principalKey is a filesystem-safe, non-reversible directory name: workspace
@@ -513,8 +524,9 @@ func shapingTaskFor(app string, w wish) string {
 		"The common Genie button (public/genie.js and anything under _shape/) is protected: never edit it. To move or hide the button, edit only the \"genie\" key of shaped.json at the app root, for example {\"genie\": {\"position\": \"bottom-left\"}}; position is one of top-right, top-left, bottom-right, bottom-left; \"hidden\": true hides it; \"anchor\" is a CSS selector to place it inside.\n\n" +
 		newAppBrief(w.first) +
 		shapingContext(w.Page, w.Element) +
-		"End your final response with a short coverage list against every part of the user's request. Use these exact headings and bullet format; write - (none) when a section is empty:\n" +
-		"COVERED:\n- what you completed\nNOT COVERED:\n- what you did not complete\n\n" +
+		"End your final response with a short coverage list against every part of the user's request, then two or three likely follow-up wishes. Use these exact headings and bullet format; write - (none) when a section is empty:\n" +
+		"COVERED:\n- what you completed\nNOT COVERED:\n- what you did not complete\n" +
+		"NEXT:\n- a follow-up wish this user is likely to ask next, as they would type it (plain words, one line, at most twelve words)\n- another\n\n" +
 		"The user's request (verbatim, between the markers):\n<<<REQUEST\n" + request + "\nREQUEST>>>\n"
 }
 
@@ -684,6 +696,7 @@ func (s *server) runCandidate(a *shapedApp, dir string, c Candidate, operator bo
 	}
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	c.Coverage = parseCoverageSummary(res.Output)
+	c.Next = parseNextSteps(res.Output)
 	// Genie may have answered that the wish is for a new app: then nothing
 	// changed here, the app is made, and this record points at it.
 	na, err := s.newAppIntent(ctx, wr, c.BaseRev, c.Principal, c.Request, res.Output, operator, false)
@@ -772,6 +785,10 @@ func commitCandidate(r *gogit.Repository, c Candidate) (string, error) {
 	}
 	msg := "shape: " + subject + "\n\nShape-Request: " + oneLine(c.Request) + "\nShape-Principal: " + c.Principal +
 		"\nShape-Agent: " + c.Agent + "\n"
+	// The follow-up wishes travel with the version (shaped_suggest.go).
+	for _, n := range c.Next {
+		msg += nextTrailer + " " + oneLine(n) + "\n"
+	}
 	h, err := wt.Commit(msg, &gogit.CommitOptions{All: true, Author: &object.Signature{
 		Name: "bashy shape", Email: "shape@bashy.invalid", When: time.Now(),
 	}})
