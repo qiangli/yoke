@@ -3,7 +3,7 @@ id: b65275088a3e
 kind: feature
 title: S546.1 Signed CUDA Ollama/llama-server runner and persistent gp3 EBS model volume layout
 seq: 2987
-status: doing
+status: assigned
 priority: p0
 labels:
     - cloud
@@ -11,7 +11,8 @@ labels:
     - gpu
     - ollama
 created: 2026-10-30T23:46:49.358342Z
-assignee: muse-conductor
+weave: 762
+assignee: claude-opus5.5
 sprint: 546
 sprint_id: ae111a75-889f-50a4-a423-de1bab0fbca6
 sprint_title: On-demand cloud GPU workers for large/custom Ollama models via Cloudbox and Outpost (AWS EC2 first)
