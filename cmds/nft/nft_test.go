@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,6 +58,25 @@ func TestNetavarkEmptyJSONBatch(t *testing.T) {
 	fake(t)
 	if _, errb, code := runNft(t, `{"nftables":[]}`, "-j", "-f", "-"); code != 0 {
 		t.Fatalf("empty netavark batch should succeed: %d %s", code, errb)
+	}
+}
+
+func TestCapturedNetavarkJSONTransactions(t *testing.T) {
+	fake(t)
+	for _, name := range []string{"netavark-bridge.json", "netavark-portmap.json"} {
+		input, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, errb, code := runNft(t, string(input), "-j", "-f", "-"); code != 0 {
+			t.Fatalf("%s: %d %s", name, code, errb)
+		}
+	}
+	out, errb, code := runNft(t, "", "-j", "list", "table", "inet", "netavark")
+	if code != 0 || !strings.Contains(out, `"name":"NETAVARK-HOSTPORT-DNAT"`) ||
+		!strings.Contains(out, `"name":"nv_2f259bab_10_88_0_0_nm16_dnat"`) ||
+		!strings.Contains(out, `"masquerade":null`) || !strings.Contains(out, `"dnat":{`) {
+		t.Fatalf("captured netavark ruleset: %d %s %s", code, out, errb)
 	}
 }
 
