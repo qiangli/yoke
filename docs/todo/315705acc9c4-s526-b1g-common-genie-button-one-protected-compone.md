@@ -38,3 +38,5 @@ Acceptance: red/green tests (injection on each shaped app page; the protected pa
 Manager constraints (S526): yoke pkg/webconsole (inject the component where pages are served: servePageFile / shaped app page path / preview); add the protected path to pkg/src ProtectedManifest; reuse F3a preview handling (yoke e0898d17). NO podman/docker/make test/full suites on Dragon: focused go test + go vet only. Desk apps (notepad, form) are shaped apps served via the public path; inject there too. Manager runs the live zoo check.
 
 Operator update 2026-10-31: button TOP-RIGHT by default; its position and hidden state come from the app's shaped config (e.g. a small shaped.json / app config key), so a wish can move or hide it while the component itself stays protected.
+
+Placement decisions of record: dhnt docs/sprint-526/b1g-genie-button-placement-2026-10-31.md @ 2a3a694f1 (every page; top-right default; shaped.json genie:{position,hidden} read by the protected component; shortcut always opens; protected pages file a request; preview disables). Acceptance addition: a wish to move/hide the button yields a config-only candidate that passes Verify, component unchanged.
