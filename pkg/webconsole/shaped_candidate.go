@@ -248,19 +248,67 @@ const (
 
 // Candidate is the metadata record of one shaping attempt.
 type Candidate struct {
-	ID        string    `json:"id"`
-	App       string    `json:"app"`
-	Principal string    `json:"principal"`
-	Request   string    `json:"request"`
-	Status    string    `json:"status"`
-	Error     string    `json:"error,omitempty"`
-	BaseRev   string    `json:"base_rev,omitempty"`
-	Rev       string    `json:"rev,omitempty"`
-	Agent     string    `json:"agent,omitempty"`
-	Identity  string    `json:"agent_identity,omitempty"`
-	Receipt   string    `json:"agent_receipt,omitempty"`
-	Verdict   *Verdict  `json:"verdict,omitempty"`
-	Created   time.Time `json:"created"`
+	ID        string           `json:"id"`
+	App       string           `json:"app"`
+	Principal string           `json:"principal"`
+	Request   string           `json:"request"`
+	Status    string           `json:"status"`
+	Error     string           `json:"error,omitempty"`
+	BaseRev   string           `json:"base_rev,omitempty"`
+	Rev       string           `json:"rev,omitempty"`
+	Agent     string           `json:"agent,omitempty"`
+	Identity  string           `json:"agent_identity,omitempty"`
+	Receipt   string           `json:"agent_receipt,omitempty"`
+	Coverage  *CoverageSummary `json:"coverage,omitempty"`
+	Verdict   *Verdict         `json:"verdict,omitempty"`
+	Created   time.Time        `json:"created"`
+}
+
+// CoverageSummary is the agent's account of the request, not a verifier verdict.
+type CoverageSummary struct {
+	Covered    []string `json:"covered"`
+	NotCovered []string `json:"not_covered"`
+}
+
+// parseCoverageSummary keeps only the final, explicitly labeled coverage list.
+// Missing sections leave older or nonconforming delegate output without a summary.
+func parseCoverageSummary(output string) *CoverageSummary {
+	var summary *CoverageSummary
+	section := ""
+	for _, raw := range strings.Split(output, "\n") {
+		line := strings.TrimSpace(raw)
+		heading := strings.TrimSpace(strings.Trim(line, "#* "))
+		switch heading {
+		case "COVERED:":
+			summary = &CoverageSummary{}
+			section = "covered"
+			continue
+		case "NOT COVERED:":
+			if summary != nil && section == "covered" {
+				section = "not_covered"
+			}
+			continue
+		}
+		if summary == nil || section == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
+			continue
+		}
+		item := strings.TrimSpace(line[2:])
+		if item == "" {
+			continue
+		}
+		if section == "covered" {
+			summary.Covered = append(summary.Covered, item)
+		} else {
+			summary.NotCovered = append(summary.NotCovered, item)
+		}
+	}
+	if section != "not_covered" || len(summary.Covered) == 0 || len(summary.NotCovered) == 0 {
+		return nil
+	}
+	return summary
 }
 
 // shapeHub serializes candidate metadata writes and tracks running agents.
@@ -365,6 +413,8 @@ func shapingTask(app, request string) string {
 		"or in Bash#:\n" +
 		"  val=\"${item_display_name:-${item_name:-}}\"\n" +
 		"Do not rename or remove existing stored data fields, flags, arguments, routes, or unit names.\n\n" +
+		"End your final response with a short coverage list against every part of the user's request. Use these exact headings and bullet format; write - (none) when a section is empty:\n" +
+		"COVERED:\n- what you completed\nNOT COVERED:\n- what you did not complete\n\n" +
 		"The user's request (verbatim, between the markers):\n<<<REQUEST\n" + request + "\nREQUEST>>>\n"
 }
 
@@ -435,6 +485,7 @@ func (s *server) runCandidate(a *shapedApp, dir string, c Candidate) {
 		return
 	}
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
+	c.Coverage = parseCoverageSummary(res.Output)
 	rev, err := commitCandidate(wr, c)
 	if err != nil {
 		fail(err)

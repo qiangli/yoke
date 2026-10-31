@@ -1081,6 +1081,8 @@ body.standalone #bar { flex: none; }
 #shape-page .spacer { flex: 1; }
 .shape-card { border: 1px solid var(--border, #e4e4e7); border-radius: .5rem; padding: .75rem; display: grid; gap: .5rem; }
 .shape-meta, #shape-active, #shape-who { color: var(--muted-foreground); font-size: .8rem; }
+.shape-coverage { display: grid; gap: .5rem; font-size: .85rem; overflow-wrap: anywhere; }
+.shape-coverage-group ul { margin: .2rem 0 0; padding-left: 1.25rem; }
 .shape-status { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
 .shape-status.failed { color: #dc2626; }
 .shape-status.verified { color: #16a34a; }

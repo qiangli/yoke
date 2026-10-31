@@ -53,3 +53,12 @@ func TestShapingBriefExpandThenContractRuleAndExample(t *testing.T) {
 		t.Errorf("shapingTask and ShapingBrief differ:\ntask:\n%s\nbrief:\n%s", task, brief)
 	}
 }
+
+func TestShapingBriefRequestsCoverageList(t *testing.T) {
+	brief := ShapingBrief("notes", "Add sorting, filtering, and export")
+	for _, want := range []string{"End your final response", "every part of the user's request", "COVERED:", "NOT COVERED:", "- (none)"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q", want)
+		}
+	}
+}

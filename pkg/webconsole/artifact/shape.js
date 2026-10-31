@@ -62,6 +62,18 @@ function render(c) {
   if (c.verdict) meta.push(c.verdict.pass ? "verified" : "verification failed" + (c.verdict.detail ? ": " + c.verdict.detail : ""));
   if (c.error) meta.push(c.error);
   if (meta.length) card.append(el("div", "shape-meta", meta.join(" · ")));
+  if (c.coverage) {
+    const coverage = el("div", "shape-coverage");
+    for (const [label, items] of [["COVERED", c.coverage.covered], ["NOT COVERED", c.coverage.not_covered]]) {
+      const group = el("div", "shape-coverage-group");
+      group.append(el("b", "", label));
+      const list = el("ul");
+      for (const item of items || []) list.append(el("li", "", item));
+      group.append(list);
+      coverage.append(group);
+    }
+    card.append(coverage);
+  }
   if (c.rev) {
     const diff = el("div", "shape-diff-host");
     fetch(api("/candidates/" + c.id + "/diff")).then((r) => (r.ok ? r.text() : "")).then((h) => { diff.innerHTML = h; });
