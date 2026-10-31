@@ -238,6 +238,9 @@
 
   const style = el("style");
   style.textContent = css;
+  // Marked so an in-place draft refresh keeps it while swapping the app's
+  // own head nodes.
+  style.setAttribute("data-bgn-style", "");
   (document.head || document.documentElement).append(style);
 
   let toastTimer = 0;
@@ -567,8 +570,8 @@
   }
 
   // submitStep adds one wish to the draft as a step: posted, then the
-  // draft is watched until Genie is done, and the page reloads to show
-  // the result in place. A wish that produced no step says why here.
+  // draft is watched until Genie is done, and the fresh page is swapped
+  // in place. A wish that produced no step says why here.
   async function submitStep(request) {
     try {
       const res = await fetch(draftAPI("/wishes"), {
@@ -581,14 +584,16 @@
       ta.value = "";
       setElement("");
       status.textContent = "Genie is on it (a few minutes)…";
-      if (barState) barState.watch();
-      const st = await settle();
+      // The bar's watch settles the wish and swaps the result in place;
+      // awaiting it shares that one wait instead of settling twice (two
+      // loops swap the page twice for one step).
+      const st = barState ? await barState.watch() : await settle();
       if (!st) throw new Error("the draft is gone");
       if (st.new_app) { await landInNewApp(st.new_app); return; }
       if (st.last_error) { status.textContent = "No step: " + st.last_error; send.disabled = false; return; }
       close();
       toast("Wish applied to your draft.");
-      location.reload();
+      if (!barState) location.reload();
     } catch (e) {
       status.textContent = e.message || "The wish could not be added";
       send.disabled = false;
@@ -1020,8 +1025,8 @@
   // ---- the edit session ------------------------------------------------------
   // draftBar: on the draft's own pages, the bar "Editing draft: N wishes ·
   // undo · redo · Diff · Cancel · Save", with the sparkle in its slot to add
-  // a wish. Undo and redo move the server-side cursor and reload the page
-  // (the steps are stored; Genie does not run). Save verifies the whole
+  // a wish. Undo and redo move the server-side cursor and swap the page in
+  // place (the steps are stored; Genie does not run). Save verifies the whole
   // draft once: a refusal is shown here with its reason and the draft
   // stays; a pass lands on the live app, now one version newer. Cancel is
   // armed on the first click and discards on the second.
@@ -1044,7 +1049,7 @@
     alertEl.hidden = true;
     const say = (msg) => { alertEl.textContent = msg || ""; alertEl.hidden = !msg; };
 
-    let st = null, polling = false, armed = 0;
+    let st = null, armed = 0;
     const move = async (what) => {
       if (!st || st.busy) return;
       setBusy(true, what === "/undo" ? "Undoing…" : "Redoing…");
@@ -1052,7 +1057,7 @@
       try {
         const res = await fetch(draftAPI(what), { method: "POST", credentials: "same-origin" });
         if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
-        location.reload();
+        await refresh();
       } catch (e) { setBusy(false); say("Could not " + what.slice(1) + ": " + e.message); }
     };
     // The next wish in this draft: a labelled control, not only the sparkle
@@ -1139,32 +1144,125 @@
       else if (st.verdict && !st.verdict.pass) say("Not saved" + (st.verdict.detail ? ": " + st.verdict.detail : "") + ". The draft stays open: fix it with another wish, undo, or cancel.");
     }
 
-    // watch waits for the wish in flight and reloads the page to show its
-    // result in place; a wish that made no step is reported instead.
-    async function watch(onDone) {
-      if (polling) return;
-      polling = true;
-      setBusy(true, "Genie is working on your wish…");
-      const s2 = await settle();
-      polling = false;
-      if (s2 === null) {
-        say("This draft no longer exists: it was saved or cancelled elsewhere.");
-        for (const b of buttons) b.disabled = true;
-        return;
+    // watching is the shared wait for the wish in flight: every waiter
+    // shares one settle loop and one refresh, so one step never swaps the
+    // page twice. Two back-to-back navigations leave the editing bar
+    // briefly missing twice, and a poll landing in either gap reads a null
+    // bar as a failure.
+    let watching = null;
+    function watch(onDone) {
+      if (!watching) {
+        watching = (async () => {
+          setBusy(true, "Genie is working on your wish…");
+          try {
+            const s2 = await settle();
+            if (s2 === null) {
+              say("This draft no longer exists: it was saved or cancelled elsewhere.");
+              for (const b of buttons) b.disabled = true;
+              return null;
+            }
+            if (onDone) onDone(s2);
+            if (s2.new_app) {
+              // The wish made a new app instead of a step: the panel (if open)
+              // is already on its way there; from the bar, go the same way.
+              setBusy(true, "Genie is making " + (s2.new_app.label || s2.new_app.app) + "…");
+              if (!overlay || overlay.hidden) location.assign(abs(base + "shape/" + encodeURIComponent(s2.new_app.app) + "/draft/").href);
+              return s2;
+            }
+            if (s2.last_error) { render(s2); return s2; }
+            await refresh();
+            return s2;
+          } finally {
+            watching = null;
+          }
+        })();
+      } else if (onDone) {
+        watching.then((s2) => { if (s2) { try { onDone(s2); } catch (_) {} } });
       }
-      if (onDone) onDone(s2);
-      if (s2.new_app) {
-        // The wish made a new app instead of a step: the panel (if open)
-        // is already on its way there; from the bar, go the same way.
-        setBusy(true, "Genie is making " + (s2.new_app.label || s2.new_app.app) + "…");
-        if (!overlay || overlay.hidden) location.assign(abs(base + "shape/" + encodeURIComponent(s2.new_app.app) + "/draft/").href);
-        return;
+      return watching;
+    }
+
+    // refresh swaps the draft's fresh page in place and refills the bar, so
+    // the editing bar (and this component) never disappear mid-step. Only a
+    // swap that cannot run falls back to a reload.
+    async function refresh() {
+      if (!(await refreshDraftPage())) { location.reload(); return; }
+      // load leaves the draft-gone message and a disabled bar when the
+      // draft vanished mid-step; there is nothing to re-enable then.
+      if (!(await load())) return;
+      outline();
+      setBusy(false);
+    }
+
+    // refreshDraftPage fetches this draft page's fresh HTML and swaps the
+    // app's own nodes in place, keeping the editing bar, the button, the
+    // panel, and this component's style and script alive. Scripts the app
+    // ships run again from their fresh copies, the way a reload would run
+    // them; the component's own deferred tag is never re-inserted, so it
+    // never initializes twice.
+    async function refreshDraftPage() {
+      let html = "";
+      try {
+        const res = await fetch(location.href, { credentials: "same-origin", headers: { Accept: "text/html" } });
+        if (!res.ok) return false;
+        html = await res.text();
+      } catch (_) { return false; }
+      let doc = null;
+      try {
+        doc = new DOMParser().parseFromString(html, "text/html");
+      } catch (_) { return false; }
+      if (!doc || !doc.head || !doc.body) return false;
+      try {
+        swapHead(doc.head);
+        swapBody(doc.body);
+      } catch (_) { return false; }
+      return true;
+    }
+
+    // rerun returns a live copy of a fresh script node: inserted scripts run,
+    // parsed ones do not, so the copy is what re-runs the app's scripts.
+    function rerun(n) {
+      const s = document.createElement("script");
+      for (const a of n.attributes) s.setAttribute(a.name, a.value);
+      if (n.src) s.async = false;
+      else s.textContent = n.textContent;
+      return s;
+    }
+
+    const ownNode = (n) => n.nodeType === 1 &&
+      (n.hasAttribute("data-bgn-style") || n.hasAttribute("data-bashy-genie") ||
+        (n.classList && (n.classList.contains("bgn") || n.classList.contains("bgn-bar"))));
+
+    function swapHead(fresh) {
+      for (const n of [...document.head.childNodes]) {
+        if (!ownNode(n)) n.remove();
       }
-      if (s2.last_error) { render(s2); return; }
-      location.reload();
+      for (const n of [...fresh.childNodes]) {
+        if (n.nodeType === 1 && n.tagName === "SCRIPT") document.head.append(rerun(n));
+        else document.head.append(n.cloneNode(true));
+      }
+    }
+
+    function swapBody(fresh) {
+      // App nodes go; the bar, the button wrap, the panel, toasts, and the
+      // component's own script tag stay.
+      for (const n of [...document.body.childNodes]) {
+        if (!ownNode(n)) n.remove();
+      }
+      for (const n of [...fresh.childNodes]) {
+        if (ownNode(n)) continue;
+        if (n.nodeType === 1 && n.tagName === "SCRIPT") {
+          if (n.hasAttribute("data-bashy-genie")) continue;
+          document.body.append(rerun(n));
+        } else {
+          document.body.append(n.cloneNode(true));
+        }
+      }
     }
 
     // load fills the bar from the server; keep leaves a fresh message.
+    // It answers the draft record, or null when there is none (or it could
+    // not be loaded), so a refresh knows whether to re-enable the bar.
     async function load(keep) {
       const s2 = await draftState();
       if (s2 === null) {
@@ -1172,13 +1270,14 @@
         count.textContent = "No draft";
         sum.replaceChildren(el("span", "", "This draft no longer exists. "), Object.assign(el("a", "", "Open the live app"), { href: liveURL() }));
         for (const b of buttons) b.disabled = true;
-        return;
+        return null;
       }
-      if (!s2) { say("The draft could not be loaded"); return; }
+      if (!s2) { say("The draft could not be loaded"); return null; }
       const msg = alertEl.textContent;
       render(s2);
       if (keep && msg) say(msg);
       if (s2.busy) watch();
+      return s2;
     }
 
     async function showDraftDiff() {
@@ -1265,7 +1364,8 @@
   // the truth when the fix failed (the previous version is still active),
   // was refused (waiting for review), or is outside bashy's control.
   // Only live pages report: a preview's or draft's errors are not the
-  // active version's.
+  // active version's. A swap or navigation that aborts in-flight loads is
+  // never reported: those aborts are the navigation, not an incident.
   const repairAPI = (rest) => abs(base + "api/shape/" + encodeURIComponent(app) + "/incidents" + (rest || ""));
   const reportedSigs = new Set();
   const repairSig = (kind, message, url) => kind + "\n" + (message || "") + "\n" + (url || "");
@@ -1363,7 +1463,17 @@
     if (repairTimer === 0) startRepairPoll();
   }
 
+  // unloading is set when the page starts going away: a swap or a
+  // navigation aborts in-flight asset loads and fetches, and those aborts
+  // surface as element error events and aborted-fetch rejections. None of
+  // them is an incident, so nothing is reported from here on. A bfcache
+  // restore clears it: the page is alive again.
+  let unloading = false;
+  window.addEventListener("pagehide", () => { unloading = true; }, true);
+  window.addEventListener("pageshow", (ev) => { if (ev && ev.persisted) unloading = false; }, true);
+
   async function reportRepair(kind, path, message, stack, url, offline) {
+    if (unloading) return null;
     if (mode !== "live" || (kind !== "asset" && kind !== "script")) return null;
     const sig = repairSig(kind, message, url);
     if (reportedSigs.has(sig)) return null;
@@ -1456,6 +1566,9 @@
     try {
       if (mode !== "live") return;
       const r = ev && ev.reason;
+      // An aborted fetch (a swap or navigation cut it off, or the app
+      // cancelled it) is not an incident either, with or without pagehide.
+      if (r && r.name === "AbortError") return;
       const msg = (r instanceof Error ? (r.message || "Unhandled rejection") : "Unhandled rejection: " + String(r));
       reportRepair("script", page, String(msg), (r instanceof Error && r.stack) || "", "", false);
     } catch (_) {}

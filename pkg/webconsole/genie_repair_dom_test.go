@@ -179,6 +179,80 @@ func TestDOMRepairFailed(t *testing.T) {
 	assertNoJSErrors(t, "repair failure", errs())
 }
 
+// A swap or navigation that aborts in-flight asset loads must never report
+// an incident: an asset error firing while the page is going away (pagehide)
+// is the navigation, not an incident. The control proves the reporting path
+// works in-test: the same synthetic asset error without pagehide shows the
+// overlay and records one incident.
+func TestDOMRepairIgnoresUnloadAborts(t *testing.T) {
+	source := newNotesSource(t)
+	notes := Panel{Name: "notes", Label: "Notes", Path: "/notes/", ShapedSource: source,
+		Auth: AuthSystem, Source: "registered", Available: true}
+	home := t.TempDir()
+	base, ctx, errs := domEnv(t, Options{Panels: []Panel{notes},
+		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Runner: []string{"/bin/sh"}, Level: contain.LevelProcess}})
+
+	principal := repairPrincipal(t, base)
+	count := func() int {
+		t.Helper()
+		st, err := shape.OpenAt(home, "notes", principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := openIncidents(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := s.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list)
+	}
+	// fireAssetError dispatches a synthetic asset error on an appended
+	// script element: the capture-phase listener sees it with its element,
+	// exactly like a failed load, without any network behind it.
+	const fireAssetError = `(function () { var s = document.createElement('script'); document.body.append(s); s.dispatchEvent(new Event('error')); return true; })()`
+
+	// Control: without an unload, the same error reports and shows the overlay.
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/notes/"),
+		chromedp.WaitVisible(`[data-bashy-genie-btn]`),
+		chromedp.Evaluate(fireAssetError, nil),
+		chromedp.WaitVisible(`[data-bgn-repair]`),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("incidents after a live asset error = %d, want 1", got)
+	}
+
+	// The abort case: a fresh page starts going away, then the asset error
+	// fires. Nothing is reported and no overlay shows.
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/notes/"),
+		chromedp.WaitVisible(`[data-bashy-genie-btn]`),
+		chromedp.Evaluate(`window.dispatchEvent(new Event('pagehide')); true`, nil),
+		chromedp.Evaluate(fireAssetError, nil),
+		chromedp.Sleep(2500*time.Millisecond),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var overlay bool
+	if err := chromedp.Run(ctx,
+		chromedp.Evaluate(`!!document.querySelector('[data-bgn-repair]:not([hidden])')`, &overlay),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if overlay {
+		t.Error("repair overlay shown for an asset error during unload")
+	}
+	if got := count(); got != 1 {
+		t.Errorf("incidents after an unload abort = %d, want still 1", got)
+	}
+	assertNoJSErrors(t, "unload aborts", errs())
+}
+
 // repairPrincipal reads the loopback owner's principal from the Shape state:
 // the same identity the page's incident polls and reports use.
 func repairPrincipal(t *testing.T, base string) string {
