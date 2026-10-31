@@ -83,6 +83,12 @@ type OllamaComponent struct {
 	Hooks   TelemetryHooks
 }
 
+// Seams over runner_embed so tests can drive the CUDA preflight.
+var (
+	selectRunnerBackend = runnerEmbed.SelectBackend
+	ensureCUDARunner    = runnerEmbed.EnsureCUDA
+)
+
 // serveOnce gates the lifetime of ollamaserver.Serve to ONE call per
 // process. The stdlib mux panics on duplicate registration.
 var serveOnce sync.Once
@@ -173,7 +179,18 @@ func (o *OllamaComponent) Start(ctx context.Context) error {
 		return nil
 	}
 
-	if !runnerEmbed.Available() {
+	backend, err := selectRunnerBackend(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("ollama: %w", err)
+	}
+	if backend == runnerEmbed.BackendCUDA {
+		// Fail closed BEFORE binding: a CUDA selection never serves on CPU.
+		// The runner dispatch re-checks and gates each runner on its own
+		// startup log (runner_embed.DispatchCUDA).
+		if _, err := ensureCUDARunner(ctx); err != nil {
+			return fmt.Errorf("ollama: %w", err)
+		}
+	} else if !runnerEmbed.Available() {
 		return fmt.Errorf("ollama: %w", ErrRunnerNotInstalled)
 	}
 

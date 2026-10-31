@@ -218,6 +218,11 @@ type ProvisionRequest struct {
 	// Authorization is an optional temporary-lifecycle authorization
 	// recorded at create (A6); nil creates a persistent resource.
 	Authorization *provider.Authorization
+	// ModelDir, when set, makes this a GPU worker: the plan's model_dir
+	// (e.g. the EC2 adapter's /var/lib/ollama on the root gp3 volume). The
+	// user data becomes GPUWorkerUserData — a prologue exporting
+	// OLLAMA_MODELS=ModelDir, then the master's script unchanged.
+	ModelDir string
 	// Progress receives one human-readable line per stage; nil is silent.
 	Progress func(string)
 	// Reserved, when set, receives the stable address reserved for the
@@ -253,6 +258,12 @@ func ProvisionExecutable(ctx context.Context, c Client, d *provider.Dispatcher, 
 			req.Progress(s)
 		}
 	}
+	if req.ModelDir != "" {
+		// Refuse a bad model_dir before anything is reserved or asked for.
+		if err := validModelDir(req.ModelDir); err != nil {
+			return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, err
+		}
+	}
 	endpoint := req.Endpoint
 	if endpoint == "" {
 		res, rerr := provider.ReserveEndpoint(ctx, d.Adapter(), req.Spec)
@@ -286,6 +297,12 @@ func ProvisionExecutable(ctx context.Context, c Client, d *provider.Dispatcher, 
 	userData, err := bundle.UserData()
 	if err != nil {
 		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, err
+	}
+	if req.ModelDir != "" {
+		if userData, err = GPUWorkerUserData(userData, req.ModelDir); err != nil {
+			return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: provider.OpCreate}, err
+		}
+		report(fmt.Sprintf("GPU worker first boot keeps models in %s (%s)", req.ModelDir, ModelsEnv))
 	}
 	spec := req.Spec
 	spec.UserData = userData
