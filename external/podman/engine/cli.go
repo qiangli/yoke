@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/qiangli/yoke/pkg/nfthelper"
 	"github.com/spf13/cobra"
 
 	ociMachine "github.com/qiangli/yoke/pkg/oci/machine"
@@ -80,6 +81,11 @@ func ExecManaged(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if runtime.GOOS == "linux" && !systemPodman() {
+		if _, err := nfthelper.Ensure(); err != nil {
+			return fmt.Errorf("podman nft helper: %w", err)
+		}
+	}
 	cmd := buildManagedExec(ctx, bin, DefaultSocketPath(), args)
 	if runErr := cmd.Run(); runErr != nil {
 		var exitErr *exec.ExitError
@@ -124,7 +130,11 @@ func buildManagedExec(ctx context.Context, bin, socket string, args []string) *e
 		env = prependPath(env, dir)
 	}
 	if runtime.GOOS == "linux" {
-		if helperDir := filepath.Clean(filepath.Join(filepath.Dir(bin), "..", "lib", "podman")); isDir(helperDir) {
+		if helperDir := filepath.Clean(filepath.Join(filepath.Dir(bin), "..", "lib", "podman")); isDir(helperDir) && !systemPodman() {
+			if nftDir, err := nfthelper.Ensure(); err == nil {
+				env = prependPath(env, nftDir)
+				env = append(env, nfthelper.EnvName+"=1")
+			}
 			if os.Getenv("CONTAINERS_CONF_OVERRIDE") == "" {
 				if conf, err := writeHelperConf(filepath.Dir(bin), helperDir); err == nil {
 					env = append(env, "CONTAINERS_CONF_OVERRIDE="+conf)
@@ -140,6 +150,9 @@ func buildManagedExec(ctx context.Context, bin, socket string, args []string) *e
 // conmon, the helper dir and the OCI runtimes at the files shipped in the same
 // engine tarball; CONTAINERS_HELPER_BINARY_DIR alone does not fix conmon lookup.
 func writeHelperConf(binDir, helperDir string) (string, error) {
+	if _, err := nfthelper.Ensure(); err != nil {
+		return "", err
+	}
 	return writeConfFile(helperConfContent(binDir, helperDir))
 }
 
@@ -153,8 +166,8 @@ func helperConfContent(binDir, helperDir string) string {
 	if conmon := filepath.Join(helperDir, "conmon"); isFile(conmon) {
 		fmt.Fprintf(&b, "conmon_path = [%q]\n", conmon)
 	}
-	fmt.Fprintf(&b, "helper_binaries_dir = [%q, %q, %q]\n",
-		filepath.Join(root, "lib", "podman"), filepath.Join(root, "libexec", "podman"), binDir)
+	fmt.Fprintf(&b, "helper_binaries_dir = [%q, %q, %q, %q]\n",
+		nfthelper.Dir(), filepath.Join(root, "lib", "podman"), filepath.Join(root, "libexec", "podman"), binDir)
 	var rt []string
 	for _, name := range []string{"crun", "runc"} {
 		var found string

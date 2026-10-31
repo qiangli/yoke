@@ -6,9 +6,11 @@
 package all
 
 // The k3s agent host tools of the FROM-scratch DKS runtime image, whose bashy
-// is built with -tags bashy_dks_runtime. Kept out of every other build: there
-// they would shadow the host's real nft/mount/umount.
+// is built with -tags bashy_dks_runtime. General command registration stays
+// out of every other build to avoid shadowing host nft/mount/umount.
 import (
 	_ "github.com/qiangli/yoke/cmds/mount"
-	_ "github.com/qiangli/yoke/cmds/nft"
+	nftcmd "github.com/qiangli/yoke/cmds/nft"
 )
+
+func init() { nftcmd.Register() }

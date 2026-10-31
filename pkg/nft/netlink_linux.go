@@ -127,7 +127,7 @@ func (b *netlinkBackend) GetTable(fam Family, name string) (*TableState, error) 
 		}
 		for _, r := range rules {
 			comment, _ := userdata.GetString(r.UserData, userdata.TypeComment)
-			st.Rules = append(st.Rules, RuleSpec{Family: fam, Table: name, Chain: c.Name, Handle: r.Handle, Comment: comment})
+			st.Rules = append(st.Rules, RuleSpec{Family: fam, Table: name, Chain: c.Name, Handle: r.Handle, Comment: comment, JSONExpr: readRuleJSON(r.UserData)})
 		}
 	}
 	sets, err := dumpSets(fam, name, "")
@@ -384,7 +384,9 @@ func (b *netlinkBackend) DelElements(s *SetSpec, els []Element) {
 	}
 }
 
-func (b *netlinkBackend) AddRule(r *RuleSpec) {
+func (b *netlinkBackend) AddRule(r *RuleSpec) { b.addRule(r, false) }
+
+func (b *netlinkBackend) addRule(r *RuleSpec, insert bool) {
 	anon := make([]*nftables.Set, len(r.AnonSets))
 	for i, a := range r.AnonSets {
 		anon[i] = nlSet(&a.Spec)
@@ -403,10 +405,50 @@ func (b *netlinkBackend) AddRule(r *RuleSpec) {
 		exprs = append(exprs, x)
 	}
 	nr := &nftables.Rule{Table: nlTable(r.Family, r.Table), Chain: &nftables.Chain{Name: r.Chain}, Exprs: exprs}
-	if r.Comment != "" {
-		nr.UserData = userdata.AppendString(nil, userdata.TypeComment, r.Comment)
+	if len(r.JSONExpr) > 0 {
+		nr.UserData = appendRuleJSON(nr.UserData, r.JSONExpr)
 	}
-	b.conn.AddRule(nr)
+	if r.Comment != "" {
+		nr.UserData = userdata.AppendString(nr.UserData, userdata.TypeComment, r.Comment)
+	}
+	if insert {
+		b.conn.InsertRule(nr)
+	} else {
+		b.conn.AddRule(nr)
+	}
+}
+
+func (b *netlinkBackend) InsertRule(r *RuleSpec) {
+	// Use the same expression and userdata encoder as AddRule, then change
+	// the queued netlink operation to INSERT before flushing.
+	b.addRule(r, true)
+}
+
+// Rule JSON is kept in nft rule userdata so subsequent netavark processes can
+// compare the expressions they previously installed. Each userdata item has
+// a one-byte length; reserve consecutive private types for chunks.
+func appendRuleJSON(dst, src []byte) []byte {
+	for i := 0; len(src) > 0; i++ {
+		n := len(src)
+		if n > 240 {
+			n = 240
+		}
+		dst = userdata.Append(dst, userdata.Type(128+i), src[:n])
+		src = src[n:]
+	}
+	return dst
+}
+
+func readRuleJSON(src []byte) []byte {
+	var out []byte
+	for i := 0; i < 128; i++ {
+		chunk := userdata.Get(src, userdata.Type(128+i))
+		if len(chunk) == 0 {
+			break
+		}
+		out = append(out, chunk...)
+	}
+	return out
 }
 
 func (b *netlinkBackend) DelRule(fam Family, table, chain string, handle uint64) {
@@ -433,6 +475,11 @@ func nlExpr(e Expr, anon []*nftables.Set) (expr.Any, error) {
 		key := expr.CtKeySTATE
 		if x.Key == "status" {
 			key = expr.CtKeySTATUS
+		} else if x.Key == "mark" {
+			key = expr.CtKeyMARK
+		}
+		if x.Set {
+			return &expr.Ct{Register: x.SReg, SourceRegister: true, Key: key}, nil
 		}
 		return &expr.Ct{Register: x.DReg, Key: key}, nil
 	case Fib:

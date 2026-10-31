@@ -342,7 +342,11 @@ func (m *MemBackend) DelElements(s *SetSpec, els []Element) {
 	})
 }
 
-func (m *MemBackend) AddRule(r *RuleSpec) {
+func (m *MemBackend) AddRule(r *RuleSpec) { m.addRule(r, false) }
+
+func (m *MemBackend) InsertRule(r *RuleSpec) { m.addRule(r, true) }
+
+func (m *MemBackend) addRule(r *RuleSpec, insert bool) {
 	spec := *r
 	m.enqueue(func(ts map[tableKey]*memTable) error {
 		t, c, err := m.chain(ts, spec.Family, spec.Table, spec.Chain)
@@ -374,7 +378,11 @@ func (m *MemBackend) AddRule(r *RuleSpec) {
 			}
 		}
 		spec.Handle = m.handle()
-		c.rules = append(c.rules, spec)
+		if insert {
+			c.rules = append([]RuleSpec{spec}, c.rules...)
+		} else {
+			c.rules = append(c.rules, spec)
+		}
 		return nil
 	})
 }

@@ -1,7 +1,6 @@
-// Package nft is a pure-Go implementation of the subset of the nft(8)
-// command language that sigs.k8s.io/knftables emits — the contract kube-proxy
-// (proxy-mode=nftables) and flannel's nftables traffic manager drive through
-// `nft -f -`, `nft --check -f -` and `nft --json [--terse] list …`.
+// Package nft is a pure-Go implementation of the nft(8) subsets used by
+// knftables and netavark: text transactions for kube-proxy/flannel, JSON
+// transactions for Podman bridge networking, and JSON listing/readback.
 //
 // The package is split so the hard part is testable on any host:
 //
@@ -19,7 +18,10 @@
 // sources that define the contract.
 package nft
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Family is an nftables address family as spelled on the command line.
 type Family string
@@ -138,6 +140,8 @@ type (
 	Ct struct {
 		Key  string // state, status
 		DReg uint32
+		Set  bool
+		SReg uint32
 	}
 	// Fib looks up the route type of saddr/daddr.
 	Fib struct {
@@ -235,6 +239,7 @@ type RuleSpec struct {
 	AnonSets []*AnonSet
 	Comment  string
 	Handle   uint64
+	JSONExpr json.RawMessage // original JSON statements for netavark readback
 }
 
 // AnonSet is an anonymous set built for one rule.

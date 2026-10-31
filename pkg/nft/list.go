@@ -142,6 +142,11 @@ func counterObj(c CounterSpec) obj {
 
 func ruleObj(r RuleSpec) obj {
 	o := obj{"family": string(r.Family), "table": r.Table, "chain": r.Chain, "handle": r.Handle}
+	if len(r.JSONExpr) > 0 {
+		o["expr"] = json.RawMessage(r.JSONExpr)
+	} else {
+		o["expr"] = []any{}
+	}
 	if r.Comment != "" {
 		o["comment"] = r.Comment
 	}

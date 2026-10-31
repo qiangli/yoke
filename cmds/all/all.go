@@ -11,9 +11,9 @@
 // stack. Both are host front-door verbs rather than bare userland tools; hosts
 // register them directly.
 //
-// Build-tag gated (dks_runtime.go, -tags bashy_dks_runtime): cmds/nft and
-// cmds/mount, the k3s agent host tools of the DKS runtime image. Ordinary
-// bashy builds must keep resolving the host's own nft/mount/umount.
+// Build-tag gated (dks_runtime.go, -tags bashy_dks_runtime): registration of
+// cmds/nft and cmds/mount as general commands. Ordinary bashy keeps resolving
+// the host's own nft/mount/umount; Podman's private nft helper is separate.
 //
 // Keep the list alphabetical.
 package all
