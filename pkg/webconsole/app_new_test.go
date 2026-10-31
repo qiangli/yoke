@@ -79,3 +79,30 @@ func TestAppNewBlank(t *testing.T) {
 		t.Fatalf("blank app page = %d %q", w.Code, w.Body.String())
 	}
 }
+
+// TestAppNewAPIIsLive: the launcher's "New app" posts here. The blank app is
+// listed and served at once (registered apps are read live), and a taken,
+// reserved or malformed request is refused.
+func TestAppNewAPIIsLive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("BASHY_APPS_DIR", t.TempDir())
+	h := newTestHandler(t, Options{})
+	_ = do(h, "GET", "/api/apps", "127.0.0.1:1", nil) // prime the TTL cache
+
+	body := `{"name":"signup","label":"Sign-up sheet"}`
+	if w := registryRequest(h, "POST", "/api/apps/new", body, "127.0.0.1:1", nil); w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"path":"/signup/"`) {
+		t.Fatalf("new = %d %s", w.Code, w.Body.String())
+	}
+	if w := do(h, "GET", "/api/apps", "127.0.0.1:1", nil); !strings.Contains(w.Body.String(), `"name":"signup"`) {
+		t.Fatalf("new app not listed: %s", w.Body.String())
+	}
+	if w := do(h, "GET", "/signup/", "127.0.0.1:1", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "data-bashy-blank") {
+		t.Fatalf("new app page = %d %s", w.Code, w.Body.String())
+	}
+	for _, bad := range []string{body, `{"name":"files"}`, `{"name":"../x"}`, `{"name":"ok","port":8080}`, `{}`} {
+		if w := registryRequest(h, "POST", "/api/apps/new", bad, "127.0.0.1:1", nil); w.Code != http.StatusBadRequest {
+			t.Errorf("accepted %s: %d %s", bad, w.Code, w.Body.String())
+		}
+	}
+}

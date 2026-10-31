@@ -109,3 +109,43 @@ func (s *server) handleRegisteredRemove(w http.ResponseWriter, r *http.Request) 
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// handleAppNew is the launcher's "New app": a blank shaped app, created the
+// way a document editor creates a new document (fleet.NewBlankShapedApp).
+// Registered apps are read live, so it is listed and served at once; the
+// first wish on its empty page is an ordinary shaping candidate.
+func (s *server) handleAppNew(w http.ResponseWriter, r *http.Request) {
+	if !s.registryWriter(w, r) {
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "new app requires application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	var req struct {
+		Name  string `json:"name"`
+		Label string `json:"label"`
+		Icon  string `json:"icon"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		http.Error(w, "expected one new-app request", http.StatusBadRequest)
+		return
+	}
+	if err := validMount(req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	app, err := fleet.NewBlankShapedApp(s.registeredCatalog(), fleet.App{Name: req.Name, Label: req.Label, Icon: req.Icon})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"name": app.Name, "path": "/" + app.Name + "/"})
+}

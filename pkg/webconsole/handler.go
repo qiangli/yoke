@@ -323,6 +323,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/apps", s.handleApps)
 	mux.HandleFunc("POST /api/apps/registered", s.handleRegisteredSave)
+	mux.HandleFunc("POST /api/apps/new", s.handleAppNew)
 	mux.HandleFunc("DELETE /api/apps/registered/{name}", s.handleRegisteredRemove)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	// The look settings: GET is the structured projection, PUT is the one
