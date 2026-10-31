@@ -263,6 +263,7 @@ type ActivateOptions struct {
 	Gate          state.ActivationGate
 	PreSwitchHook func() error
 	Request       string
+	Trigger       string // incident ID for a verified repair
 	When          time.Time
 }
 
@@ -367,6 +368,9 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 	}
 	msg := fmt.Sprintf("Activate %s %s for %s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
 		app, shortSHA(revSHA), principal, revSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
+	if opts.Trigger != "" {
+		msg += "Trigger: " + oneLineRequest(opts.Trigger) + "\n"
+	}
 	// Keep the candidate commit reachable from the version line as a second
 	// parent. Its tree is what state.ActiveRevision names and what the next
 	// shaping request clones; the first parent remains the linear audit line.

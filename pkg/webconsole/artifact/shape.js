@@ -137,7 +137,7 @@ function renderVersion(v) {
   const li = document.createElement("li");
   li.className = "history-version";
   const head = el("div", "row");
-  head.append(el("b", "history-summary", v.summary || v.request || "Base release"), el("span", "spacer"));
+  head.append(el("b", "history-summary", (v.trigger ? "repair of " + v.trigger + " · " : "") + (v.summary || v.request || "Base release")), el("span", "spacer"));
   if (v.active) head.append(el("span", "shape-status", "Current"));
   li.append(head);
   const meta = [];

@@ -34,6 +34,7 @@ type VersionEntry struct {
 	Request    string    `json:"request,omitempty"`
 	Verdict    string    `json:"verdict,omitempty"`
 	Evidence   string    `json:"evidence,omitempty"`
+	Trigger    string    `json:"trigger,omitempty"`
 	Principal  string    `json:"principal,omitempty"`
 	Author     string    `json:"author,omitempty"`
 	When       time.Time `json:"when,omitempty"`
@@ -196,6 +197,7 @@ func walkLine(r *gogit.Repository, tip string, released map[string]string) []Ver
 			Request:    commitTrailer(c.Message, "Request"),
 			Verdict:    commitTrailer(c.Message, "Verdict"),
 			Evidence:   commitTrailer(c.Message, "Evidence"),
+			Trigger:    commitTrailer(c.Message, "Trigger"),
 			Principal:  commitTrailer(c.Message, "Principal"),
 			Author:     c.Author.Name,
 			When:       c.Author.When,

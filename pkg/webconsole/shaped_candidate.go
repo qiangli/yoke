@@ -157,6 +157,7 @@ type ActivateRequest struct {
 	Request      string
 	Agent        string
 	Evidence     string
+	Trigger      string
 }
 
 // productionActivator imports the verified candidate into the canonical src
@@ -228,7 +229,7 @@ func (a *productionActivator) Activate(ctx context.Context, req ActivateRequest)
 	// evidence is re-checked here, and the Verdict received over HTTP is
 	// never itself authority to activate.
 	gate := shapegate.New(home, req.Evidence)
-	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{Gate: gate, Request: req.Request})
+	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{Gate: gate, Request: req.Request, Trigger: req.Trigger})
 	return err
 }
 
@@ -251,6 +252,7 @@ const (
 
 // candKindRequest marks a filed request (Candidate.Kind).
 const candKindRequest = "request"
+const candKindRepair = "repair"
 
 // Candidate is the metadata record of one shaping attempt.
 type Candidate struct {

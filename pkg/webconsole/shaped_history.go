@@ -40,6 +40,7 @@ type historyVersion struct {
 	Summary    string    `json:"summary,omitempty"`
 	Verdict    string    `json:"verdict,omitempty"`
 	Evidence   string    `json:"evidence,omitempty"`
+	Trigger    string    `json:"trigger,omitempty"`
 	Principal  string    `json:"principal,omitempty"`
 	Author     string    `json:"author,omitempty"`
 	When       time.Time `json:"when,omitempty"`
@@ -89,7 +90,7 @@ func toHistoryView(h src.VersionHistory) historyView {
 		}
 		v.Versions = append(v.Versions, historyVersion{
 			Activation: e.Activation, Revision: e.Revision, Version: e.Version, Kind: e.Kind,
-			Request: e.Request, Verdict: e.Verdict, Evidence: e.Evidence,
+			Request: e.Request, Verdict: e.Verdict, Evidence: e.Evidence, Trigger: e.Trigger,
 			Summary:   historySummary(message),
 			Principal: e.Principal, Author: e.Author, When: e.When,
 			Names: names[e.Revision], Active: e.Revision == h.Active && h.Active != "",
