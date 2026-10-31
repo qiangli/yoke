@@ -444,6 +444,23 @@ func (c *compiler) match() error {
 // compareLiteral emits "x == v" / "x != v" for a plain or prefix literal
 // already loaded in reg 1.
 func (c *compiler) compareLiteral(single *selector, val string, neg bool) error {
+	if single.typ.Name == "inet_service" && strings.Contains(val, "-") {
+		bounds := strings.Split(val, "-")
+		if len(bounds) != 2 {
+			return fmt.Errorf("invalid port range %q", val)
+		}
+		lo, err1 := strconv.ParseUint(bounds[0], 10, 16)
+		hi, err2 := strconv.ParseUint(bounds[1], 10, 16)
+		if err1 != nil || err2 != nil || lo > hi {
+			return fmt.Errorf("invalid port range %q", val)
+		}
+		start, _, _ := encodeValue(single.typ, bounds[0])
+		end, _, _ := encodeValue(single.typ, bounds[1])
+		spec := SetSpec{Family: c.fam, Table: c.r.Table, Keys: []DataType{single.typ}, Anonymous: true, Constant: true, Interval: true}
+		c.r.AnonSets = append(c.r.AnonSets, &AnonSet{Spec: spec, Elements: intervalElements([][2][]byte{{start, end}})})
+		c.emit(Lookup{SReg: reg1, Anon: len(c.r.AnonSets) - 1, Invert: neg})
+		return nil
+	}
 	b, plen, err := encodeValue(single.typ, val)
 	if err != nil {
 		return err

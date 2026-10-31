@@ -62,6 +62,10 @@ func TestNetavarkJSONForwardAndPortRules(t *testing.T) {
 	if code != 0 || !strings.Contains(out, `"dnat":{"addr":"10.88.0.2"`) || !strings.Contains(out, `"drop":null`) {
 		t.Fatalf("ruleset: %d %s %s", code, out, errb)
 	}
+	rangeRule := `{"nftables":[{"add":{"rule":{"family":"inet","table":"netavark","chain":"NETAVARK-HOSTPORT-DNAT","expr":[{"match":{"left":{"payload":{"protocol":"tcp","field":"dport"}},"right":{"range":[8080,8085]},"op":"=="}},{"accept":null}]}}}]}`
+	if _, errb, code := runNft(t, rangeRule, "-j", "-f", "-"); code != 0 {
+		t.Fatalf("port range: %d %s", code, errb)
+	}
 }
 
 func TestNetavarkJSONSetMapAndTeardown(t *testing.T) {

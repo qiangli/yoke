@@ -139,12 +139,14 @@ func JSONToText(input []byte) (string, error) {
 						keys += " : " + data
 					}
 					line = prefix + " { type " + keys + " ;"
-					if len(fields["flags"]) > 0 {
+					if len(fields["flags"]) > 0 && string(fields["flags"]) != "null" {
 						var flags []string
 						if err := json.Unmarshal(fields["flags"], &flags); err != nil {
 							return "", err
 						}
-						line += " flags " + strings.Join(flags, ",") + " ;"
+						if len(flags) > 0 {
+							line += " flags " + strings.Join(flags, ",") + " ;"
+						}
 					}
 					line += " }"
 				case "element":
