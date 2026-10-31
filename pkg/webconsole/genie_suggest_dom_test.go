@@ -46,7 +46,7 @@ func (d *domNextShaper) calls() int {
 // TestDOMGenieExamples drives the wish form's prompt and placeholder
 // (S526.B1g, revision): the panel shows the one fixed generic prompt; on
 // the base, with nothing stored, the placeholder reads the neutral
-// "Describe what you'd like" and Genie is not called; after a wish is
+// "How can I help you today?" and Genie is not called; after a wish is
 // applied and saved, the placeholder becomes the first follow-up Genie
 // listed with that wish (NEXT:), still without a call on open; a version
 // without NEXT shows a follow-up derived from its wish. Nothing is
@@ -145,7 +145,7 @@ func TestDOMGenieExamples(t *testing.T) {
 	}
 	time.Sleep(500 * time.Millisecond) // the (empty) answer reaches the page
 	eval(placeholder, &ph)
-	if ph != "Describe what you'd like" {
+	if ph != "How can I help you today?" {
 		t.Errorf("base placeholder = %q, want the neutral one", ph)
 	}
 	eval(panel+`.textContent + ' ' + `+placeholder, &text)

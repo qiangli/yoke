@@ -48,7 +48,7 @@
 // last copy shown, or the app's own from shaped.json. No model call is
 // made for them. The first shows when they arrive and the rest rotate
 // while the box is empty; with none, the placeholder is a neutral
-// "Describe what you'd like". No fixed text claims anything app-specific.
+// "How can I help you today?". No fixed text claims anything app-specific.
 //
 // There is ONE wish form and no target choice (S526.B1i): a wish that asks
 // for a separate new app is understood by Genie, not by this script — the
@@ -83,7 +83,7 @@
   // The one fixed prompt of the wish form, and the placeholder until the
   // example wishes arrive, or when there are none (S526.B1g).
   const PROMPT = "What would you like to change, add or make?";
-  const NEUTRAL = "Describe what you'd like";
+  const NEUTRAL = "How can I help you today?";
   const ROTATE_MS = 6000;
 
   const sparkle = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +

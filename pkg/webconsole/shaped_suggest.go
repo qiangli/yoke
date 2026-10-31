@@ -42,7 +42,7 @@ import (
 //     principal (in memory, per process) — a restore to the base, say,
 //     keeps the last suggestions rather than none. Per principal: a
 //     derived wish is the principal's own text.
-//  4. Nothing: the component keeps its neutral "Describe what you'd like".
+//  4. Nothing: the component keeps its neutral "How can I help you today?".
 //
 // An app may declare its own fixed examples in shaped.json (genie.examples)
 // — used as they are, before every other source. Protected pages get the
