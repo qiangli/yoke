@@ -155,20 +155,27 @@ func (a *adapter) AccountID(ctx context.Context) (string, error) {
 	if id := strings.TrimSpace(a.cfg.AccountID); id != "" {
 		return id, nil
 	}
+	id, _, err := a.callerIdentity(ctx)
+	return id, err
+}
+
+// callerIdentity always verifies STS, including when AccountID was configured:
+// a supplied account number must never bypass the root-credential check.
+func (a *adapter) callerIdentity(ctx context.Context) (string, string, error) {
 	a.account.mu.Lock()
 	defer a.account.mu.Unlock()
 	if a.account.id != "" {
-		return a.account.id, nil
+		return a.account.id, a.account.arn, nil
 	}
 	var out callerIdentity
 	if err := a.sts.call(ctx, "GetCallerIdentity", &out); err != nil {
-		return "", err
+		return "", "", err
 	}
 	id := strings.TrimSpace(out.Result.Account)
 	if id == "" {
-		return "", fmt.Errorf("aws: sts GetCallerIdentity returned no account id")
+		return "", "", fmt.Errorf("aws: sts GetCallerIdentity returned no account id")
 	}
 	a.account.id = id
 	a.account.arn = out.Result.ARN
-	return id, nil
+	return id, a.account.arn, nil
 }

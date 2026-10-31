@@ -632,6 +632,10 @@ func (a *adapter) createTags(req provider.Request, stagedKey string) []string {
 // allocates + attaches the "<name>-ip" static IP. Those steps are
 // idempotent too, so a replay converges rather than duplicating.
 func (a *adapter) create(ctx context.Context, req provider.Request) (provider.Result, error) {
+	// Even a replay can allocate an address in finish, so check before it too.
+	if _, pe := a.CheckPrerequisites(ctx); pe != nil {
+		return provider.Result{ProtocolVersion: provider.ProtocolVersion, Op: req.Op, Error: pe}, pe
+	}
 	name := instanceName(req)
 	if !instanceNamePattern.MatchString(name) {
 		return provider.Failure(req.Op, provider.ErrInvalidRequest,
