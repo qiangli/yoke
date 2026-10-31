@@ -3,12 +3,14 @@ id: 0afe67cdcd6b
 kind: feature
 title: S530.3 Owner AWS account prerequisites check, generalized setup scripts, static-IP release fix
 seq: 2995
-status: doing
+status: assigned
 priority: p1
 labels:
     - cloud
     - aws
 created: 2026-10-31T00:03:18.891904Z
+weave: 744
+assignee: codex-gpt6-astra
 sprint: 530
 sprint_id: 1d6b9478-c054-5b09-961e-c649a3bc1705
 sprint_title: 'Master-provisioned AWS satellites: cloudbox provisions Lightsail satellites from owner-held AWS credentials (S522.5)'
