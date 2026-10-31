@@ -1039,7 +1039,9 @@ body.standalone #bar { flex: none; }
 .pair-row { display: flex; gap: .5rem; align-items: center; }
 .pair-row input {
   flex: 1; min-width: 0; padding: .55rem .7rem; border-radius: 10px;
-  border: 1px solid var(--tile-border, rgba(0,0,0,.15)); background: var(--input-bg, rgba(255,255,255,.8));
+  /* Theme tokens, like #search: a fixed light fill under the dark theme's
+     light text made typed text invisible. */
+  border: 1px solid var(--border); background: var(--background); color: var(--foreground);
   font: inherit;
 }
 .pair-status { font-size: .85rem; opacity: .85; min-height: 1.2em; }
