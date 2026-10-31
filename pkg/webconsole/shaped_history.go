@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
@@ -36,6 +37,7 @@ type historyVersion struct {
 	Version    string    `json:"version,omitempty"`
 	Kind       string    `json:"kind"`
 	Request    string    `json:"request,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
 	Verdict    string    `json:"verdict,omitempty"`
 	Evidence   string    `json:"evidence,omitempty"`
 	Principal  string    `json:"principal,omitempty"`
@@ -51,22 +53,29 @@ type historyVersion struct {
 // oldest restorable version, initially the shared release and later a
 // principal's tidy base, rendered as the last row.
 type historyView struct {
-	App       string              `json:"app"`
-	Principal string              `json:"principal"`
-	Line      string              `json:"line"`
-	Tip       string              `json:"tip,omitempty"`
-	Active    string              `json:"active,omitempty"`
-	Base      string              `json:"base,omitempty"`
-	Versions  []historyVersion    `json:"versions,omitempty"`
-	Named     []src.NamedVersion  `json:"named,omitempty"`
-	Reviews   []src.ReviewVersion `json:"reviews,omitempty"`
-	Releases  []src.ReleaseTag    `json:"releases,omitempty"`
+	App         string              `json:"app"`
+	Principal   string              `json:"principal"`
+	Line        string              `json:"line"`
+	Tip         string              `json:"tip,omitempty"`
+	Active      string              `json:"active,omitempty"`
+	Base        string              `json:"base,omitempty"`
+	BaseVersion *historyVersion     `json:"base_version,omitempty"`
+	Versions    []historyVersion    `json:"versions,omitempty"`
+	Named       []src.NamedVersion  `json:"named,omitempty"`
+	Reviews     []src.ReviewVersion `json:"reviews,omitempty"`
+	Releases    []src.ReleaseTag    `json:"releases,omitempty"`
 }
 
 func toHistoryView(h src.VersionHistory) historyView {
 	names := map[string][]string{}
+	savedMessages := map[string]string{}
 	for _, n := range h.Named {
 		names[n.Revision] = append(names[n.Revision], n.Name)
+	}
+	for _, e := range h.Entries {
+		if e.Kind != "restore" && e.Kind != "undo" && e.Request != "" {
+			savedMessages[e.Revision] = e.Request
+		}
 	}
 	v := historyView{
 		App: h.App, Principal: h.Principal, Line: h.Line,
@@ -74,14 +83,25 @@ func toHistoryView(h src.VersionHistory) historyView {
 		Releases: h.Releases,
 	}
 	for _, e := range h.Entries {
+		message := e.Request
+		if savedMessages[e.Revision] != "" {
+			message = savedMessages[e.Revision]
+		}
 		v.Versions = append(v.Versions, historyVersion{
 			Activation: e.Activation, Revision: e.Revision, Version: e.Version, Kind: e.Kind,
 			Request: e.Request, Verdict: e.Verdict, Evidence: e.Evidence,
+			Summary:   historySummary(message),
 			Principal: e.Principal, Author: e.Author, When: e.When,
 			Names: names[e.Revision], Active: e.Revision == h.Active && h.Active != "",
 		})
 	}
 	return v
+}
+
+// historySummary is the saved message, condensed for the editor-style list.
+// The request trailer records a single wish or the draft's ordered wish list.
+func historySummary(message string) string {
+	return strings.Join(strings.Fields(message), " ")
 }
 
 // srcHome is the bashy home the src checkout and the per-principal state
@@ -170,11 +190,19 @@ func (s *server) historyFor(w http.ResponseWriter, r *http.Request) (*shapedApp,
 }
 
 func (s *server) handleShapeHistory(w http.ResponseWriter, r *http.Request) {
-	_, _, _, h, ok := s.historyFor(w, r)
+	a, _, _, h, ok := s.historyFor(w, r)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toHistoryView(h))
+	view := toHistoryView(h)
+	if h.Base != "" && len(h.Entries) > 0 {
+		if repo, err := gogit.PlainOpen(a.repo); err == nil {
+			if commit, err := repo.CommitObject(plumbing.NewHash(h.Base)); err == nil {
+				view.BaseVersion = &historyVersion{Revision: h.Base, Activation: h.Base, Summary: "Base release", Kind: "base", Author: commit.Author.Name, When: commit.Author.When, Active: h.Active == h.Base}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (s *server) handleShapeHistoryDiff(w http.ResponseWriter, r *http.Request) {

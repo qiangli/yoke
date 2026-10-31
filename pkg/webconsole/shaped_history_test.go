@@ -469,7 +469,6 @@ func TestShapedHistoryView(t *testing.T) {
 		`aria-live="polite"`,
 		`aria-label="Version history"`,
 		`aria-label="Undo the last restore"`,
-		`aria-label="Compare the two selected versions"`,
 		`id="history-status"`,
 		`id="history-list"`,
 	} {
@@ -487,8 +486,7 @@ func TestShapedHistoryView(t *testing.T) {
 	js := get(operator, "/shape.js", 200)
 	for _, want := range []string{
 		`setAttribute("aria-label"`,
-		`"history-name-"`,
-		`"history-diff-"`,
+		`"history-details"`,
 		`"Restore version "`,
 	} {
 		if !strings.Contains(js, want) {

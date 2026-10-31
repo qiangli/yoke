@@ -1085,9 +1085,13 @@ func (s *server) handleShapeApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no activator is configured on this console", http.StatusServiceUnavailable)
 		return
 	}
+	message := oneLine(c.Request)
+	if c.Coverage != nil && len(c.Coverage.Covered) > 0 {
+		message += " — COVERED: " + strings.Join(c.Coverage.Covered, "; ")
+	}
 	err := a.opts.Activator.Activate(r.Context(), ActivateRequest{
 		App: a.name, Principal: c.Principal, SourceDir: a.repo, CandidateDir: filepath.Join(dir, "work"),
-		BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: c.Request, Agent: c.Agent, Evidence: c.Verdict.Evidence,
+		BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: message, Agent: c.Agent, Evidence: c.Verdict.Evidence,
 	})
 	if err != nil {
 		http.Error(w, "activation refused: "+err.Error(), http.StatusConflict)
