@@ -44,7 +44,7 @@ func NewAppsCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	cmd.AddCommand(newServeCmd(), newListCmd(),
-		newPairCmd(), newDevicesCmd(), newRevokeCmd())
+		newPairCmd(), newDevicesCmd(), newRevokeCmd(), newTidyCmd())
 	// Registered apps: the operator's own tiles (add · show · set · rm · edit
 	// · schema), persisted in the fleet ring beside the stock panels.
 	cmd.AddCommand(fleet.NewAppCmds(fleet.WithAppValidate(ValidateRegisteredApp))...)

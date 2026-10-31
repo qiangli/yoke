@@ -47,9 +47,8 @@ type historyVersion struct {
 // historyView is the GET history response: every version newest-first with
 // who, when, request text, verifier result, evidence reference, names and
 // the active marker, plus the raw named and review labels. Base is the
-// shared base release the app started from: the oldest restorable version,
-// rendered as the last row so restoring it reverts the app to how it
-// started.
+// oldest restorable version, initially the shared release and later a
+// principal's tidy base, rendered as the last row.
 type historyView struct {
 	App       string              `json:"app"`
 	Principal string              `json:"principal"`

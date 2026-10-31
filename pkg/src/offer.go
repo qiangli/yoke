@@ -264,6 +264,37 @@ func ListOffers(home, app, principal string) ([]Offering, error) {
 	return out, nil
 }
 
+// OfferedRevisions returns revisions that this principal published, even
+// when an offering targets other users and is therefore not visible to its
+// creator. A published revision remains supported until withdrawn.
+func OfferedRevisions(home, app, principal string) ([]string, error) {
+	entries, err := os.ReadDir(offeringsDir(home, app))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var revisions []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(offeringsDir(home, app), e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var o Offering
+		if err := json.Unmarshal(b, &o); err != nil {
+			return nil, err
+		}
+		if !o.Withdrawn && o.Origin == principal {
+			revisions = append(revisions, o.Revision)
+		}
+	}
+	return revisions, nil
+}
+
 func findOffering(home, app, target, principal string) (Offering, error) {
 	offers, err := ListOffers(home, app, principal)
 	if err != nil {

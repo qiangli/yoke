@@ -12,7 +12,6 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
-	ygit "github.com/qiangli/yoke/git"
 	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	"github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/shape/verify"
@@ -61,18 +60,17 @@ func resolveHistoryTarget(h VersionHistory, dir, rev string) (string, error) {
 		}
 	}
 	if rev == "base" || rev == pristineBranch {
-		sha, err := ygit.ResolveCommit(dir, pristineBranch)
-		if err != nil {
-			return "", fmt.Errorf("src: no base release in this checkout (%v)", err)
+		if h.Base != "" {
+			return h.Base, nil
 		}
-		return sha, nil
+		return "", ErrUnknownVersion
 	}
 	// The base release travels as a raw SHA in the history view's oldest
 	// row, so accept that SHA exactly like the "base" label: it names the
 	// shared release every principal started from, never another
 	// principal's version.
-	if sha, err := ygit.ResolveCommit(dir, pristineBranch); err == nil && strings.EqualFold(rev, sha) {
-		return sha, nil
+	if strings.EqualFold(rev, h.Base) && h.Base != "" {
+		return h.Base, nil
 	}
 	return "", ErrUnknownVersion
 }

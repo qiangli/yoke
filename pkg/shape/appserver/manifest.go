@@ -34,9 +34,18 @@ const File = "shaped.json"
 // Manifest is shaped.json.
 type Manifest struct {
 	Server *Server `json:"server,omitempty"`
+	// Tidy sets the support window and optionally names an api unit that
+	// cleans this app's own principal data before history is compacted.
+	Tidy *Tidy `json:"tidy,omitempty"`
 	// Properties are the app's declared stored properties. The trusted
 	// verifier refuses a candidate that removes or renames one.
 	Properties []string `json:"properties,omitempty"`
+}
+
+type Tidy struct {
+	KeepLast int    `json:"keep_last,omitempty"`
+	KeepDays int    `json:"keep_days,omitempty"`
+	Unit     string `json:"unit,omitempty"`
 }
 
 // Server is the app's declared server.
@@ -60,6 +69,17 @@ func Parse(b []byte) (Manifest, error) {
 	}
 	if dec.More() {
 		return Manifest{}, fmt.Errorf("%s: trailing data after the manifest", File)
+	}
+	if m.Tidy != nil {
+		if m.Tidy.KeepLast < 0 || m.Tidy.KeepDays < 0 {
+			return Manifest{}, fmt.Errorf("%s: tidy retention cannot be negative", File)
+		}
+		name := m.Tidy.Unit
+		if name != "" {
+			if name == "." || strings.ContainsAny(name, `/\\`) || strings.HasPrefix(name, ".") || strings.Contains(name, "..") {
+				return Manifest{}, fmt.Errorf("%s: tidy.unit must be a single unit name", File)
+			}
+		}
 	}
 	if m.Server == nil {
 		return m, nil

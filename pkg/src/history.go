@@ -56,9 +56,8 @@ type ReviewVersion struct {
 
 // VersionHistory is one principal's version line: every recorded version
 // newest-first, plus the named labels, the review versions, and the
-// currently active revision. Base is the shared base release the line
-// started from: the oldest restorable version, so restoring the oldest
-// listed version reverts the app to how it started.
+// currently active revision. Base is the oldest restorable version: the
+// shared release initially, or this principal's tidy base after compaction.
 //
 // Versions mirrors Entries under the name the web history view uses, so the
 // app view and `src history --json` are the same history view. Entries
@@ -112,6 +111,15 @@ func History(home, app, principal string) (VersionHistory, error) {
 		out.Tip = tip
 		out.Entries = walkLine(r, tip)
 		out.Versions = out.Entries
+		if len(out.Entries) > 0 {
+			oldest, err := r.CommitObject(plumbing.NewHash(out.Entries[len(out.Entries)-1].Activation))
+			if err == nil && oldest.NumParents() > 0 {
+				parent, err := oldest.Parent(0)
+				if err == nil && strings.HasPrefix(parent.Message, "Tidy base ") {
+					out.Base = parent.Hash.String()
+				}
+			}
+		}
 	}
 	out.Named, err = namedVersions(dir, principal)
 	if err != nil {
@@ -152,6 +160,9 @@ func walkLine(r *gogit.Repository, tip string) []VersionEntry {
 		}
 		if strings.HasPrefix(subject, "Undo ") {
 			kind = "undo"
+		}
+		if original := commitTrailer(c.Message, "Original-Kind"); original != "" {
+			kind = original
 		}
 		revision := commitTrailer(c.Message, "Revision")
 		if revision == "" {
@@ -254,6 +265,15 @@ func resolveVersion(dir, principal, rev string) (string, error) {
 		return "", fmt.Errorf("src: empty version")
 	}
 	if rev == "base" || rev == pristineBranch {
+		if principal != "" {
+			h, err := History(filepath.Dir(filepath.Dir(dir)), filepath.Base(dir), principal)
+			if err != nil {
+				return "", err
+			}
+			if h.Base != "" {
+				return h.Base, nil
+			}
+		}
 		sha, err := ygit.ResolveCommit(dir, pristineBranch)
 		if err != nil {
 			return "", fmt.Errorf("src: no base release in this checkout (%v)", err)
