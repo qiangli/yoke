@@ -926,6 +926,10 @@
         location.reload();
       } catch (e) { setBusy(false); say("Could not " + what.slice(1) + ": " + e.message); }
     };
+    // The next wish in this draft: a labelled control, not only the sparkle
+    // in the slot (operator 2026-10-31: the icon alone was not found).
+    const wishBtn = action("Wish", "bgn-p", () => open(), "Add a wish to your draft of " + app + " (" + SHORTCUT + ")");
+    wishBtn.setAttribute("data-bgn-draft-wish", "");
     const undoBtn = action("↶", "bgn-ur", () => move("/undo"), "Undo the last wish (Ctrl/Cmd-Z)");
     const redoBtn = action("↷", "bgn-ur", () => move("/redo"), "Redo the undone wish (Ctrl/Cmd-Shift-Z)");
     undoBtn.title = "Undo the last wish (Ctrl/Cmd-Z)";
@@ -968,7 +972,7 @@
       } catch (e) { say("Not saved: " + e.message); }
       setBusy(false);
     }, "Save the edit session: verify the whole draft once, then make it one new version listing every wish");
-    const buttons = [undoBtn, redoBtn, diffBtn, cancelBtn, saveBtn];
+    const buttons = [wishBtn, undoBtn, redoBtn, diffBtn, cancelBtn, saveBtn];
     head.append(barSlot, count, wish, el("span", "bgn-sp"), busy, ...buttons);
     bar.append(head, sum, alertEl);
     function setBusy(on, msg) {
@@ -988,6 +992,7 @@
       undoBtn.disabled = !st.can_undo;
       redoBtn.disabled = !st.can_redo;
       saveBtn.disabled = !!st.busy || !(st.wishes > 0);
+      wishBtn.disabled = !!st.busy;
       cancelBtn.disabled = !!st.busy;
       diffBtn.disabled = !!st.busy;
       busy.textContent = st.busy && st.running ? "Genie is working on “" + st.running.request + "”…" : "";
