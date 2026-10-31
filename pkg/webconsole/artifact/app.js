@@ -593,9 +593,7 @@ function renderHome() {
   }
 
   if (shown.length) {
-    const appTiles = shown.map((a) => tile(a, { section: "apps" }));
-    if (!search.trim()) appTiles.push(newAppCard());
-    pad.append(sectionEl("Apps", appTiles));
+    pad.append(sectionEl("Apps", shown.map((a) => tile(a, { section: "apps" }))));
   } else {
     const s = document.createElement("section");
     s.className = "sect";
@@ -607,99 +605,6 @@ function renderHome() {
   }
 
   view.replaceChildren(pad);
-}
-
-// ----------------------------------------------------------------- new app --
-// "New app" works like File > New in a document editor: name it, and an
-// empty page opens that you shape with the Genie button. No project, build
-// or deploy step (api/apps/new; S526.B1i).
-let newAppState = { open: false, busy: false, error: "", label: "" };
-
-function newAppCard() {
-  const card = document.createElement("div");
-  card.className = "pair-card";
-  card.id = "new-app";
-  const h = document.createElement("h3");
-  h.textContent = "New app";
-  const p = document.createElement("p");
-  p.className = "sub";
-  p.textContent = "Start from a blank page and describe what it should do with the Genie button, like writing a new document.";
-  card.append(h, p);
-  if (!newAppState.open) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn";
-    btn.id = "new-app-open";
-    btn.textContent = "New app";
-    btn.addEventListener("click", () => { newAppState = { open: true, busy: false, error: "" }; render(); document.getElementById("new-app-label")?.focus(); });
-    card.append(btn);
-    return card;
-  }
-  const row = document.createElement("div");
-  row.className = "pair-row";
-  const inp = document.createElement("input");
-  inp.type = "text";
-  inp.id = "new-app-label";
-  inp.placeholder = "app name, e.g. Sign-up sheet";
-  inp.autocomplete = "off";
-  inp.value = newAppState.label || "";
-  inp.disabled = newAppState.busy;
-  inp.addEventListener("input", () => { newAppState.label = inp.value; });
-  const create = document.createElement("button");
-  create.type = "button";
-  create.className = "btn";
-  create.id = "new-app-create";
-  create.textContent = newAppState.busy ? "Creating…" : "Create";
-  create.disabled = newAppState.busy;
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "btn";
-  cancel.id = "new-app-cancel";
-  cancel.textContent = "Cancel";
-  cancel.disabled = newAppState.busy;
-  create.addEventListener("click", () => createApp(inp));
-  cancel.addEventListener("click", () => { newAppState = { open: false, busy: false, error: "" }; render(); });
-  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") createApp(inp); if (e.key === "Escape") cancel.click(); });
-  row.append(inp, create, cancel);
-  card.append(row);
-  if (newAppState.error) {
-    const status = document.createElement("div");
-    status.className = "pair-status error";
-    status.id = "new-app-status";
-    status.textContent = "Failed: " + newAppState.error;
-    card.append(status);
-  }
-  return card;
-}
-
-// appSlug turns a label into the app's mount name: lower case, letters,
-// digits and dashes.
-function appSlug(label) {
-  return label.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-}
-
-async function createApp(inp) {
-  const label = (inp.value || "").trim();
-  const name = appSlug(label);
-  if (!name) { inp.focus(); return; }
-  newAppState = { open: true, busy: true, error: "", label };
-  render();
-  try {
-    const r = await fetch(url("api/apps/new"), {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, label }),
-    });
-    if (!r.ok) {
-      newAppState = { open: true, busy: false, error: (await r.text()).trim() || r.statusText, label };
-      render();
-      return;
-    }
-    const made = await r.json();
-    newAppState = { open: false, busy: false, error: "" };
-    location.href = url(made.path.replace(/^\//, "")).href;
-  } catch (e) {
-    newAppState = { open: true, busy: false, error: String(e), label };
-    render();
-  }
 }
 
 // ------------------------------------------------------------------- cloud --
