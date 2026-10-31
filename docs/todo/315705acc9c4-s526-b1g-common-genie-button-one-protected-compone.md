@@ -3,17 +3,18 @@ id: 315705acc9c4
 kind: feature
 title: 'S526.B1g Common Genie button: one protected component embedded on every shaped app page'
 seq: 3044
-status: assigned
+status: done
 priority: p1
 labels:
     - shaping
     - launcher
 created: 2026-10-31T06:50:55.875784Z
-weave: 758
 assignee: claude-fable5.1
 sprint: 526
 sprint_id: a9ea1d04-f39a-569f-8949-81dcb6aa864a
 sprint_title: 'Software Shaping dogfooding: all eligible Bashy built-in apps'
+closed: 2026-10-31T21:38:13.031682Z
+closed_by: s526-manager
 ---
 
 Operator approved 2026-10-31 for Sprint 526 (new feature added mid-sprint with explicit operator approval).
