@@ -15,6 +15,21 @@ import (
 // calling back into the console.
 func init() {
 	RegisterActivationGate(shapegate.New("", ""))
+	gateWiredAtInit = true
+}
+
+// gateWiredAtInit marks the production registration above; a later
+// RegisterActivationGate (a test or an embedder) is an explicit override.
+var gateWiredAtInit bool
+
+// overrideGate is the explicitly wired gate, or nil when only the
+// production default is wired: verbs that can mint their own evidence
+// (adopt) then verify and seal it themselves.
+func overrideGate() state.ActivationGate {
+	if gateOverridden {
+		return cliGate
+	}
+	return nil
 }
 
 // effectiveGate is the gate the CLI verbs consult: the wired gate, or the

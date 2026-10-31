@@ -287,7 +287,14 @@ type ActivateResult struct {
 var cliGate state.ActivationGate
 
 // RegisterActivationGate wires the gate `src activate` consults.
-func RegisterActivationGate(g state.ActivationGate) { cliGate = g }
+func RegisterActivationGate(g state.ActivationGate) {
+	cliGate = g
+	gateOverridden = gateWiredAtInit
+}
+
+// gateOverridden is true once something other than the init-time production
+// registration wired the gate.
+var gateOverridden bool
 
 // Activate records a commit on the principal's version line carrying the
 // request, the gate verdict, the evidence reference, and the principal,

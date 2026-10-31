@@ -119,10 +119,10 @@ revision unchanged.`,
 			if err != nil {
 				return err
 			}
-			res, err := Adopt("", args[0], args[1], p, AdoptOptions{
-				Preview: preview,
-				Gate:    effectiveGate(),
-			})
+			// No Gate: Adopt verifies the offering for this user's own pair
+			// and gates on that fresh evidence (the offering's evidence binds
+			// the origin's base).
+			res, err := Adopt("", args[0], args[1], p, AdoptOptions{Preview: preview, Gate: overrideGate()})
 			if err != nil {
 				return err
 			}
