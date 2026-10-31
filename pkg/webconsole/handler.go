@@ -343,6 +343,8 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// The embedded launcher assets by a principal-independent route: what the
 	// protected pages load (console_shaped.go). Gated like the root assets.
 	mux.HandleFunc("GET /"+consoleBaseMount+"/", s.handleBaseAsset)
+	// The common Genie button: embedded bytes at a fixed route (genie.go).
+	mux.HandleFunc("GET /"+genieMount+"/{name}", handleGenieAsset)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
 	mux.HandleFunc("GET /meta", s.handleMeta)
@@ -476,7 +478,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// otelhttp costs nothing without an exporter: the global provider is a no-op,
 	// so this is span-shaped bookkeeping that never leaves the process.
 	h := otelhttp.NewHandler(
-		stripInboundPrincipal(coopauth.StripSpoofedTrustHeaders(s.consoleGate(mux))),
+		stripInboundPrincipal(coopauth.StripSpoofedTrustHeaders(s.consoleGate(rememberLauncherBase(mux)))),
 		otelServiceName,
 	)
 	s.root = h

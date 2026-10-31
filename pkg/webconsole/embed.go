@@ -199,7 +199,8 @@ func (s *server) servePageFile(w http.ResponseWriter, r *http.Request, name stri
 	// page is shapeable; otherwise the embedded bytes (console_shaped.go).
 	var doc []byte
 	revision := ""
-	if body, c, ok := s.consoleAsset(r, name); ok {
+	rev := s.consoleRevision(r)
+	if body, c, ok := consoleAssetFrom(rev, name); ok {
 		doc, revision = body, c.Hash.String()[:12]
 		w.Header().Set("Vary", "Cookie")
 	} else {
@@ -222,6 +223,10 @@ func (s *server) servePageFile(w http.ResponseWriter, r *http.Request, name stri
 		// A protected page loads only embedded assets, whoever is asking.
 		out = rebaseAssets(out)
 	}
+	// The common Genie button rides on every launcher page, last, so no
+	// asset rewrite above ever sees its tag (genie.go). Its placement is
+	// the principal's shaped config when they have one.
+	out = injectGenie(out, s.consoleGenieTag(r, rev, name))
 	_, _ = w.Write(out)
 }
 
@@ -252,8 +257,6 @@ func injectChrome(doc []byte, name, openApps string) []byte {
 			mode = OpenNewTab
 		}
 		doc = bytes.Replace(doc, []byte("<body>"), []byte(`<body data-open-apps="`+mode+`">`), 1)
-		// The way into shaping the launcher itself (console_shaped.go).
-		doc = injectShapeButton(doc)
 		// index.html's own <footer id="foot"> already carries the version
 		// detail (#foot-left / #foot-build / #foot-right) — leave it alone
 		// and only append the copyright line inside it.

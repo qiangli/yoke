@@ -161,7 +161,10 @@ func (a *shapedApp) serveServer(w http.ResponseWriter, r *http.Request, c *objec
 		return
 	}
 	defer p.touch(-1)
-	shapedServerProxy(p).ServeHTTP(w, r)
+	tree, _ := c.Tree()
+	shapedServerProxy(p, func(page string) genieTag {
+		return genieTagFor(r, a.name, tree, page, "")
+	}).ServeHTTP(w, r)
 }
 
 func short(sha string) string {
@@ -510,19 +513,30 @@ func (s *shapedServers) close() error {
 // mount, to the server. The response keeps serveTree's rules: per-principal
 // content is never cacheable, and the console's own session cookie never
 // reaches app code.
-func shapedServerProxy(p *serverProc) http.Handler {
+//
+// genie builds the common Genie button's tag for a page the server answers
+// (genie.go); nil leaves pages untouched. The upstream is asked for identity
+// encoding so an HTML page can be rewritten — it is a loopback hop, and
+// compression there buys nothing.
+func shapedServerProxy(p *serverProc, genie func(page string) genieTag) http.Handler {
 	rp := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: p.addr})
 	inner := rp.Director
 	rp.Director = func(req *http.Request) {
 		inner(req)
 		req.Header.Del(PrincipalHeader)
 		dropCookie(req, sessionCookie)
+		if genie != nil {
+			req.Header.Del("Accept-Encoding")
+		}
 	}
 	rp.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("Cache-Control")
 		resp.Header.Del("X-Content-Type-Options")
 		if loc := resp.Header.Get("Location"); strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") && resp.Request != nil {
 			resp.Header.Set("Location", coopauth.PrefixPath(resp.Request, loc))
+		}
+		if genie != nil {
+			return injectGenieResponse(resp, genie)
 		}
 		return nil
 	}

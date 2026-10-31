@@ -131,6 +131,12 @@ func ProtectedManifest() []ProtEntry {
 		{Repo: "yoke", Path: "pkg/webconsole/artifact/term.js", Reason: "the terminal page script carries the shell session"},
 		{Repo: "yoke", Path: "pkg/webconsole/artifact/accounts.html", Reason: "the accounts page handles credentials"},
 		{Repo: "yoke", Path: "pkg/webconsole/artifact/accounts.js", Reason: "the accounts page script handles credentials"},
+		// Sprint 526.B1g: the common Genie button is shaping plumbing. The
+		// console injects it into every shaped app page (its own, every
+		// registered app's, and previews) and serves it from the embedded
+		// bytes alone; a console revision that overrides or drops it is
+		// refused like the review page.
+		{Repo: "yoke", Path: "pkg/webconsole/artifact/genie.js", Reason: "the common Genie button; a shaped wish entry could misfile or hide what is asked for"},
 	}
 }
 

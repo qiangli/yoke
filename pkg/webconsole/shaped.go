@@ -304,7 +304,13 @@ func (a *shapedApp) serveTree(w http.ResponseWriter, r *http.Request, c *object.
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = io.WriteString(w, body)
+	out := []byte(body)
+	if strings.HasSuffix(rel, ".html") {
+		// Every page of every shaped app carries the common Genie button,
+		// placed as the app's shaped.json says (genie.go).
+		out = injectGenie(out, genieTagFor(r, a.name, tree, geniePage(mountRel(r), r.URL.RawQuery), ""))
+	}
+	_, _ = w.Write(out)
 }
 
 const (

@@ -83,7 +83,7 @@ func TestConsoleShapedPresentation(t *testing.T) {
 
 	// Manifest rows (D3): the three trust-surface pages are protected, the
 	// shaped pages stay skill tier.
-	for _, p := range []string{"shape.html", "shape.js", "term.html", "term.js", "accounts.html", "accounts.js"} {
+	for _, p := range []string{"shape.html", "shape.js", "term.html", "term.js", "accounts.html", "accounts.js", "genie.js"} {
 		if got := src.PathClass("yoke", "pkg/webconsole/artifact/"+p); got != src.ClassProtected {
 			t.Errorf("PathClass(artifact/%s) = %s, want protected", p, got)
 		}
@@ -93,7 +93,7 @@ func TestConsoleShapedPresentation(t *testing.T) {
 			t.Errorf("PathClass(artifact/%s) = %s, want skill", p, got)
 		}
 	}
-	if want := []string{"public/accounts.html", "public/accounts.js", "public/shape.html", "public/shape.js", "public/term.html", "public/term.js"}; strings.Join(consoleProtectedPaths(), ",") != strings.Join(want, ",") {
+	if want := []string{"public/accounts.html", "public/accounts.js", "public/genie.js", "public/shape.html", "public/shape.js", "public/term.html", "public/term.js"}; strings.Join(consoleProtectedPaths(), ",") != strings.Join(want, ",") {
 		t.Fatalf("consoleProtectedPaths = %v, want %v", consoleProtectedPaths(), want)
 	}
 
@@ -108,8 +108,8 @@ func TestConsoleShapedPresentation(t *testing.T) {
 		t.Fatalf("serving the embedded launcher created %s (err=%v); the checkout must be lazy", sourceDir, err)
 	}
 	w = get(bob, "/", http.StatusOK)
-	if !strings.Contains(w.Body.String(), indexMarker) || !strings.Contains(w.Body.String(), `href="shape/console/"`) {
-		t.Fatalf("bob's launcher must be the embedded page with the shape entry point:\n%s", w.Body.String())
+	if !strings.Contains(w.Body.String(), indexMarker) || !strings.Contains(w.Body.String(), `data-bashy-genie data-base="/cloud/apps/" data-app="console"`) {
+		t.Fatalf("bob's launcher must be the embedded page with the common Genie button:\n%s", w.Body.String())
 	}
 
 	// The source is seeded on first need: the embedded bytes are the base

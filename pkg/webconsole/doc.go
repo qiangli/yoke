@@ -67,6 +67,15 @@
 // tool) ships its own separate frontend and is out of scope for this chrome
 // — the console does not own its markup.
 //
+// One piece of chrome goes further than the console's own pages: the common
+// Genie button (genie.go, artifact/genie.js). It is injected into every
+// shaped app page the console serves — its own, every registered shaped
+// app's (static trees in serveTree, declared servers through the reverse
+// proxy), and candidate previews — so a wish can start from inside any app
+// without the app changing. The script is a protected manifest row served
+// from the embedded bytes at /_shape/genie.js; only its placement
+// (shaped.json's genie key) is shaped source.
+//
 // # Look settings
 //
 // The "Open apps" mode is the console's one global look setting: same tab

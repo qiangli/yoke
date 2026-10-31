@@ -58,6 +58,9 @@ function render(c) {
   head.append(el("b", "", c.request), el("span", "spacer"), el("span", "shape-status " + c.status, c.status));
   card.append(head);
   const meta = [];
+  if (c.kind === "request") meta.push("filed as a request from a protected page: nothing is built; a maintainer takes it from here");
+  if (c.page) meta.push("from page " + c.page);
+  if (c.element) meta.push("pointing at " + c.element);
   if (c.agent) meta.push("by " + c.agent);
   if (c.verdict) meta.push(c.verdict.pass ? "verified" : "verification failed" + (c.verdict.detail ? ": " + c.verdict.detail : ""));
   if (c.error) meta.push(c.error);

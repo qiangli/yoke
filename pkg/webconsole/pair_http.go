@@ -35,7 +35,7 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.pairing == nil || s.sessions == nil {
-		s.pairFailure(w, host, "pairing is not enabled on this console",
+		s.pairFailure(w, r, host, "pairing is not enabled on this console",
 			"This console is not accepting pairings. Set the apps unit with `bashy service set apps --set settings.pair=true --set ports.0.bind=lan` and enable it.",
 			http.StatusNotFound)
 		return
@@ -44,14 +44,14 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("v"); v != "" && v != pairQRVersion {
 		// A future QR carrying, say, a certificate fingerprint must not be
 		// silently redeemed by a server that would ignore the new field.
-		s.pairFailure(w, host, "unsupported pairing payload version "+v,
+		s.pairFailure(w, r, host, "unsupported pairing payload version "+v,
 			fmt.Sprintf("This code was made for a newer bashy (payload v%s; this console speaks v%s). Upgrade bashy on the host, or generate a fresh code.", v, pairQRVersion),
 			http.StatusBadRequest)
 		return
 	}
 	secret := strings.TrimSpace(q.Get("t"))
 	if secret == "" {
-		s.pairFailure(w, host, "pairing request carried no ticket",
+		s.pairFailure(w, r, host, "pairing request carried no ticket",
 			"That link is missing its pairing ticket. Scan the code again from `bashy app pair`.",
 			http.StatusBadRequest)
 		return
@@ -70,13 +70,13 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errNoTicket):
 			human = "That code is not recognised by this host. Generate a fresh one with `bashy app pair`."
 		}
-		s.pairFailure(w, host, "pair redemption refused: "+err.Error(), human, status)
+		s.pairFailure(w, r, host, "pair redemption refused: "+err.Error(), human, status)
 		return
 	}
 
 	cookie, err := s.sessions.Mint(deviceSubject(currentOSUser(), d.ID))
 	if err != nil {
-		s.pairFailure(w, host, "could not mint a device session: "+err.Error(),
+		s.pairFailure(w, r, host, "could not mint a device session: "+err.Error(),
 			"The host could not start a session for this device.", http.StatusInternalServerError)
 		return
 	}
@@ -102,17 +102,17 @@ func (s *server) handlePairRedeem(w http.ResponseWriter, r *http.Request) {
 // pairFailure records the refusal and answers in words the person holding the
 // phone can act on. A failed redemption is a security event: it is the shape a
 // guessing attack takes.
-func (s *server) pairFailure(w http.ResponseWriter, peer, reason, human string, status int) {
+func (s *server) pairFailure(w http.ResponseWriter, r *http.Request, peer, reason, human string, status int) {
 	auditPairEvent("pair.refused", map[string]string{"reason": reason, "peer": peer})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`<!doctype html><html lang="en"><head>
+	_, _ = w.Write(injectGenie([]byte(`<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pairing failed &mdash; bashy apps</title><style>` + loginCSS + `</style></head>
+<title>Pairing failed &mdash; bashy apps</title><style>`+loginCSS+`</style></head>
 <body><main class="login"><form onsubmit="return false">
-<h1>bashy <b>apps</b></h1><p class="err">` + htmlEscape(human) + `</p>
-</form></main></body></html>`))
+<h1>bashy <b>apps</b></h1><p class="err">`+htmlEscape(human)+`</p>
+</form></main></body></html>`), s.protectedGenieTag(r, pairRedeemPath)))
 }
 
 // landingFor picks the page a freshly paired device opens: the LAUNCHER.

@@ -37,20 +37,20 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, errMsg stri
 	if errMsg != "" {
 		errBlock = `<p class="err">` + htmlEscape(errMsg) + `</p>`
 	}
-	_, _ = w.Write([]byte(`<!doctype html>
+	_, _ = w.Write(injectGenie([]byte(`<!doctype html>
 <html lang="en" data-bashy-console="1"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<base href="` + htmlEscape(coopauth.BaseHref(r)) + `">
+<base href="`+htmlEscape(coopauth.BaseHref(r))+`">
 <title>Sign in &mdash; bashy apps</title>
-<style>` + loginCSS + `</style>
+<style>`+loginCSS+`</style>
 </head><body>
 <main class="login">
   <form method="post" action="api/login">
     <h1>bashy <b>apps</b></h1>
     <p class="sub">This host's shell and files. Sign in as
-      <strong>` + htmlEscape(owner) + `</strong> with that account's password.</p>
-    ` + errBlock + `
-    <label>User<input name="user" autocomplete="username" autofocus value="` + htmlEscape(owner) + `"></label>
+      <strong>`+htmlEscape(owner)+`</strong> with that account's password.</p>
+    `+errBlock+`
+    <label>User<input name="user" autocomplete="username" autofocus value="`+htmlEscape(owner)+`"></label>
     <label>Password
       <span class="password-field">
         <input id="login-password" name="password" type="password" autocomplete="current-password">
@@ -91,7 +91,7 @@ func (s *server) renderLogin(w http.ResponseWriter, r *http.Request, errMsg stri
   });
 })();
 </script>
-</body></html>`))
+</body></html>`), s.protectedGenieTag(r, "/login")))
 }
 
 // loginCSS is inlined rather than linked.

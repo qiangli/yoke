@@ -17,6 +17,19 @@
 //
 // An app without shaped.json, or whose shaped.json has no server, is served
 // exactly as before (public/ assets and api/<name>.md units).
+//
+// The same file carries the app's placement of the common Genie button
+// (Sprint 526.B1g) — the protected component the console injects into every
+// shaped app page:
+//
+//	{"genie": {"position": "bottom-left", "hidden": true, "anchor": "#toolbar"}}
+//
+// position is a corner (top-right by default); anchor is an optional CSS
+// selector list the button is placed inside when one matches; hidden keeps
+// the button off every page but the app's landing page (the keyboard
+// shortcut still opens the wish panel). Placement is shaped source — a wish
+// to move or hide the button is a config-only candidate — while the
+// component itself stays protected.
 package appserver
 
 import (
@@ -24,6 +37,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -40,7 +54,27 @@ type Manifest struct {
 	// Properties are the app's declared stored properties. The trusted
 	// verifier refuses a candidate that removes or renames one.
 	Properties []string `json:"properties,omitempty"`
+	// Genie places the common Genie button on this app's pages.
+	Genie *Genie `json:"genie,omitempty"`
 }
+
+// Genie is the app's placement of the protected Genie button.
+type Genie struct {
+	// Position is the corner the button sits in: top-right (the default),
+	// top-left, bottom-right or bottom-left.
+	Position string `json:"position,omitempty"`
+	// Anchor is a comma-separated CSS selector list; the button is placed
+	// inside the first element that matches, instead of a corner.
+	Anchor string `json:"anchor,omitempty"`
+	// Hidden keeps the button off every page except the app's landing page.
+	Hidden bool `json:"hidden,omitempty"`
+}
+
+// GeniePositions are the corners a Genie placement may name.
+var GeniePositions = []string{"top-right", "top-left", "bottom-right", "bottom-left"}
+
+// GenieDefaultPosition is the corner used when the manifest names none.
+const GenieDefaultPosition = "top-right"
 
 type Tidy struct {
 	KeepLast int    `json:"keep_last,omitempty"`
@@ -79,6 +113,17 @@ func Parse(b []byte) (Manifest, error) {
 			if name == "." || strings.ContainsAny(name, `/\\`) || strings.HasPrefix(name, ".") || strings.Contains(name, "..") {
 				return Manifest{}, fmt.Errorf("%s: tidy.unit must be a single unit name", File)
 			}
+		}
+	}
+	if m.Genie != nil {
+		if m.Genie.Position == "" {
+			m.Genie.Position = GenieDefaultPosition
+		}
+		if !slices.Contains(GeniePositions, m.Genie.Position) {
+			return Manifest{}, fmt.Errorf("%s: genie.position %q must be one of %s", File, m.Genie.Position, strings.Join(GeniePositions, ", "))
+		}
+		if strings.ContainsAny(m.Genie.Anchor, "<>\"'") || len(m.Genie.Anchor) > 200 {
+			return Manifest{}, fmt.Errorf("%s: genie.anchor must be a short CSS selector list", File)
 		}
 	}
 	if m.Server == nil {

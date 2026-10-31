@@ -19,6 +19,12 @@ func main() {
 	data := flag.String("data", "", "data directory")
 	flag.Parse()
 	note := filepath.Join(*data, "note.txt")
+	// An HTML page, for the console's page-level injection (the common
+	// Genie button rides on a declared server's pages too).
+	http.HandleFunc("/page", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<!doctype html><html><head><title>serverapp</title></head><body><h1>version=%s</h1></body></html>\n", version)
+	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			b, _ := io.ReadAll(r.Body)

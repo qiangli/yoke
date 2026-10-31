@@ -4,7 +4,6 @@
 package webconsole
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -157,7 +156,7 @@ const consoleContract = `# The bashy app launcher presentation: static pages, no
 // consoleSmoke is the base check every candidate must keep passing: the
 // launcher pages it serves and the protected scripts it must not drop.
 const consoleSmoke = `set -eu
-for f in index.html app.js app.css board.html board.js inbox.html inbox.js mb.html mb.js shape.js term.js accounts.js; do
+for f in index.html app.js app.css board.html board.js inbox.html inbox.js mb.html mb.js shape.js term.js accounts.js genie.js; do
 	test -f "public/$f"
 done
 grep -q 'data-bashy-console' public/index.html
@@ -208,8 +207,14 @@ func (s *server) consoleAsset(r *http.Request, name string) ([]byte, *object.Com
 	if name == "" || consoleProtectedAsset(name) {
 		return nil, nil, false
 	}
-	c := s.consoleRevision(r)
-	if c == nil {
+	return consoleAssetFrom(s.consoleRevision(r), name)
+}
+
+// consoleAssetFrom is consoleAsset for an already-resolved revision (nil =
+// the embedded bytes apply).
+func consoleAssetFrom(c *object.Commit, name string) ([]byte, *object.Commit, bool) {
+	name = strings.TrimPrefix(name, "/")
+	if c == nil || name == "" || consoleProtectedAsset(name) {
 		return nil, nil, false
 	}
 	tree, err := c.Tree()
@@ -257,33 +262,22 @@ func rebaseAssets(doc []byte) []byte {
 	})
 }
 
-// shapeConsoleButtonHTML is the launcher header's way into shaping itself:
-// the Shape panel for the console app. Injected server-side so a revision
-// cannot shape the way back out of itself.
-func shapeConsoleButtonHTML() string {
-	return `<a id="shape-btn" class="iconbtn" href="shape/` + consoleApp + `/" title="Shape this launcher" aria-label="Shape this launcher">` +
-		`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">` +
-		`<path d="M12 3l1.8 4.6L18.4 9l-4.6 1.8L12 15.4l-1.8-4.6L5.6 9l4.6-1.4z"/>` +
-		`<path d="M5 17l.9 2.1L8 20l-2.1.9L5 23l-.9-2.1L2 20l2.1-.9z"/>` +
-		`</svg></a>`
-}
-
-// injectShapeButton places the shape button in the launcher's nav, before
-// the theme button; a revision that removed that marker gets it at the end
-// of the header bar instead.
-func injectShapeButton(doc []byte) []byte {
-	if bytes.Contains(doc, []byte(`id="shape-btn"`)) {
-		return doc
+// consoleGenieTag is the common Genie button's tag for a launcher page:
+// protected mode on the trust-surface pages (the wish is filed as a
+// request), live otherwise, placed by the principal's shaped config when
+// their revision carries one and in the header bar when it does not. The
+// launcher's routes carry no query worth a wish, and the start page is also
+// the fallback for every unknown path, so only the path is echoed.
+func (s *server) consoleGenieTag(r *http.Request, rev *object.Commit, name string) genieTag {
+	var tree *object.Tree
+	if rev != nil {
+		tree, _ = rev.Tree()
 	}
-	marker := []byte(`<button id="theme-btn"`)
-	if i := bytes.Index(doc, marker); i >= 0 {
-		out := make([]byte, 0, len(doc)+len(shapeConsoleButtonHTML()))
-		out = append(out, doc[:i]...)
-		out = append(out, shapeConsoleButtonHTML()...)
-		out = append(out, doc[i:]...)
-		return out
+	g := genieTagFor(r, consoleApp, tree, geniePage(r.URL.Path, ""), genieConsoleAnchor)
+	if consoleProtectedAsset(name) && g.Mode == genieLive {
+		g.Mode = genieProtected
 	}
-	return insertBeforeCloseOf(doc, `<header id="bar"`, "</header>", shapeConsoleButtonHTML())
+	return g
 }
 
 // consolePreviewPage maps a path under the preview prefix to the launcher
@@ -383,6 +377,8 @@ func (s *server) serveConsolePreview(w http.ResponseWriter, r *http.Request, c *
 	}
 	href := coopauth.BaseHref(r) + strings.TrimPrefix(prefix, "/") + "/"
 	doc := versionAssets(injectChrome(injectBase([]byte(body), href), name, s.openAppsMode()), c.Hash.String()[:12])
+	// The candidate's own placement, disabled: this is a preview.
+	doc = injectGenie(doc, genieTagFor(r, consoleApp, tree, geniePage("/"+rel, ""), genieConsoleAnchor))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Method == http.MethodHead {
 		return

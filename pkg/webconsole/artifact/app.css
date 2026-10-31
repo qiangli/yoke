@@ -1086,6 +1086,7 @@ body.standalone #bar { flex: none; }
 .shape-status { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
 .shape-status.failed { color: #dc2626; }
 .shape-status.verified { color: #16a34a; }
+.shape-status.requested { color: var(--warn); }
 .shape-diff { margin: 0; padding: .5rem; overflow: auto; max-height: 24rem; background: var(--muted); font-size: .78rem; }
 .shape-diff .add { color: #16a34a; }
 .shape-diff .del { color: #dc2626; }

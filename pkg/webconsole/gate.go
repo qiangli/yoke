@@ -38,6 +38,13 @@ func isOpenPath(p string) bool {
 	if strings.HasPrefix(p, "/login/") {
 		return true
 	}
+	// The common Genie button is embedded, static and identical for
+	// everyone; the sign-in page carries it too (protected mode), so it
+	// cannot wait for an identity any more than the page can. Exactly that
+	// one file: nothing else under the prefix, and no admission change.
+	if p == "/"+genieMount+"/"+genieAsset {
+		return true
+	}
 	if rest := strings.TrimPrefix(p, "/meta/"); rest != p {
 		return !strings.ContainsRune(rest, '/') && validMount(rest) == nil
 	}

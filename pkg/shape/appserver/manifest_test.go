@@ -40,3 +40,26 @@ func TestParseAndArgv(t *testing.T) {
 		}
 	}
 }
+
+// TestParseGenie: the genie placement key is shaped config the protected
+// button reads — a corner (top-right by default), an optional anchor, and
+// hidden; a position that is not a corner fails loudly.
+func TestParseGenie(t *testing.T) {
+	m, err := Parse([]byte(`{"genie": {"hidden": true}}`))
+	if err != nil || m.Genie == nil || !m.Genie.Hidden || m.Genie.Position != GenieDefaultPosition {
+		t.Fatalf("genie hidden = %+v, %v", m.Genie, err)
+	}
+	m, err = Parse([]byte(`{"genie": {"position": "bottom-left", "anchor": "#toolbar, header"}, "properties": ["title"]}`))
+	if err != nil || m.Genie.Position != "bottom-left" || m.Genie.Anchor != "#toolbar, header" || len(m.Properties) != 1 {
+		t.Fatalf("genie placed = %+v, %v", m.Genie, err)
+	}
+	for _, bad := range []string{
+		`{"genie": {"position": "middle"}}`,
+		`{"genie": {"anchor": "<script>"}}`,
+		`{"genie": {"shortcut": "g"}}`,
+	} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("Parse(%s) accepted", bad)
+		}
+	}
+}
