@@ -1278,9 +1278,9 @@ func TestOwnerIdentities(t *testing.T) {
 	t.Setenv("LOOM_OWNER", "")
 	t.Setenv("USER", "qiangli")
 	t.Setenv("LOGNAME", "")
-	got := ownerIdentities(Options{Owner: "liqiang@gmail.com"})
-	if len(got) != 2 || got[0] != "liqiang@gmail.com" || got[1] != "qiangli" {
-		t.Fatalf("ownerIdentities = %v, want [liqiang@gmail.com qiangli]", got)
+	got := ownerIdentities(Options{Owner: "owner@example.com"})
+	if len(got) != 2 || got[0] != "owner@example.com" || got[1] != "qiangli" {
+		t.Fatalf("ownerIdentities = %v, want [owner@example.com qiangli]", got)
 	}
 	// no explicit owner → OS user only
 	got = ownerIdentities(Options{})

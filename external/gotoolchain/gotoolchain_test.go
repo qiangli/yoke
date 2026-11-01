@@ -9,10 +9,10 @@ func TestWindowsNativePathForGOOS(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"msys temp", "windows", "/c/Users/liqiang/AppData/Local/Temp", `C:\Users\liqiang\AppData\Local\Temp`},
-		{"shellified go cache", "windows", `\c\Users\liqiang\go\pkg\mod`, `C:\Users\liqiang\go\pkg\mod`},
-		{"drive path", "windows", `C:\Users\liqiang\AppData\Local\Temp`, `C:\Users\liqiang\AppData\Local\Temp`},
-		{"other os unchanged", "linux", "/c/Users/liqiang/AppData/Local/Temp", "/c/Users/liqiang/AppData/Local/Temp"},
+		{"msys temp", "windows", "/c/Users/alice/AppData/Local/Temp", `C:\Users\alice\AppData\Local\Temp`},
+		{"shellified go cache", "windows", `\c\Users\alice\go\pkg\mod`, `C:\Users\alice\go\pkg\mod`},
+		{"drive path", "windows", `C:\Users\alice\AppData\Local\Temp`, `C:\Users\alice\AppData\Local\Temp`},
+		{"other os unchanged", "linux", "/c/Users/alice/AppData/Local/Temp", "/c/Users/alice/AppData/Local/Temp"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

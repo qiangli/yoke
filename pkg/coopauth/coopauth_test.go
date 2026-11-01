@@ -34,15 +34,15 @@ func TestUsernameCleanFormsAreReadable(t *testing.T) {
 	// Addresses in the clean form keep the readable username (no hash suffix), so
 	// common users and existing accounts are unaffected.
 	cases := map[string]string{
-		"alice@acme.com":       "alice-acme.com",
-		"alice@other.com":      "alice-other.com", // distinct domain => distinct user
-		"First.Last@x.io":      "first.last-x.io",
-		"qiangli@dragon.local": "qiangli-dragon.local",
-		"liqiang@gmail.com":    "liqiang-gmail.com",
-		"plainuser":            "plainuser",
-		"admin":                "admin",
-		"@@@":                  "user",
-		"":                     "user",
+		"alice@acme.com":     "alice-acme.com",
+		"alice@other.com":    "alice-other.com", // distinct domain => distinct user
+		"First.Last@x.io":    "first.last-x.io",
+		"carol@host-a.local": "carol-host-a.local",
+		"bob@example.org":    "bob-example.org",
+		"plainuser":          "plainuser",
+		"admin":              "admin",
+		"@@@":                "user",
+		"":                   "user",
 	}
 	for in, want := range cases {
 		if got := Username(in); got != want {
@@ -109,11 +109,11 @@ func TestResolveAllowlistIsAuthoritative(t *testing.T) {
 }
 
 func TestResolveLoopbackOwnerIsAdmin(t *testing.T) {
-	pol := Policy{LoopbackAdmin: true, LoopbackUser: "qiangli@dragon.local"}
+	pol := Policy{LoopbackAdmin: true, LoopbackUser: "carol@host-a.local"}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = "127.0.0.1:5555" // loopback, no vouch => on-host owner
 	id, ok := pol.Resolve(r)
-	if !ok || !id.IsAdmin() || !id.Loopback || id.Username != "qiangli-dragon.local" {
+	if !ok || !id.IsAdmin() || !id.Loopback || id.Username != "carol-host-a.local" {
 		t.Fatalf("loopback owner: ok=%v admin=%v loopback=%v user=%q", ok, id.IsAdmin(), id.Loopback, id.Username)
 	}
 }
