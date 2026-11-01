@@ -175,18 +175,21 @@ var pairReview = runPairReview
 func runPairReview(dir, base, gate, reviewer string) (string, string, error) {
 	c := exec.Command("bashy", "pair", "Review this PR independently and test for defects.", "--diff", base, "--agent", reviewer, "--verify", gate, "--json")
 	c.Dir = dir
-	b, err := c.CombinedOutput()
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	b, err := c.Output()
+	evidence := string(b) + stderr.String()
 	var data struct {
 		Outcome string `json:"outcome"`
 	}
 	if json.Unmarshal(b, &data) != nil {
-		return "harness-error", string(b), err
+		return "harness-error", evidence, err
 	}
 	v := map[string]string{"held": "pass", "proved": "refuted", "broken-before": "broken-before", "repaired": "broken-before", "unmeasured": "unmeasured"}[data.Outcome]
 	if v == "" {
 		v = "harness-error"
 	}
-	return v, string(b), err
+	return v, evidence, err
 }
 func ReviewPR(home, id, reviewer string) (PR, error) {
 	pr, err := GetPR(home, id)
