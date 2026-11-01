@@ -122,13 +122,72 @@ func (g genieTag) html() string {
 		` defer></script>` + "\n"
 }
 
-// injectGenie places the component tag at the end of the page body. A page
-// that already carries one (a double pass) is left alone; a page without a
-// body close tag gets it appended, which a browser still runs.
+// genieEarlyKey is the window slot where the early bootstrap and the
+// component share 5xx-with-incident times (milliseconds since the epoch).
+const genieEarlyKey = "__bashyFetchIncidentAt"
+
+// genieEarlyBootstrap is a tiny synchronous script injected as the first
+// child of <head>, before any app script runs. An app that fetches on load
+// calls fetch BEFORE the deferred component at </body> wraps it, so the
+// component would never see the 5xx and the follow-on throw would open a
+// second incident for the same root cause. The bootstrap wraps fetch first
+// and stamps genieEarlyKey on a same-origin 5xx (provisionally, confirmed
+// when the JSON names the incident), which the component reads when it
+// loads and re-checks on every report. It has no UI and never breaks the
+// page: every step is guarded, failures fall through to the native fetch,
+// and a double pass wraps only once. The server-side fold in
+// incidentStore.Observe stays the robust backstop.
+const genieEarlyBootstrap = `<script>try{(function(){var k="__bashyFetchIncidentAt";var f=window.fetch;if(!f||f.__bgn)return;var o=f.bind(window);var w=function(i,n){var u="";try{u=String((i&&i.url)||i||"")}catch(e){}var s=false;try{s=new URL(u,location.href).origin===location.origin}catch(e){}return o(i,n).then(function(r){try{if(s&&r&&r.status>=500){try{window[k]=Date.now()}catch(e){}try{r.clone().json().then(function(j){try{if(j&&j.incident)window[k]=Date.now()}catch(e){}})["catch"](function(){})}catch(e){}}}catch(e){}return r},function(e){throw e})};w.__bgn=1;window.fetch=w})()}catch(e){}</script>` + "\n"
+
+// injectGenieEarly places the bootstrap as the first child of <head>. A
+// page that already carries it, or has no head element, is left alone.
+func injectGenieEarly(doc []byte) []byte {
+	if bytes.Contains(doc, []byte(genieEarlyKey)) {
+		return doc
+	}
+	at := headContentStart(doc)
+	if at < 0 {
+		return doc
+	}
+	out := make([]byte, 0, len(doc)+len(genieEarlyBootstrap))
+	out = append(out, doc[:at]...)
+	out = append(out, genieEarlyBootstrap...)
+	out = append(out, doc[at:]...)
+	return out
+}
+
+// headContentStart is the offset just inside the document's head open tag,
+// matched case-insensitively so <HEAD> counts; -1 when there is none.
+func headContentStart(doc []byte) int {
+	for i := 0; i+5 < len(doc); i++ {
+		if doc[i] != '<' {
+			continue
+		}
+		c := doc[i+1:]
+		if len(c) < 5 {
+			return -1
+		}
+		if (c[0] == 'h' || c[0] == 'H') && (c[1] == 'e' || c[1] == 'E') &&
+			(c[2] == 'a' || c[2] == 'A') && (c[3] == 'd' || c[3] == 'D') &&
+			(c[4] == '>' || c[4] == ' ' || c[4] == '\t' || c[4] == '\n' || c[4] == '\r') {
+			if j := bytes.IndexByte(doc[i:], '>'); j >= 0 {
+				return i + j + 1
+			}
+			return -1
+		}
+	}
+	return -1
+}
+
+// injectGenie places the component tag at the end of the page body and the
+// early bootstrap as the first child of <head>. A page that already
+// carries one (a double pass) is left alone; a page without a body close
+// tag gets the tag appended, which a browser still runs.
 func injectGenie(doc []byte, g genieTag) []byte {
 	if g.App == "" || bytes.Contains(doc, []byte("data-bashy-genie")) {
 		return doc
 	}
+	doc = injectGenieEarly(doc)
 	tag := g.html()
 	if bytes.LastIndex(doc, []byte("</body>")) < 0 {
 		return append(append(make([]byte, 0, len(doc)+len(tag)), doc...), tag...)

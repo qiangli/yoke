@@ -1484,8 +1484,20 @@
   // incident. Suppression (rather than reporting with caused_by and folding
   // server-side) because the follow-on carries no independent signal, needs
   // no server state, and cannot open a second repair for one root cause.
+  // The early bootstrap (the synchronous script the server puts first in
+  // <head>) stamps the same time on window.__bashyFetchIncidentAt when the
+  // app fetches before this deferred component wraps fetch; this component
+  // reads that slot on load and re-checks it on every report, so an early
+  // fetch's fallout is covered too. A report that still reaches the server
+  // folds there (incidentStore.Observe), the robust backstop.
   let fetchIncidentAt = 0;
+  try { fetchIncidentAt = +window.__bashyFetchIncidentAt || 0; } catch (_) {}
   const CAUSE_WINDOW_MS = 10000;
+
+  function setFetchIncidentAt(v) {
+    fetchIncidentAt = v;
+    try { window.__bashyFetchIncidentAt = v; } catch (_) {}
+  }
 
   async function reportRepair(kind, path, message, stack, url, offline) {
     if (unloading) return null;
@@ -1494,6 +1506,9 @@
     // fallout, not a new incident. Asset loads are independent (a broken
     // image is not caused by a failed api call) and offline reports are
     // outside bashy's control, so only non-offline script reports wait.
+    // The bootstrap may have stamped the slot after this component loaded
+    // (its wrapped fetch resolves later), so re-check it here.
+    try { if (+window.__bashyFetchIncidentAt > fetchIncidentAt) fetchIncidentAt = +window.__bashyFetchIncidentAt; } catch (_) {}
     if (kind === "script" && !offline && Date.now() - fetchIncidentAt < CAUSE_WINDOW_MS) return null;
     const sig = repairSig(kind, message, url);
     if (reportedSigs.has(sig)) return null;
@@ -1537,15 +1552,15 @@
     try {
       if (!isAppAPI(input) || !res || res.status < 500) return;
       const prev = fetchIncidentAt;
-      fetchIncidentAt = Date.now();
+      setFetchIncidentAt(Date.now());
       res.clone().json().then((j) => {
         if (j && j.incident) {
-          fetchIncidentAt = Date.now();
+          setFetchIncidentAt(Date.now());
           showRepairOverlay(j.incident, j.state);
         } else {
-          fetchIncidentAt = prev;
+          setFetchIncidentAt(prev);
         }
-      }).catch(() => { fetchIncidentAt = prev; });
+      }).catch(() => { setFetchIncidentAt(prev); });
     } catch (_) {}
   }
 

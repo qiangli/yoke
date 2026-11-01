@@ -139,10 +139,24 @@ func (s *incidentStore) exhausted(n int) bool {
 // ErrAttemptsExhausted is returned when an incident may not try again.
 var ErrAttemptsExhausted = errors.New("repair attempts exhausted")
 
+// incidentCauseWindow is how long after an api/server incident a page's
+// script error still counts as that incident's fallout. It matches the
+// client's CAUSE_WINDOW_MS in artifact/genie.js: page code breaking because
+// its fetch failed reports within this window. A page whose inline script
+// fetches BEFORE genie.js wraps fetch never sets the client's window at
+// all, so the server folds it here instead — one root cause, one incident,
+// whatever the script order. Asset and offline (external) reports are never
+// folded: a broken image is not caused by a failed api call, and an offline
+// page is outside bashy's control.
+const incidentCauseWindow = 10 * time.Second
+
 // Observe records an occurrence of an error. A known signature that is still
 // open (repairing, activated, failed) updates that incident — an error
 // recurring after an activated repair re-opens it as repairing if attempts
 // remain, else marks it failed. A new signature starts a new incident.
+// A non-external script report within incidentCauseWindow of an open
+// (repairing, or recently activated) api/server incident is that incident's
+// fallout and folds into it instead: no new incident, no new repair.
 // The returned incident tells the caller whether to start a repair
 // (State == repairing and no attempt in flight).
 func (s *incidentStore) Observe(in Incident, now time.Time) (Incident, bool, error) {
@@ -157,6 +171,21 @@ func (s *incidentStore) Observe(in Incident, now time.Time) (Incident, bool, err
 	all, err := s.listLocked()
 	if err != nil {
 		return Incident{}, false, err
+	}
+	if in.Kind == IncidentScript && in.State != IncidentExternal {
+		if folded, ok := foldScriptFallout(all, now); ok {
+			folded.LastSeen = now
+			folded.Count++
+			line := "related script " + in.Path + ": " + incidentLine(in.Message)
+			if folded.Evidence != "" {
+				folded.Evidence += "\n"
+			}
+			folded.Evidence += line
+			if len(folded.Evidence) > incidentEvidenceLimit {
+				folded.Evidence = folded.Evidence[len(folded.Evidence)-incidentEvidenceLimit:]
+			}
+			return folded, false, s.writeLocked(folded)
+		}
 	}
 	for _, cur := range all {
 		if cur.Signature != in.Signature || cur.State == IncidentRefused || cur.State == IncidentExternal {
@@ -188,6 +217,29 @@ func (s *incidentStore) Observe(in Incident, now time.Time) (Incident, bool, err
 		}
 	}
 	return in, in.State == IncidentRepairing, s.writeLocked(in)
+}
+
+// foldScriptFallout finds the open api/server incident a script report is
+// fallout of: repairing, or activated but first seen within
+// incidentCauseWindow before the report. The store lists newest first, so
+// the first match is the most recent cause. Refused, failed and external
+// incidents are never causes: refused waits for review, failed already gave
+// up, external is outside bashy's control.
+func foldScriptFallout(all []Incident, now time.Time) (Incident, bool) {
+	for _, cur := range all {
+		if cur.Kind != IncidentAPI && cur.Kind != IncidentServer {
+			continue
+		}
+		if cur.State != IncidentRepairing && cur.State != IncidentActivated {
+			continue
+		}
+		age := now.Sub(cur.FirstSeen)
+		if age < 0 || age >= incidentCauseWindow {
+			continue
+		}
+		return cur, true
+	}
+	return Incident{}, false
 }
 
 // Attempt records the outcome of one repair attempt and moves the incident.

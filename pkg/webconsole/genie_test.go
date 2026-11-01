@@ -340,6 +340,52 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
+// TestGenieEarlyBootstrapFirstInHead pins the S549.R1e rework's early hook:
+// the synchronous fetch wrapper is the first child of <head> — before any
+// app script — while the component tag stays at </body>; a double pass
+// injects neither twice, and a page with no head still gets the tag.
+func TestGenieEarlyBootstrapFirstInHead(t *testing.T) {
+	tag := genieTag{Base: "/", App: "notes", Page: "/", Mode: genieLive, Position: "top-right", Landing: true}
+	page := `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="a.css"></head><body><script>fetch('api/list')</script></body></html>`
+	out := string(injectGenie([]byte(page), tag))
+	boot := strings.Index(out, genieEarlyBootstrap)
+	if boot < 0 {
+		t.Fatalf("no early bootstrap in:\n%s", out)
+	}
+	for name, want := range map[string]int{
+		"<head>":            strings.Index(out, "<head>"),
+		"<meta":             strings.Index(out, "<meta"),
+		"fetch('api/list')": strings.Index(out, "fetch('api/list')"),
+		"data-bashy-genie":  strings.Index(out, "data-bashy-genie"),
+		"</body>":           strings.Index(out, "</body>"),
+	} {
+		if want < 0 {
+			t.Fatalf("%s missing from:\n%s", name, out)
+		}
+	}
+	head := strings.Index(out, "<head>")
+	meta := strings.Index(out, "<meta")
+	app := strings.Index(out, "fetch('api/list')")
+	btn := strings.Index(out, "data-bashy-genie")
+	if !(head < boot && boot < meta && boot < app && app < btn) {
+		t.Fatalf("bootstrap is not first in head before the app script:\n%s", out)
+	}
+	again := string(injectGenie([]byte(out), tag))
+	if strings.Count(again, genieEarlyBootstrap) != 1 || strings.Count(again, "data-bashy-genie") != 1 {
+		t.Fatalf("double pass duplicated the injection:\n%s", again)
+	}
+	headless := string(injectGenie([]byte(`<p>bare</p></body>`), tag))
+	if strings.Contains(headless, genieEarlyBootstrap) {
+		t.Fatalf("bootstrap injected with no head:\n%s", headless)
+	}
+	if !strings.Contains(headless, "data-bashy-genie") {
+		t.Fatalf("tag missing with no head:\n%s", headless)
+	}
+	if got := string(injectGenie([]byte(page), genieTag{})); got != page {
+		t.Fatalf("empty app rewritten:\n%s", got)
+	}
+}
+
 // TestGenieProxiedPageInjection: a declared server's HTML page gets the tag
 // through the reverse proxy, with the length corrected; anything that is
 // not a complete identity-encoded HTML success response passes untouched.

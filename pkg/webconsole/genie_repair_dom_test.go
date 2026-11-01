@@ -311,6 +311,83 @@ func TestDOMOneIncidentPerRootCause(t *testing.T) {
 	}
 }
 
+// S549.R1e rework: one root cause is one incident whatever the script
+// order. A page whose INLINE script (before </body>, i.e. before the
+// deferred genie.js) fetches api/list on load gets the 500 with its
+// incident — but genie.js has not wrapped fetch yet, so the client never
+// sets its cause window — and then throws because of it. Exactly ONE
+// incident is reported: the api one. This fails on the base with two
+// incidents (api + script).
+func TestDOMEarlyFetchThrowIsOneIncident(t *testing.T) {
+	source := newNotesSource(t)
+	commitFile(t, source, "api/list.md", "# list\n\n```bsh\necho early-fetch-marker >&2\nexit 3\n```\n")
+	commitFile(t, source, "public/index.html", `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Notes</title>
+</head>
+<body>
+<h1>Notes</h1>
+<script>
+fetch("api/list").then(async function (r) {
+  var j = null; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error("early list failed: " + r.status + " incident " + (j && j.incident));
+});
+</script>
+</body>
+</html>
+`)
+	notes := Panel{Name: "notes", Label: "Notes", Path: "/notes/", ShapedSource: source,
+		Auth: AuthSystem, Source: "registered", Available: true}
+	home := t.TempDir()
+	base, ctx, _ := domEnv(t, Options{Panels: []Panel{notes},
+		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Runner: []string{"/bin/sh"}, Level: contain.LevelProcess}})
+
+	principal := repairPrincipal(t, base)
+	count := func() []Incident {
+		t.Helper()
+		st, err := shape.OpenAt(home, "notes", principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := openIncidents(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := s.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return list
+	}
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/notes/"),
+		chromedp.WaitVisible(`[data-bashy-genie-btn]`),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The inline fetch fails on load; wait for the incident, then give the
+	// follow-on throw time to (not) open a second one.
+	deadline := time.Now().Add(20 * time.Second)
+	for len(count()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no incident after the early fetch failed")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(3 * time.Second)
+	// The throw is a real page error, so the exception recorder is expected
+	// to hold it: no assertNoJSErrors here.
+	list := count()
+	if len(list) != 1 {
+		t.Fatalf("incidents = %d, want exactly 1 for one root cause: %+v", len(list), list)
+	}
+	if list[0].Kind != IncidentAPI {
+		t.Fatalf("incident = %+v, want the api 500", list[0])
+	}
+}
+
 // repairPrincipal reads the loopback owner's principal from the Shape state:
 // the same identity the page's incident polls and reports use.
 func repairPrincipal(t *testing.T, base string) string {
