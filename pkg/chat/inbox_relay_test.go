@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -142,5 +143,52 @@ func TestInboxRelayRetriesRefusedDeliveryDespiteUnchangedFingerprint(t *testing.
 	}
 	if !committed.Load() {
 		t.Fatalf("refused delivery was never retried behind the gate (attempts=%d)", attempts.Load())
+	}
+}
+
+// Session.Close and stopRelay must stop and join the inbox relay worker before
+// returning, ensuring that a subsequent test's temporary directory or room
+// state is not modified or locked by an orphaned background worker.
+func TestSessionCloseShutsDownInboxRelayWorkerBeforeCleanup(t *testing.T) {
+	roomDir := t.TempDir()
+	t.Setenv("BASHY_ROOM_DIR", roomDir)
+
+	done := make(chan struct{})
+	s := &Session{
+		inboxAgent: "test-relay-agent",
+		done:       done,
+		cancel: func() {
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+		},
+	}
+	s.startInboxRelay(context.Background())
+
+	// Closing the session must shut down and join the relay worker.
+	close(done)
+	s.Close()
+
+	// Verify relay worker has exited.
+	select {
+	case <-s.relayDone:
+	default:
+		t.Fatal("s.Close() did not join relayDone")
+	}
+
+	// Verify that setting a subsequent tempdir for BASHY_ROOM_DIR
+	// does not receive any rogue writes from a leaked background worker.
+	nextRoomDir := t.TempDir()
+	t.Setenv("BASHY_ROOM_DIR", nextRoomDir)
+	time.Sleep(50 * time.Millisecond)
+
+	entries, err := os.ReadDir(nextRoomDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("subsequent room dir contaminated by orphaned relay worker: %v", entries)
 	}
 }

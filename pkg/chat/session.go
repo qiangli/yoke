@@ -94,12 +94,16 @@ type Session struct {
 	lastWrite  time.Time
 	// lastSteer is when we last SPOKE to the agent. WaitIdle measures silence from
 	// whichever came later, this or lastWrite — see the comment there.
-	lastSteer time.Time
-	done      chan struct{}
-	cancel    context.CancelFunc // force-stops the PTY after Close's graceful /quit window
-	exit      int
-	err       error
-	killed    string
+	lastSteer   time.Time
+	done        chan struct{}
+	cancel      context.CancelFunc // force-stops the PTY after Close's graceful /quit window
+	relayOnce   sync.Once
+	relayCtx    context.Context
+	relayCancel context.CancelFunc
+	relayDone   chan struct{}
+	exit        int
+	err         error
+	killed      string
 }
 
 // Card is the host-room member id the session joined. It is the session an
@@ -1000,6 +1004,7 @@ func (s *Session) Quit() error {
 
 // Close ends the session now.
 func (s *Session) Close() {
+	s.stopRelay()
 	if s.acp != nil {
 		s.closeACP()
 		return
@@ -1013,6 +1018,7 @@ func (s *Session) Close() {
 // on this path: cancel immediately so a readiness, delivery, or inbox-ack error
 // cannot strand a process and room claim that no supervisor owns.
 func (s *Session) abortStart() {
+	s.stopRelay()
 	if s.acp != nil {
 		s.closeACP()
 		return
@@ -1028,6 +1034,7 @@ func (s *Session) abortStart() {
 }
 
 func (s *Session) closePTY(grace time.Duration) {
+	s.stopRelay()
 	select {
 	case <-s.done:
 		return

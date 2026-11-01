@@ -84,9 +84,30 @@ func (s *Session) startInboxRelay(ctx context.Context) {
 	if s.acp != nil {
 		ready = s.acp.idle
 	}
-	go runInboxRelay(ctx, s.done, ready,
-		func() bus.PreparedPreamble { return bus.PrepareForAgent(s.inboxAgent, "") },
-		s.deliverPreparedInbox, bus.NewInboxPollGate(s.inboxAgent))
+	relayCtx, cancel := context.WithCancel(ctx)
+	s.relayCtx = relayCtx
+	s.relayCancel = cancel
+	s.relayDone = make(chan struct{})
+	go func() {
+		defer close(s.relayDone)
+		runInboxRelay(relayCtx, s.done, ready,
+			func() bus.PreparedPreamble { return bus.PrepareForAgent(s.inboxAgent, "") },
+			s.deliverPreparedInbox, bus.NewInboxPollGate(s.inboxAgent))
+	}()
+}
+
+func (s *Session) stopRelay() {
+	s.relayOnce.Do(func() {
+		if s.relayCancel != nil {
+			s.relayCancel()
+		}
+		if s.relayDone != nil {
+			select {
+			case <-s.relayDone:
+			case <-time.After(3 * time.Second):
+			}
+		}
+	})
 }
 
 // deliverPreparedInbox is Say with the already-prepared input preserved. This
@@ -127,7 +148,11 @@ func (s *Session) deliverPreparedInbox(p bus.PreparedPreamble) error {
 	// completion. Otherwise the completed result would keep the transport
 	// non-idle forever and only the first inbox message could be delivered.
 	if s.acp != nil {
-		return s.waitACPTurn(s.acp.ctx)
+		waitCtx := s.acp.ctx
+		if s.relayCtx != nil {
+			waitCtx = s.relayCtx
+		}
+		return s.waitACPTurn(waitCtx)
 	}
 	return nil
 }

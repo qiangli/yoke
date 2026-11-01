@@ -341,6 +341,8 @@ func (s *Session) waitACPTurn(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-s.done:
+		return nil
 	case t := <-s.acp.end:
 		s.mu.Lock()
 		// The answer arrives as DATA. Turn() prefers it over the buffer for the
@@ -385,8 +387,12 @@ func (s *Session) Rung() agentlaunch.Rung {
 // subprocess, record what the conversation spent, and leave the room.
 func (s *Session) closeACP() {
 	s.acp.closeOnce.Do(func() {
+		if s.relayCancel != nil {
+			s.relayCancel()
+		}
 		_ = s.acp.client.Cancel(context.Background(), s.acp.session)
 		_ = s.acp.client.Close()
+		s.stopRelay()
 		s.mu.Lock()
 		spoke := s.buf.String()
 		s.mu.Unlock()

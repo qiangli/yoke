@@ -292,23 +292,41 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// When there is an opening instruction, let it land first so two control
 	// writers cannot race during TUI startup.
 	sessionDone := make(chan struct{})
-	defer close(sessionDone)
+	var stopRelay func()
 	// BASHY_CHAT_INBOX=off keeps the host's mail out of the session. The agent
 	// bench needs it: every run must see the same input, and board traffic is
 	// neither fixed nor part of any task.
 	if os.Getenv("BASHY_CHAT_INBOX") != "off" {
 		mail := newPTYInbox(name)
-		go runInboxRelay(ctx, sessionDone, inboxReady,
-			func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
-			func(p bus.PreparedPreamble) error {
-				complete, err := mail.deliver(p.Text, func(text string) error { return agentctl.Say(sock, text) })
-				if err != nil || !complete {
-					return err
-				}
-				recordPreambleAdmission(context.Background(), p)
-				return p.Commit()
-			}, bus.NewInboxPollGate(name))
+		relayCtx, relayCancel := context.WithCancel(ctx)
+		relayDone := make(chan struct{})
+		go func() {
+			defer close(relayDone)
+			runInboxRelay(relayCtx, sessionDone, inboxReady,
+				func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
+				func(p bus.PreparedPreamble) error {
+					complete, err := mail.deliver(p.Text, func(text string) error { return agentctl.Say(sock, text) })
+					if err != nil || !complete {
+						return err
+					}
+					recordPreambleAdmission(context.Background(), p)
+					return p.Commit()
+				}, bus.NewInboxPollGate(name))
+		}()
+		stopRelay = func() {
+			relayCancel()
+			select {
+			case <-relayDone:
+			case <-time.After(3 * time.Second):
+			}
+		}
 	}
+	defer func() {
+		close(sessionDone)
+		if stopRelay != nil {
+			stopRelay()
+		}
+	}()
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.

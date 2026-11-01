@@ -353,6 +353,8 @@ var packages = map[string]Package{
 	"mplfree": supPkg("test-only MPL-free license gate on the podman engine import graph: the " +
 		"multierror chain and securejoin resolution must land on permissive replacements, never " +
 		"MPL-2.0 upstream; it has no runtime command surface"),
+	"nativepath": supPkg("normalizes process PATH and collapses env list case-variants for Windows child execution; plumbing, nothing to place on the spine"),
+	"nfthelper":  supPkg("private nft helper symlink provider for managed Podman; plumbing, nothing to place on the spine"),
 	"stateaccess": supPkg("tells a sandbox-DENIED coordination store from a BUSY one: a no-lock " +
 		"preflight before the first mutation and an actionable denial that never wraps lockfile.ErrHeld"),
 	"nudge":     supPkg("the proactive half of the agent-hint subsystem; emitted, never invoked"),

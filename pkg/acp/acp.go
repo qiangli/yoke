@@ -172,6 +172,12 @@ func (c *Client) Close() error {
 	if c.waited != nil {
 		<-c.waited
 	}
+	if c.conn != nil {
+		select {
+		case <-c.conn.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
 	if killErr != nil {
 		return killErr
 	}
