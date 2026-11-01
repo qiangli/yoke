@@ -41,6 +41,7 @@ type PR struct {
 	Suites           []SuiteResult `json:"suites,omitempty"`
 	SuiteComplete    bool          `json:"suite_complete,omitempty"`
 	CoreRepair       bool          `json:"core_repair,omitempty"`
+	Trigger          string        `json:"trigger,omitempty"`
 	Reviewer         string        `json:"reviewer,omitempty"`
 	ReviewVerdict    string        `json:"review_verdict,omitempty"`
 	ReviewEvidence   string        `json:"review_evidence,omitempty"`

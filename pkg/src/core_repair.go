@@ -274,6 +274,14 @@ func ReleaseCore(home, repo, trigger string) (string, error) {
 	if pr == nil {
 		return "", fmt.Errorf("src: no merged, reviewed, full-suite PR for %s", repo)
 	}
+	if trigger == "" {
+		trigger = pr.Trigger
+	} else if pr.Trigger != "" && trigger != pr.Trigger {
+		return "", fmt.Errorf("src: trigger %q differs from PR %s trigger %q", trigger, pr.ID, pr.Trigger)
+	}
+	if trigger == "" {
+		return "", fmt.Errorf("src: core PR %s has no trigger", pr.ID)
+	}
 	dir, err := repoDir(home, repo)
 	if err != nil {
 		return "", err
@@ -326,6 +334,38 @@ func ReleaseCore(home, repo, trigger string) (string, error) {
 		return version, fmt.Errorf("src: release %s tagged locally but push failed: %w", version, err)
 	}
 	return version, nil
+}
+
+// coreReleaseLines reads annotated core tags from the checkout itself, so
+// history keeps the release provenance even if PR records are moved away.
+func coreReleaseLines(dir string) ([]string, error) {
+	r, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := r.Tags()
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	err = tags.ForEach(func(ref *plumbing.Reference) error {
+		tag, err := r.TagObject(ref.Hash())
+		if err != nil {
+			return nil
+		}
+		if !strings.HasPrefix(tag.Message, "Core repair ") {
+			return nil
+		}
+		fields := map[string]string{}
+		for _, line := range strings.Split(tag.Message, "\n") {
+			if key, value, ok := strings.Cut(line, ": "); ok {
+				fields[key] = value
+			}
+		}
+		lines = append(lines, fmt.Sprintf("release %s trigger=%s pr=%s suite_evidence=%s reviewer=%s", ref.Name().Short(), fields["Trigger"], fields["PR"], fields["Suite-Evidence"], fields["Reviewer"]))
+		return nil
+	})
+	return lines, err
 }
 func newReleaseCoreCmd() *cobra.Command {
 	var trigger string

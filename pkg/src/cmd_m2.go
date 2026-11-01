@@ -233,6 +233,13 @@ func newLogCmd() *cobra.Command {
 			for _, e := range entries {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", e.Hash, e.Message)
 			}
+			releases, err := coreReleaseLines(dir)
+			if err != nil {
+				return err
+			}
+			for _, release := range releases {
+				fmt.Fprintln(cmd.OutOrStdout(), release)
+			}
 			return nil
 		},
 	}
