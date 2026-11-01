@@ -253,6 +253,64 @@ func TestDOMRepairIgnoresUnloadAborts(t *testing.T) {
 	assertNoJSErrors(t, "unload aborts", errs())
 }
 
+// S549.R1e: one root cause is one incident. A page whose api fetch fails
+// with an incident id, and whose own code then throws or rejects because of
+// that same failure, reports exactly one incident: the follow-on script
+// errors are caused by the fetch incident, not new incidents.
+func TestDOMOneIncidentPerRootCause(t *testing.T) {
+	source := newNotesSource(t)
+	commitFile(t, source, "api/list.md", "# list\n\n```bsh\necho root-cause-marker >&2\nexit 3\n```\n")
+	notes := Panel{Name: "notes", Label: "Notes", Path: "/notes/", ShapedSource: source,
+		Auth: AuthSystem, Source: "registered", Available: true}
+	home := t.TempDir()
+	base, ctx, _ := domEnv(t, Options{Panels: []Panel{notes},
+		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Runner: []string{"/bin/sh"}, Level: contain.LevelProcess}})
+
+	principal := repairPrincipal(t, base)
+	count := func() []Incident {
+		t.Helper()
+		st, err := shape.OpenAt(home, "notes", principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := openIncidents(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := s.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return list
+	}
+	if err := chromedp.Run(ctx,
+		chromedp.Navigate(base+"/notes/"),
+		chromedp.WaitVisible(`[data-bashy-genie-btn]`),
+		// The fetch fails with an incident id; only then does the page's
+		// own code break because of it — one throw, one floating
+		// rejection, both naming the failed fetch.
+		chromedp.Evaluate(`fetch('api/list').then((r) => r.json()).then((j) => { window.__inc = j.incident; return true; })`, nil),
+		chromedp.WaitVisible(`[data-bgn-repair]`),
+		chromedp.Evaluate(`(function () {
+			setTimeout(function () { throw new Error('page code broke because list failed: ' + window.__inc); }, 0);
+			Promise.reject(new Error('unhandled because list failed: ' + window.__inc));
+			return true;
+		})()`, nil),
+		chromedp.Sleep(3*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The throw and the rejection above are real page errors, so the
+	// exception recorder is expected to hold them: no assertNoJSErrors here.
+	list := count()
+	if len(list) != 1 {
+		t.Fatalf("incidents = %d, want exactly 1 for one root cause: %+v", len(list), list)
+	}
+	if list[0].Kind != IncidentAPI {
+		t.Fatalf("incident = %+v, want the api 500", list[0])
+	}
+}
+
 // repairPrincipal reads the loopback owner's principal from the Shape state:
 // the same identity the page's incident polls and reports use.
 func repairPrincipal(t *testing.T, base string) string {

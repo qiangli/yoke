@@ -1359,7 +1359,10 @@
   // same-origin asset load, an uncaught script error, an unhandled
   // rejection, a same-app api/* fetch answering 5xx with an incident id —
   // are reported once per signature per page load to
-  // api/shape/<app>/incidents, and the overlay below follows the incident:
+  // api/shape/<app>/incidents, except a script error or rejection within
+  // 10s of a failed fetch: that is the fetch's fallout, already covered by
+  // its incident, and is not reported separately. The overlay below follows
+  // the incident:
   // it waits while repairing, reloads when a fix is activated, and tells
   // the truth when the fix failed (the previous version is still active),
   // was refused (waiting for review), or is outside bashy's control.
@@ -1472,9 +1475,26 @@
   window.addEventListener("pagehide", () => { unloading = true; }, true);
   window.addEventListener("pageshow", (ev) => { if (ev && ev.persisted) unloading = false; }, true);
 
+  // fetchIncidentAt is when an app api/* fetch last produced an incident
+  // id (noteFetchResponse, provisional on the 5xx itself and confirmed when
+  // its JSON names the incident). Page code that breaks BECAUSE that fetch
+  // failed — an uncaught error or an unhandled rejection within
+  // CAUSE_WINDOW_MS — is caused by the recorded incident, not a new one, so
+  // it is not reported separately: the overlay already follows the fetch
+  // incident. Suppression (rather than reporting with caused_by and folding
+  // server-side) because the follow-on carries no independent signal, needs
+  // no server state, and cannot open a second repair for one root cause.
+  let fetchIncidentAt = 0;
+  const CAUSE_WINDOW_MS = 10000;
+
   async function reportRepair(kind, path, message, stack, url, offline) {
     if (unloading) return null;
     if (mode !== "live" || (kind !== "asset" && kind !== "script")) return null;
+    // A script error or rejection right after a failed fetch is the fetch's
+    // fallout, not a new incident. Asset loads are independent (a broken
+    // image is not caused by a failed api call) and offline reports are
+    // outside bashy's control, so only non-offline script reports wait.
+    if (kind === "script" && !offline && Date.now() - fetchIncidentAt < CAUSE_WINDOW_MS) return null;
     const sig = repairSig(kind, message, url);
     if (reportedSigs.has(sig)) return null;
     reportedSigs.add(sig);
@@ -1509,12 +1529,23 @@
   }
 
   // A fetch that answered 5xx may carry the server's incident: follow it.
+  // The window opens on the 5xx itself, synchronously — the wrapper runs
+  // before the page's own continuation, so page code breaking on the
+  // failure is already covered — and is confirmed when the JSON names the
+  // incident (reverted when it names none, so a bare 5xx never suppresses).
   function noteFetchResponse(input, res) {
     try {
       if (!isAppAPI(input) || !res || res.status < 500) return;
+      const prev = fetchIncidentAt;
+      fetchIncidentAt = Date.now();
       res.clone().json().then((j) => {
-        if (j && j.incident) showRepairOverlay(j.incident, j.state);
-      }).catch(() => {});
+        if (j && j.incident) {
+          fetchIncidentAt = Date.now();
+          showRepairOverlay(j.incident, j.state);
+        } else {
+          fetchIncidentAt = prev;
+        }
+      }).catch(() => { fetchIncidentAt = prev; });
     } catch (_) {}
   }
 

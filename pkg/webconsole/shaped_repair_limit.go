@@ -15,7 +15,7 @@ import (
 // RepairUnlimited is the incidentStore limit meaning no cap on repair
 // attempts: keep trying until a repair activates, is refused, or the
 // incident leaves the repairing state. One repair stays in flight per
-// incident either way (the keyed guard in startRepairAsync).
+// (app, principal) either way (the serial in startRepairAsync).
 const RepairUnlimited = -1
 
 // repairAttemptTimeout caps one repair attempt: the clone, delegate,

@@ -218,6 +218,44 @@ func (s *incidentStore) Attempt(id string, a RepairAttempt) (Incident, error) {
 	return in, s.writeLocked(in)
 }
 
+// Heal closes a waiting incident the earlier repair already fixed (S549.R1e):
+// the repair is active, so the incident is activated with no new attempt —
+// the per-incident attempt limit is untouched. A closed incident is left
+// alone. The bool reports whether this call healed it (true) or it was
+// already closed (false: nothing left to do either way).
+func (s *incidentStore) Heal(id string, now time.Time) (Incident, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	in, err := s.getLocked(id)
+	if err != nil {
+		return Incident{}, false, err
+	}
+	if in.State != IncidentRepairing {
+		return in, false, nil
+	}
+	in.State = IncidentActivated
+	in.LastSeen = now
+	return in, true, s.writeLocked(in)
+}
+
+// Rebase moves a waiting incident onto the newly active revision (S549.R1e)
+// so its repair verifies against what is now served: without this the
+// evidence gate refuses the attempt as bound to the moved base. A closed
+// incident is left alone.
+func (s *incidentStore) Rebase(id, rev string) (Incident, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	in, err := s.getLocked(id)
+	if err != nil {
+		return Incident{}, err
+	}
+	if in.State != IncidentRepairing || rev == "" {
+		return in, nil
+	}
+	in.BaseRev = rev
+	return in, s.writeLocked(in)
+}
+
 // Get returns one incident.
 func (s *incidentStore) Get(id string) (Incident, error) {
 	s.mu.Lock()

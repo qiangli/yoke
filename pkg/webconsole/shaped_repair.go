@@ -14,47 +14,128 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 )
 
-// startRepair is the incident capture side's hook. A keyed guard keeps one
-// worker in flight for an incident even when several requests fail at once.
+// startRepair is the incident capture side's hook. A per-(app, principal)
+// serial keeps one repair in flight even when several requests fail at once.
 var startRepair func(app *shapedApp, principal string, in Incident)
 
 // Assigned in init: the pipeline replays requests through serveTree, which
 // reaches this hook, so a static initializer would be a cycle.
 func init() { startRepair = startRepairAsync }
 
-var repairFlights = struct {
+// repairSerials holds one repair line per (app, principal): at most one
+// running repair and the incidents waiting behind it, in arrival order.
+var repairSerials = struct {
 	sync.Mutex
-	active map[string]bool
-}{active: make(map[string]bool)}
+	slots map[string]*repairSerial
+}{slots: make(map[string]*repairSerial)}
+
+type repairSerial struct {
+	running bool
+	pending []string // waiting incident ids, FIFO, deduplicated
+}
+
+func repairKey(app *shapedApp, principal string) string {
+	return app.repo + "\x00" + principal
+}
 
 func startRepairAsync(app *shapedApp, principal string, in Incident) {
 	if app == nil || principal == "" || in.ID == "" {
 		return
 	}
-	key := app.repo + "\x00" + principal + "\x00" + in.ID
-	repairFlights.Lock()
-	if repairFlights.active[key] {
-		repairFlights.Unlock()
+	key := repairKey(app, principal)
+	repairSerials.Lock()
+	slot, ok := repairSerials.slots[key]
+	if !ok {
+		slot = &repairSerial{}
+		repairSerials.slots[key] = slot
+	}
+	if slot.running {
+		for _, id := range slot.pending {
+			if id == in.ID {
+				repairSerials.Unlock()
+				return
+			}
+		}
+		slot.pending = append(slot.pending, in.ID)
+		repairSerials.Unlock()
 		return
 	}
-	repairFlights.active[key] = true
-	repairFlights.Unlock()
-	go func() {
-		defer func() {
-			repairFlights.Lock()
-			delete(repairFlights.active, key)
-			repairFlights.Unlock()
-		}()
+	slot.running = true
+	repairSerials.Unlock()
+	go repairLoop(app, principal, key, in.ID)
+}
+
+// repairLoop runs one incident's repair, then works through the incidents
+// that waited behind it: each is replayed against the newly active revision
+// first — healed ones close with no new attempt, the rest repair on the new
+// base.
+func repairLoop(app *shapedApp, principal, key, first string) {
+	cur := first
+	for {
 		// Each attempt carries its own timeout (repairAttemptTimeout);
 		// the incident as a whole is unbounded so an "unlimited" limit
 		// can keep trying until a repair lands. Cancellation still
 		// stops the loop through repairIncident's ctx checks.
-		app.repairIncident(context.Background(), principal, in.ID)
-	}()
+		app.repairIncident(context.Background(), principal, cur)
+		// Drain what waited: healed or already-closed incidents are
+		// skipped, and the first one still broken becomes the next
+		// repair, on the new base.
+		next := ""
+		for {
+			repairSerials.Lock()
+			slot, ok := repairSerials.slots[key]
+			if !ok || len(slot.pending) == 0 {
+				if ok {
+					slot.running = false
+				}
+				repairSerials.Unlock()
+				return
+			}
+			next = slot.pending[0]
+			slot.pending = slot.pending[1:]
+			repairSerials.Unlock()
+			if app.settleWaiting(context.Background(), principal, next) {
+				break
+			}
+		}
+		cur = next
+	}
+}
+
+// settleWaiting re-checks a waiting incident against the newly active
+// revision after the running repair finished. A request that now passes
+// closes as healed by the earlier repair, with no new attempt; a request
+// still broken is rebased onto the active revision so its repair verifies
+// against what is served. It reports whether the incident still needs its
+// own repair.
+func (a *shapedApp) settleWaiting(ctx context.Context, principal, id string) bool {
+	st, err := a.store(principal)
+	if err != nil {
+		return true
+	}
+	probe, err := openIncidents(st)
+	if err != nil {
+		return true
+	}
+	in, err := probe.Get(id)
+	if err != nil || in.State != IncidentRepairing {
+		return false
+	}
+	if err := a.replayActive(ctx, principal, in); err == nil {
+		_, _, _ = probe.Heal(id, time.Now().UTC())
+		return false
+	}
+	if repo, err := a.open(); err == nil {
+		if cur, err := a.active(repo, principal); err == nil {
+			_, _ = probe.Rebase(id, cur.Hash.String())
+		}
+	}
+	return true
 }
 
 func repairBrief(app string, in Incident, previous string) string {
@@ -255,6 +336,25 @@ func (a *shapedApp) replayRepair(ctx context.Context, principal string, in Incid
 	if err != nil {
 		return err
 	}
+	return a.replayAt(ctx, principal, in, commit)
+}
+
+// replayActive replays a waiting incident's request against the principal's
+// currently active revision (S549.R1e): after the running repair finished, a
+// passing replay means the earlier repair already healed this incident.
+func (a *shapedApp) replayActive(ctx context.Context, principal string, in Incident) error {
+	repo, err := a.open()
+	if err != nil {
+		return err
+	}
+	cur, err := a.active(repo, principal)
+	if err != nil {
+		return err
+	}
+	return a.replayAt(ctx, principal, in, cur)
+}
+
+func (a *shapedApp) replayAt(ctx context.Context, principal string, in Incident, commit *object.Commit) error {
 	data, err := os.MkdirTemp("", "shape-repair-data-*")
 	if err != nil {
 		return err
