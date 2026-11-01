@@ -26,7 +26,9 @@ minor, and a removal or rename is refused unless every dropped element is
 approved with --contract, which makes it a major. Unreleased revisions
 are named by Go-style pseudo-versions; offerings publish releases only.
 The principal recorded as the tagger comes from --user or
-$BASHY_PRINCIPAL.`,
+$BASHY_PRINCIPAL. By default the tag is private to that principal and has
+the form vX.Y.Z-<principal slug>. Operators use --shared to publish a
+base or app-wide release tagged vX.Y.Z.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := resolveUser(user)

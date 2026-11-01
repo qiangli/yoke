@@ -322,10 +322,10 @@ func TestShapedAdoptVerifiesForTheAdopter(t *testing.T) {
 	const alice, bob = "device:alice", "device:bob"
 	activateFor(t, home, "serverapp", v1, alice)
 	activateFor(t, home, "serverapp", v2, alice)
-	if _, err := src.Release(home, "serverapp", v1, alice, src.ReleaseOptions{}); err != nil {
+	if _, err := src.Release(home, "serverapp", v1, alice, src.ReleaseOptions{Shared: true}); err != nil {
 		t.Fatalf("release v1: %v", err)
 	}
-	if _, err := src.Release(home, "serverapp", v2, alice, src.ReleaseOptions{}); err != nil {
+	if _, err := src.Release(home, "serverapp", v2, alice, src.ReleaseOptions{Shared: true}); err != nil {
 		t.Fatalf("release v2: %v", err)
 	}
 	offer, err := src.Offer(home, "serverapp", v2, alice, src.OfferOptions{To: []string{bob}})

@@ -130,7 +130,7 @@ func TestS526B8SemverReleases(t *testing.T) {
 	}
 
 	// First release: v1.0.0.
-	first, err := src.Release(home, s526b8App, base, s526b8Alice, src.ReleaseOptions{})
+	first, err := src.Release(home, s526b8App, base, s526b8Alice, src.ReleaseOptions{Shared: true})
 	if err != nil {
 		t.Fatalf("first release: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestS526B8SemverReleases(t *testing.T) {
 	if v, _, err = src.Version(home, s526b8App, "v1.0.0"); err != nil || v != "v1.0.0" {
 		t.Fatalf("the tag resolves as a revision: %q, %v", v, err)
 	}
-	if _, err := src.Release(home, s526b8App, base, s526b8Alice, src.ReleaseOptions{}); err == nil ||
+	if _, err := src.Release(home, s526b8App, base, s526b8Alice, src.ReleaseOptions{Shared: true}); err == nil ||
 		!strings.Contains(err.Error(), "already released as v1.0.0") {
 		t.Fatalf("re-releasing the same revision: err = %v", err)
 	}
@@ -151,7 +151,7 @@ func TestS526B8SemverReleases(t *testing.T) {
 	// A repair (same declared surface, body changed) -> v1.0.1.
 	s526b8Write(t, dest, map[string]string{"api/notes.md": strings.Replace(s526b8Notes, "list the notes", "list the notes, fixed", 1)})
 	repair := s526b8Commit(t, dest, "repair notes")
-	rel, err := src.Release(home, s526b8App, repair, s526b8Alice, src.ReleaseOptions{Repair: true})
+	rel, err := src.Release(home, s526b8App, repair, s526b8Alice, src.ReleaseOptions{Repair: true, Shared: true})
 	if err != nil {
 		t.Fatalf("repair release: %v", err)
 	}
@@ -167,11 +167,11 @@ func TestS526B8SemverReleases(t *testing.T) {
 		"shaped.json":  `{"properties":["title","body","pinned"]}` + "\n",
 	})
 	additive := s526b8Commit(t, dest, "add pinned")
-	if _, err := src.Release(home, s526b8App, additive, s526b8Alice, src.ReleaseOptions{Repair: true}); err == nil ||
+	if _, err := src.Release(home, s526b8App, additive, s526b8Alice, src.ReleaseOptions{Repair: true, Shared: true}); err == nil ||
 		!strings.Contains(err.Error(), "repair keeps the declared surface") {
 		t.Fatalf("additive change released as a repair: err = %v", err)
 	}
-	rel, err = src.Release(home, s526b8App, additive, s526b8Alice, src.ReleaseOptions{})
+	rel, err = src.Release(home, s526b8App, additive, s526b8Alice, src.ReleaseOptions{Shared: true})
 	if err != nil {
 		t.Fatalf("additive release: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestS526B8SemverReleases(t *testing.T) {
 	// through the contract step, which makes it v2.0.0.
 	s526b8Write(t, dest, map[string]string{"shaped.json": `{"properties":["heading","body","pinned"]}` + "\n"})
 	rename := s526b8Commit(t, dest, "rename title to heading")
-	_, err = src.Release(home, s526b8App, rename, s526b8Alice, src.ReleaseOptions{})
+	_, err = src.Release(home, s526b8App, rename, s526b8Alice, src.ReleaseOptions{Shared: true})
 	if err == nil || !strings.Contains(err.Error(), "release refused") ||
 		!strings.Contains(err.Error(), "property:title was renamed or replaced by property:heading") ||
 		!strings.Contains(err.Error(), `--contract "property:title"`) {
@@ -195,7 +195,7 @@ func TestS526B8SemverReleases(t *testing.T) {
 	if tags, _ := src.Releases(home, s526b8App); len(tags) != 3 || tags[0].Version != "v1.1.0" {
 		t.Fatalf("a refused release tagged something: %+v", tags)
 	}
-	rel, err = src.Release(home, s526b8App, rename, s526b8Alice, src.ReleaseOptions{Contract: []string{"property:title"}})
+	rel, err = src.Release(home, s526b8App, rename, s526b8Alice, src.ReleaseOptions{Contract: []string{"property:title"}, Shared: true})
 	if err != nil {
 		t.Fatalf("contract release: %v", err)
 	}

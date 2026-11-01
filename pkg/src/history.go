@@ -67,8 +67,7 @@ type ReviewVersion struct {
 //
 // Every entry carries its Version: the semver release tag when that
 // revision was released, else a Go-style pseudo-version. Releases lists
-// the app's published releases, newest version first; they are shared by
-// every principal, since a release is a tag in the app's history.
+// shared releases plus this principal's private releases, newest first.
 type VersionHistory struct {
 	App       string          `json:"app"`
 	Principal string          `json:"principal"`

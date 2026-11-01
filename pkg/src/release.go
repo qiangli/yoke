@@ -91,7 +91,8 @@ func isReleaseTag(name string) bool {
 // names carry a digest of the full principal so distinct identities that
 // sanitize alike do not share a tag namespace.
 func releaseSlug(principal string) string {
-	full := strings.ToLower(strings.TrimSpace(principal))
+	identity := strings.TrimSpace(principal)
+	full := strings.ToLower(identity)
 	var b strings.Builder
 	dash := false
 	for _, r := range full {
@@ -106,7 +107,7 @@ func releaseSlug(principal string) string {
 		}
 	}
 	slug := strings.Trim(b.String(), "-")
-	lossy := slug != full
+	lossy := slug != identity
 	if len(slug) > 48 {
 		slug = strings.TrimRight(slug[:48], "-")
 		lossy = true
@@ -119,7 +120,7 @@ func releaseSlug(principal string) string {
 		slug = "u" + slug
 	}
 	if lossy {
-		sum := sha256.Sum256([]byte(principal))
+		sum := sha256.Sum256([]byte(identity))
 		slug += "-" + hex.EncodeToString(sum[:5])
 	}
 	return slug
@@ -195,7 +196,8 @@ func releasedAs(tags []ReleaseTag) map[string]string {
 	return out
 }
 
-// Releases lists an app's published releases, newest version first.
+// Releases lists shared and, when principal is supplied, that principal's
+// private releases, newest version first.
 func Releases(home, app string, principal ...string) ([]ReleaseTag, error) {
 	who := ""
 	if len(principal) > 0 {
@@ -230,6 +232,9 @@ func Version(home, app, rev string, principal ...string) (string, bool, error) {
 	who := ""
 	if len(principal) > 0 {
 		who = strings.TrimSpace(principal[0])
+	}
+	if isReleaseTag(rev) && !visibleRelease(rev, who) {
+		return "", false, fmt.Errorf("src: version %s: unknown revision %q", app, shortSHA(rev))
 	}
 	if home == "" {
 		home = Home()
@@ -370,7 +375,8 @@ func quoteAll(items []string) string {
 // bump. A removal or rename without approval, a repair that adds surface,
 // a revision already released, or a tree identical to the previous
 // release are refused and nothing is tagged. The tag is annotated with the
-// kind and the compare result; principal is recorded as the tagger.
+// kind and the compare result; principal is recorded as the tagger. Shared
+// releases require opts.Shared; all others belong to principal's tag namespace.
 func Release(home, app, rev, principal string, opts ReleaseOptions) (ReleaseResult, error) {
 	var out ReleaseResult
 	principal = strings.TrimSpace(principal)

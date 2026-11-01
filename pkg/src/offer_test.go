@@ -63,7 +63,7 @@ func s525a8Commit(t *testing.T, dir, msg string) string {
 // tagged releases only (S526.B8).
 func s525a8Release(t *testing.T, home, rev string) {
 	t.Helper()
-	if _, err := src.Release(home, s525a8App, rev, s525a8Alice, src.ReleaseOptions{}); err != nil {
+	if _, err := src.Release(home, s525a8App, rev, s525a8Alice, src.ReleaseOptions{Shared: true}); err != nil {
 		t.Fatalf("release %s: %v", rev[:7], err)
 	}
 }
@@ -440,7 +440,7 @@ func TestS525A8CLI(t *testing.T) {
 	var out bytes.Buffer
 	cmd = src.NewSrcCmd()
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"release", s525a8App, rev})
+	cmd.SetArgs([]string{"release", s525a8App, rev, "--shared"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("cli release: %v", err)
 	}

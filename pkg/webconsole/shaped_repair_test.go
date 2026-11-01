@@ -61,7 +61,7 @@ func repairFixture(t *testing.T, mode string) (*shapedApp, *incidentStore, *repa
 	if err := r.Storer.SetReference(plumbing.NewHashReference("refs/heads/pristine", base)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := src.Release(home, "notes", base.String(), "device:alice", src.ReleaseOptions{}); err != nil {
+	if _, err := src.Release(home, "notes", base.String(), "device:alice", src.ReleaseOptions{Shared: true}); err != nil {
 		t.Fatal(err)
 	}
 	for _, principal := range []string{"device:alice", "device:bob"} {
@@ -123,11 +123,11 @@ func TestRepairPipeline(t *testing.T) {
 			alice, _ := shape.OpenAt(app.opts.Home, "notes", "device:alice")
 			as, _ := alice.Read()
 			if tc.want == "activated" {
-				if as.ActiveRevision == base || got.Attempts[0].Version != "v1.0.1" {
+				if as.ActiveRevision == base || !strings.HasPrefix(got.Attempts[0].Version, "v1.0.1-device-alice-") {
 					t.Fatalf("activation/version: %+v %+v", as, got.Attempts[0])
 				}
 				h, err := src.History(app.opts.Home, "notes", "device:alice")
-				if err != nil || len(h.Entries) == 0 || h.Entries[0].Trigger != in.ID || h.Entries[0].Version != "v1.0.1" {
+				if err != nil || len(h.Entries) == 0 || h.Entries[0].Trigger != in.ID || h.Entries[0].Version != got.Attempts[0].Version {
 					t.Fatalf("history: %+v %v", h, err)
 				}
 				if _, err := src.UndoSealed(context.Background(), app.opts.Home, "notes", "device:alice", src.RestoreSealedOptions{Runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}}); err != nil {

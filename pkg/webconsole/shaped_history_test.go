@@ -306,6 +306,16 @@ func TestShapedHistoryView(t *testing.T) {
 	if body := get(bob, "/api/shape/notes/history", 200); strings.Contains(body, v2) {
 		t.Fatal("bob's history names alice's version")
 	}
+	private, err := src.Release(home, "notes", v4, "device:alice", src.ReleaseOptions{})
+	if err != nil {
+		t.Fatalf("private release: %v", err)
+	}
+	if body := get(alice, "/api/shape/notes/history", 200); !strings.Contains(body, private.Version) {
+		t.Fatalf("alice history API omitted %s", private.Version)
+	}
+	if body := get(bob, "/api/shape/notes/history", 200); strings.Contains(body, private.Version) {
+		t.Fatalf("bob history API exposed %s", private.Version)
+	}
 
 	// Preview v2: the old tree, served for alice, while her active app and
 	// revision stay on v4.

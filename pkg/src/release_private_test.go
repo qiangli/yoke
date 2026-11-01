@@ -1,6 +1,7 @@
 package src_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -22,8 +23,17 @@ func TestPrivateRepairReleases(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.HasPrefix(rel.Version, "v1.0."+string('0'+rune(i))+"-device-alice-") || !semver.IsValid(rel.Version) {
+		if !strings.HasPrefix(rel.Version, fmt.Sprintf("v1.0.%d-device-alice-", i)) || !semver.IsValid(rel.Version) {
 			t.Fatalf("private release: %+v", rel)
+		}
+		if version, released, err := src.Version(home, s526b8App, rev, alice); err != nil || !released || version != rel.Version {
+			t.Fatalf("alice version = %q, %v, %v", version, released, err)
+		}
+		if version, released, err := src.Version(home, s526b8App, rev, "device:bob"); err != nil || released || version == rel.Version {
+			t.Fatalf("bob version = %q, %v, %v", version, released, err)
+		}
+		if _, _, err := src.Version(home, s526b8App, rel.Version, "device:bob"); err == nil {
+			t.Fatalf("bob resolved alice's private tag %s", rel.Version)
 		}
 		for _, tc := range []struct {
 			principal string
@@ -42,6 +52,11 @@ func TestPrivateRepairReleases(t *testing.T) {
 		bob, err := src.History(home, s526b8App, "device:bob")
 		if err != nil || len(bob.Releases) != 1 {
 			t.Fatalf("bob history: %+v, %v", bob.Releases, err)
+		}
+		for _, release := range bob.Releases {
+			if release.Version == rel.Version {
+				t.Fatalf("bob history exposed %s", rel.Version)
+			}
 		}
 	}
 }
