@@ -200,6 +200,26 @@ func TestACPSessionNoticesAgentProcessExit(t *testing.T) {
 	if s.Live() {
 		t.Fatal("Live() = true after the ACP agent process exited")
 	}
+	s.relayMu.Lock()
+	stopped, relayDone := s.relayStopped, s.relayDone
+	s.relayMu.Unlock()
+	if !stopped {
+		t.Fatal("natural exit did not close relay admissions")
+	}
+	if relayDone != nil {
+		select {
+		case <-relayDone:
+		default:
+			t.Fatal("done closed before relay exited")
+		}
+	}
+	s.acp.lifetime.mu.Lock()
+	closed := s.acp.lifetime.closed
+	s.acp.lifetime.mu.Unlock()
+	if !closed {
+		t.Fatal("natural exit left callbacks admitted")
+	}
+
 }
 
 func TestACPSessionNoticesAgentDeathMidTurn(t *testing.T) {

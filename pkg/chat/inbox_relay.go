@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/bus"
 )
 
@@ -58,7 +59,14 @@ func runInboxRelayEvery(ctx context.Context, done <-chan struct{}, ready func() 
 				continue
 			}
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		pending := prepare()
+		// Preparation is synchronous: cancellation joins it, never abandons it.
+		if ctx.Err() != nil {
+			return
+		}
 		if pending.Err() != nil || pending.Text == "" {
 			if gate != nil {
 				gate.Commit(sum, ok, time.Now())
@@ -80,6 +88,11 @@ func runInboxRelayEvery(ctx context.Context, done <-chan struct{}, ready func() 
 }
 
 func (s *Session) startInboxRelay(ctx context.Context) {
+	s.relayMu.Lock()
+	defer s.relayMu.Unlock()
+	if s.relayStopped || s.relayDone != nil {
+		return
+	}
 	ready := func() bool { return true }
 	if s.acp != nil {
 		ready = s.acp.idle
@@ -97,23 +110,41 @@ func (s *Session) startInboxRelay(ctx context.Context) {
 }
 
 func (s *Session) stopRelay() {
-	s.relayOnce.Do(func() {
-		if s.relayCancel != nil {
-			s.relayCancel()
-		}
-		if s.relayDone != nil {
-			select {
-			case <-s.relayDone:
-			case <-time.After(3 * time.Second):
-			}
-		}
-	})
+	s.relayMu.Lock()
+	s.relayStopped = true
+	cancel, done := s.relayCancel, s.relayDone
+	s.relayMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 }
 
 // deliverPreparedInbox is Say with the already-prepared input preserved. This
 // avoids a second snapshot (and duplicate rendering), while retaining the same
 // budget gate, transport, metering, and commit-after-delivery contract as Say.
 func (s *Session) deliverPreparedInbox(p bus.PreparedPreamble) error {
+	ctx := s.relayCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	say := func(text string) error {
+		if s.acp != nil {
+			return s.say(text)
+		}
+		if err := agentpty.BrokerSayContext(ctx, s.CtlSock, text); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.lastSteer = time.Now()
+		s.mu.Unlock()
+		return nil
+	}
 	if err := p.Err(); err != nil {
 		return err
 	}
@@ -125,7 +156,7 @@ func (s *Session) deliverPreparedInbox(p bus.PreparedPreamble) error {
 	}
 	if s.acp == nil && s.ptyInbox != nil {
 		// Typed into a TUI: bounded, and acknowledged only when it went in whole.
-		complete, err := s.ptyInbox.deliver(p.Text, s.say)
+		complete, err := s.ptyInbox.deliver(p.Text, say)
 		if err != nil || !complete {
 			return err
 		}
@@ -136,7 +167,7 @@ func (s *Session) deliverPreparedInbox(p bus.PreparedPreamble) error {
 		recordLaunchUsageTokens(context.Background(), s.launch, estimateTokens(p.Text), 0)
 		return nil
 	}
-	if err := s.say(p.Text); err != nil {
+	if err := say(p.Text); err != nil {
 		return err
 	}
 	recordPreambleAdmission(context.Background(), p)

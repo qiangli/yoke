@@ -305,7 +305,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			runInboxRelay(relayCtx, sessionDone, inboxReady,
 				func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
 				func(p bus.PreparedPreamble) error {
-					complete, err := mail.deliver(p.Text, func(text string) error { return agentctl.Say(sock, text) })
+					complete, err := mail.deliver(p.Text, func(text string) error { return agentpty.BrokerSayContext(relayCtx, sock, text) })
 					if err != nil || !complete {
 						return err
 					}
@@ -315,10 +315,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		}()
 		stopRelay = func() {
 			relayCancel()
-			select {
-			case <-relayDone:
-			case <-time.After(3 * time.Second):
-			}
+			<-relayDone
 		}
 	}
 	defer func() {

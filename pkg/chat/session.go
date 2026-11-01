@@ -94,16 +94,17 @@ type Session struct {
 	lastWrite  time.Time
 	// lastSteer is when we last SPOKE to the agent. WaitIdle measures silence from
 	// whichever came later, this or lastWrite — see the comment there.
-	lastSteer   time.Time
-	done        chan struct{}
-	cancel      context.CancelFunc // force-stops the PTY after Close's graceful /quit window
-	relayOnce   sync.Once
-	relayCtx    context.Context
-	relayCancel context.CancelFunc
-	relayDone   chan struct{}
-	exit        int
-	err         error
-	killed      string
+	lastSteer    time.Time
+	done         chan struct{}
+	cancel       context.CancelFunc // force-stops the PTY after Close's graceful /quit window
+	relayMu      sync.Mutex
+	relayStopped bool
+	relayCtx     context.Context
+	relayCancel  context.CancelFunc
+	relayDone    chan struct{}
+	exit         int
+	err          error
+	killed       string
 }
 
 // Card is the host-room member id the session joined. It is the session an
@@ -481,6 +482,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 			},
 		})
 		reportStarted(err)
+		s.stopRelay() // Join before budget, room, inbox and TTY cleanup.
 		s.mu.Lock()
 		s.exit, s.killed, s.err = exit, killed, err
 		if cmd.Process == nil {
@@ -1004,7 +1006,6 @@ func (s *Session) Quit() error {
 
 // Close ends the session now.
 func (s *Session) Close() {
-	s.stopRelay()
 	if s.acp != nil {
 		s.closeACP()
 		return
@@ -1018,18 +1019,15 @@ func (s *Session) Close() {
 // on this path: cancel immediately so a readiness, delivery, or inbox-ack error
 // cannot strand a process and room claim that no supervisor owns.
 func (s *Session) abortStart() {
-	s.stopRelay()
 	if s.acp != nil {
 		s.closeACP()
 		return
 	}
+	s.stopRelay()
 	if s.cancel != nil {
 		s.cancel()
 	}
-	select {
-	case <-s.done:
-	case <-time.After(3 * time.Second):
-	}
+	<-s.done
 	_ = os.Remove(s.CtlSock)
 }
 
@@ -1040,21 +1038,20 @@ func (s *Session) closePTY(grace time.Duration) {
 		return
 	default:
 	}
-	_ = s.Quit()
+	quitCtx, cancelQuit := context.WithTimeout(context.Background(), grace)
+	defer cancelQuit()
+	_ = agentpty.BrokerSayContext(quitCtx, s.CtlSock, "/quit")
 	select {
 	case <-s.done:
 		return
-	case <-time.After(grace):
+	case <-quitCtx.Done():
 	}
 	if s.cancel != nil {
 		s.cancel()
 	}
-	// agentpty escalates a cancelled process tree after two seconds. Bound this
-	// wait as well: Close must never deadlock its supervisor on a broken tool.
-	select {
-	case <-s.done:
-	case <-time.After(3 * time.Second):
-	}
+	// agentpty owns escalation. Returning before its cleanup barrier would
+	// let room/TTY writers escape the session owner.
+	<-s.done
 }
 
 // waitReady blocks until the control socket exists, so the first message is not

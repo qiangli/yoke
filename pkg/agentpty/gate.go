@@ -1,6 +1,7 @@
 package agentpty
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -338,13 +339,29 @@ func BrokerSay(ctlSock, payload string) error {
 // address caps at ~104 bytes, and a caller with a long path would otherwise lose
 // steering entirely rather than merely polling for it.
 func sendControlFrame(path, frame string) error {
-	conn, err := net.DialTimeout("unix", path, 3*time.Second)
+	return sendControlFrameContext(context.Background(), path, frame)
+}
+
+// BrokerSayContext cancels both dialing and an in-flight socket write.
+func BrokerSayContext(ctx context.Context, path, text string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("control socket unavailable")
+	}
+	return sendControlFrameContext(ctx, path, TextFrame(text))
+}
+
+func sendControlFrameContext(ctx context.Context, path, frame string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", path)
 	if err == nil {
 		defer conn.Close()
-		if _, err := conn.Write([]byte(frame)); err != nil {
-			return fmt.Errorf("control socket write: %w", err)
-		}
-		return nil
+		return writeControlFrame(ctx, conn, frame)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if st, statErr := os.Stat(path); statErr == nil && st.Mode().IsRegular() {
 		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
@@ -501,4 +518,19 @@ func firstDeviceURL(s string) string {
 
 func trimURLPunctuation(u string) string {
 	return strings.TrimRight(u, ".,);]")
+}
+
+// writeControlFrame joins its cancellation callback before returning.
+func writeControlFrame(ctx context.Context, conn net.Conn, frame string) error {
+	stopped := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(stopped) })
+	defer func() {
+		if !stop() {
+			<-stopped
+		}
+	}()
+	if _, err := conn.Write([]byte(frame)); err != nil {
+		return fmt.Errorf("control socket write: %w", err)
+	}
+	return nil
 }

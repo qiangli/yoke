@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"errors"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,49 +145,46 @@ func TestInboxRelayRetriesRefusedDeliveryDespiteUnchangedFingerprint(t *testing.
 	}
 }
 
-// Session.Close and stopRelay must stop and join the inbox relay worker before
-// returning, ensuring that a subsequent test's temporary directory or room
-// state is not modified or locked by an orphaned background worker.
-func TestSessionCloseShutsDownInboxRelayWorkerBeforeCleanup(t *testing.T) {
-	roomDir := t.TempDir()
-	t.Setenv("BASHY_ROOM_DIR", roomDir)
-
-	done := make(chan struct{})
-	s := &Session{
-		inboxAgent: "test-relay-agent",
-		done:       done,
-		cancel: func() {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
-		},
-	}
-	s.startInboxRelay(context.Background())
-
-	// Closing the session must shut down and join the relay worker.
-	close(done)
-	s.Close()
-
-	// Verify relay worker has exited.
+// Cancellation must join preparation rather than allow a worker to outlive
+// the session. The release barrier proves the worker was actually in flight.
+func TestSessionRelayJoinsInflightPreparation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	entered, release, workerDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var delivered atomic.Bool
+	s := &Session{relayCtx: ctx, relayCancel: cancel, relayDone: workerDone}
+	go func() {
+		defer close(workerDone)
+		runInboxRelayEvery(ctx, nil, nil, func() bus.PreparedPreamble {
+			close(entered)
+			<-release
+			return bus.PreparedPreamble{Text: "pending"}
+		}, func(bus.PreparedPreamble) error { delivered.Store(true); return nil }, nil, time.Millisecond)
+	}()
+	<-entered
+	stopped := make(chan struct{})
+	go func() { s.stopRelay(); close(stopped) }()
+	<-ctx.Done()
 	select {
-	case <-s.relayDone:
+	case <-stopped:
+		t.Fatal("stop abandoned in-flight preparation")
 	default:
-		t.Fatal("s.Close() did not join relayDone")
 	}
-
-	// Verify that setting a subsequent tempdir for BASHY_ROOM_DIR
-	// does not receive any rogue writes from a leaked background worker.
-	nextRoomDir := t.TempDir()
-	t.Setenv("BASHY_ROOM_DIR", nextRoomDir)
-	time.Sleep(50 * time.Millisecond)
-
-	entries, err := os.ReadDir(nextRoomDir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not join")
 	}
-	if len(entries) != 0 {
-		t.Fatalf("subsequent room dir contaminated by orphaned relay worker: %v", entries)
+	if delivered.Load() {
+		t.Fatal("cancelled preparation was delivered")
+	}
+}
+
+func TestSessionRelayCannotStartAfterNaturalExit(t *testing.T) {
+	s := &Session{done: make(chan struct{})}
+	s.stopRelay() // The natural-exit path may finish before startup returns.
+	s.startInboxRelay(context.Background())
+	if s.relayDone != nil {
+		t.Fatal("relay started after its owner stopped")
 	}
 }
