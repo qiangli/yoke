@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,11 @@ func fakeDelegateVendor(t *testing.T, vendor string) string {
 	t.Setenv("BASHY_LADDER_STORE", filepath.Join(t.TempDir(), "events.jsonl"))
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "launched")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DELEGATE_TEST_HELPER", self)
 	t.Setenv("DELEGATE_TEST_MARKER", marker)
 	script := `#!/bin/sh
 for name in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY DEEPSEEK_API_KEY ANTHROPIC_AUTH_TOKEN AWS_ACCESS_KEY_ID; do
@@ -62,7 +69,7 @@ esac
 printf task > "$DELEGATE_TEST_MARKER"
 case "$DELEGATE_TEST_MODE" in
  idle|timeout) sleep 10;;
- heartbeat) for n in 1 2 3 4 5; do echo tick >&2; sleep 0.04; done;;
+ heartbeat) echo "tick starting-helper" >&2; exec "$DELEGATE_TEST_HELPER" -test.run=^TestDelegateHeartbeatHelper$;;
  vendor) echo failed >&2; exit 7;;
 esac
 echo delegated
@@ -77,6 +84,36 @@ echo delegated
 		t.Fatal(err)
 	}
 	return marker
+}
+
+// TestDelegateHeartbeatHelper emits real stderr activity for more than the
+// 150ms idle window without launching a fresh sleep process for each beat.
+// The vendor wrapper still validates credential isolation and launch policy.
+func TestDelegateHeartbeatHelper(t *testing.T) {
+	if os.Getenv("DELEGATE_TEST_MODE") != "heartbeat" || os.Getenv("DELEGATE_TEST_HELPER") == "" {
+		t.Skip("subprocess fixture")
+	}
+	evidence, err := os.Create(os.Getenv("DELEGATE_TEST_MARKER") + ".heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer evidence.Close()
+	start := time.Now()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := fmt.Fprintf(os.Stderr, "tick %d\n", time.Since(start).Milliseconds()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintln(evidence, time.Since(start).Nanoseconds()); err != nil {
+			t.Fatal(err)
+		}
+		if time.Since(start) >= 300*time.Millisecond {
+			break
+		}
+		<-ticker.C
+	}
+	fmt.Println("delegated")
 }
 
 func TestDelegateVendorContract(t *testing.T) {
@@ -95,6 +132,7 @@ func TestDelegateVendorContract(t *testing.T) {
 				{"vendor", "vendor", "vendor", nil, true},
 				{"timeout", "timeout", "timeout", []string{"--timeout=3s"}, true},
 				{"idle", "idle", "idle", []string{"--idle-timeout=500ms"}, true},
+				{"idle at heartbeat budget", "idle", "idle", []string{"--idle-timeout=150ms"}, true},
 				{"stderr resets idle", "heartbeat", "", []string{"--idle-timeout=150ms"}, true},
 				{"dollars", "", "budget", []string{"--budget-usd=1"}, false},
 				{"tokens", "", "budget", []string{"--max-tokens=100"}, false},
@@ -125,6 +163,18 @@ func TestDelegateVendorContract(t *testing.T) {
 					}
 					if res.SchemaVersion != "bashy-chat-v1" || res.Receipt != "receipt-test" || res.Identity != "genie-delegate:"+vendor+"-test-model" {
 						t.Fatalf("metadata: %+v", res)
+					}
+					if tc.mode == "heartbeat" {
+						evidence, readErr := os.ReadFile(marker + ".heartbeat")
+						t.Logf("heartbeat elapsed nanoseconds: %s (read error: %v)", evidence, readErr)
+						beats := strings.Fields(string(evidence))
+						if readErr != nil || len(beats) < 2 {
+							t.Fatalf("heartbeat fixture did not emit multiple stderr writes: %+v (%v)", res, err)
+						}
+						elapsed, parseErr := strconv.ParseInt(beats[len(beats)-1], 10, 64)
+						if parseErr != nil || elapsed < int64(300*time.Millisecond) {
+							t.Fatalf("heartbeat did not span two idle windows: %+v (%v)", res, err)
+						}
 					}
 					if tc.kind == "" {
 						if err != nil || res.Exit != 0 || res.Error != nil || !strings.Contains(res.Output, "delegated") {
