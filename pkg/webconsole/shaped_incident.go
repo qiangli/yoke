@@ -25,11 +25,13 @@ import (
 // One incident is one (app, active revision, signature). The same signature
 // after a repair activated counts against the incident it came from, so a
 // repair that does not fix the error, or that flips back and forth, cannot
-// loop: after MaxRepairAttempts the incident is failed and the previous
+// loop: after the attempt limit the incident is failed and the previous
 // working version stays active.
 
-// MaxRepairAttempts bounds repair attempts per incident (operator 2026-10-31).
-const MaxRepairAttempts = 2
+// DefaultMaxRepairAttempts is the repair attempt limit per incident when
+// neither the app (shaped.json repair.max_attempts) nor the host
+// (ShapeOptions.RepairMaxAttempts) sets one (operator 2026-10-31).
+const DefaultMaxRepairAttempts = 2
 
 // IncidentKind is where the error was observed.
 type IncidentKind string
@@ -107,17 +109,31 @@ func IncidentSignature(kind IncidentKind, path, message string) string {
 
 // incidentStore keeps one principal's incidents for one app under the
 // principal's shaping state directory: <state dir>/incidents/<id>.json.
+// max is the repair attempt limit for incidents in this store: up to max
+// attempts each, 0 for record-and-report only (no repair), negative for
+// unlimited (RepairUnlimited: keep trying until a repair activates, is
+// refused, or the incident leaves the repairing state).
 type incidentStore struct {
 	dir string
+	max int
 	mu  sync.Mutex
 }
 
 func openIncidents(st *shape.Store) (*incidentStore, error) {
+	return openIncidentsWithLimit(st, DefaultMaxRepairAttempts)
+}
+
+func openIncidentsWithLimit(st *shape.Store, max int) (*incidentStore, error) {
 	d := filepath.Join(st.Dir(), "incidents")
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		return nil, err
 	}
-	return &incidentStore{dir: d}, nil
+	return &incidentStore{dir: d, max: max}, nil
+}
+
+// exhausted reports whether n recorded attempts use up the store's limit.
+func (s *incidentStore) exhausted(n int) bool {
+	return s.max >= 0 && n >= s.max
 }
 
 // ErrAttemptsExhausted is returned when an incident may not try again.
@@ -152,7 +168,7 @@ func (s *incidentStore) Observe(in Incident, now time.Time) (Incident, bool, err
 		switch cur.State {
 		case IncidentActivated:
 			// The repair did not hold: same error again.
-			if len(cur.Attempts) < MaxRepairAttempts {
+			if !s.exhausted(len(cur.Attempts)) {
 				cur.State = IncidentRepairing
 				start = true
 			} else {
@@ -164,13 +180,18 @@ func (s *incidentStore) Observe(in Incident, now time.Time) (Incident, bool, err
 	in.ID = fmt.Sprintf("inc-%s-%s", now.UTC().Format("20060102T150405"), in.Signature[:8])
 	in.FirstSeen, in.LastSeen, in.Count = now, now, 1
 	if in.State == "" {
+		// A zero limit records and reports only: failed straight away,
+		// so no repair ever starts and the delegate is never called.
 		in.State = IncidentRepairing
+		if s.exhausted(0) {
+			in.State = IncidentFailed
+		}
 	}
 	return in, in.State == IncidentRepairing, s.writeLocked(in)
 }
 
 // Attempt records the outcome of one repair attempt and moves the incident.
-// It refuses a third attempt.
+// It refuses any attempt past the store's limit with ErrAttemptsExhausted.
 func (s *incidentStore) Attempt(id string, a RepairAttempt) (Incident, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,7 +199,7 @@ func (s *incidentStore) Attempt(id string, a RepairAttempt) (Incident, error) {
 	if err != nil {
 		return Incident{}, err
 	}
-	if len(in.Attempts) >= MaxRepairAttempts {
+	if s.exhausted(len(in.Attempts)) {
 		return in, ErrAttemptsExhausted
 	}
 	in.Attempts = append(in.Attempts, a)
@@ -188,7 +209,7 @@ func (s *incidentStore) Attempt(id string, a RepairAttempt) (Incident, error) {
 	case "refused":
 		in.State = IncidentRefused
 	default:
-		if len(in.Attempts) >= MaxRepairAttempts {
+		if s.exhausted(len(in.Attempts)) {
 			in.State = IncidentFailed
 		} else {
 			in.State = IncidentRepairing

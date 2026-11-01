@@ -49,11 +49,11 @@ func startRepairAsync(app *shapedApp, principal string, in Incident) {
 			delete(repairFlights.active, key)
 			repairFlights.Unlock()
 		}()
-		// The delegate has its own timeout. Bound the entire clone, verification,
-		// replay and activation as well, including when a test delegate hangs.
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-		defer cancel()
-		app.repairIncident(ctx, principal, in.ID)
+		// Each attempt carries its own timeout (repairAttemptTimeout);
+		// the incident as a whole is unbounded so an "unlimited" limit
+		// can keep trying until a repair lands. Cancellation still
+		// stops the loop through repairIncident's ctx checks.
+		app.repairIncident(context.Background(), principal, in.ID)
 	}()
 }
 
@@ -74,20 +74,36 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 	if err != nil {
 		return
 	}
-	incidents, err := openIncidents(st)
+	// Read the incident once for its base revision, then enforce that
+	// revision's attempt limit: the failing code declares its own policy.
+	probe, err := openIncidents(st)
+	if err != nil {
+		return
+	}
+	first, err := probe.Get(id)
+	if err != nil {
+		return
+	}
+	incidents, err := openIncidentsWithLimit(st, a.repairLimitForRev(first.BaseRev))
 	if err != nil {
 		return
 	}
 	for {
 		in, err := incidents.Get(id)
-		if err != nil || in.State != IncidentRepairing || len(in.Attempts) >= MaxRepairAttempts {
+		// A cancelled context, a closed incident (no longer
+		// repairing, or gone), or an exhausted limit stops the loop.
+		if err != nil || in.State != IncidentRepairing || ctx.Err() != nil || incidents.exhausted(len(in.Attempts)) {
 			return
 		}
 		previous := ""
 		if n := len(in.Attempts); n > 0 {
 			previous = in.Attempts[n-1].Reason
 		}
-		candidate, dir, reason, refused, version := a.repairAttempt(ctx, principal, in, previous)
+		// One window per attempt, including when a delegate hangs; a
+		// parent cancellation aborts the in-flight attempt as well.
+		attemptCtx, cancel := context.WithTimeout(ctx, repairAttemptTimeout)
+		candidate, dir, reason, refused, version := a.repairAttempt(attemptCtx, principal, in, previous)
+		cancel()
 		result := "failed"
 		if refused {
 			result = "refused"

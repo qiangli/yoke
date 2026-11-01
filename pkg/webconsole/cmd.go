@@ -100,6 +100,7 @@ func newServeCmd() *cobra.Command {
 		apps     []string
 		appAuth  []string
 		shaper   string
+		repair   string
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -115,6 +116,11 @@ func newServeCmd() *cobra.Command {
 			if shaper != "" {
 				shapeOpts.Delegate = BashyDelegate{Agent: shaper}
 			}
+			maxAttempts, err := parseRepairMaxAttempts(repair)
+			if err != nil {
+				return err
+			}
+			shapeOpts.RepairMaxAttempts = maxAttempts
 			return runServe(c.Context(), c.OutOrStdout(), Options{
 				Shape:      shapeOpts,
 				Scope:      scope,
@@ -141,6 +147,8 @@ func newServeCmd() *cobra.Command {
 		"operator-authorized auth tier for a third-party mount: <mount>=public|system|custom, repeatable")
 	cmd.Flags().StringVar(&shaper, "shape-agent", "",
 		"the tool:model the Shape panel delegates to for shaped apps (e.g. codex:<model>); empty disables new requests")
+	cmd.Flags().StringVar(&repair, "repair-max-attempts", "",
+		"host default capping self-repair attempts per incident: a non-negative number, `unlimited`, or empty for the app's shaped.json repair.max_attempts (else 2); 0 records and reports without repairing")
 	cmd.Flags().BoolVar(&pair, "pair", false,
 		"accept QR device pairings (`bashy app pair`), and keep the LAN listener open "+
 			"only while a paired device exists")

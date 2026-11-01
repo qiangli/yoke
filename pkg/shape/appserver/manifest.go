@@ -50,6 +50,10 @@ const File = "shaped.json"
 // Manifest is shaped.json.
 type Manifest struct {
 	Server *Server `json:"server,omitempty"`
+	// Repair tunes the console's self-repair for the app: how many
+	// attempts one incident may take before the previous version stays
+	// active. Absent means the console default.
+	Repair *Repair `json:"repair,omitempty"`
 	// Tidy sets the support window and optionally names an api unit that
 	// cleans this app's own principal data before history is compacted.
 	Tidy *Tidy `json:"tidy,omitempty"`
@@ -94,6 +98,54 @@ type Tidy struct {
 	KeepLast int    `json:"keep_last,omitempty"`
 	KeepDays int    `json:"keep_days,omitempty"`
 	Unit     string `json:"unit,omitempty"`
+}
+
+// Repair tunes self-repair for one app.
+type Repair struct {
+	// MaxAttempts caps repair attempts per incident: a non-negative
+	// integer, or the string "unlimited" to keep trying until a repair
+	// activates, is refused, or the incident leaves the repairing state.
+	// Absent (or null) means the console default.
+	MaxAttempts RepairMaxAttempts `json:"max_attempts,omitempty"`
+}
+
+// RepairMaxAttempts is a decoded repair.max_attempts value. UnmarshalJSON
+// never fails: a present but invalid value is kept as set-but-invalid so
+// the console can log a warning and use its default — an invalid value
+// never fails the manifest and never means unlimited.
+type RepairMaxAttempts struct {
+	// Set reports the key was present (and not null).
+	Set bool
+	// Valid reports the value is usable: a non-negative integer, or
+	// the string "unlimited".
+	Valid bool
+	// Unlimited reports the value was "unlimited".
+	Unlimited bool
+	// N is the attempt cap when valid and not unlimited.
+	N int
+}
+
+// UnmarshalJSON decodes a non-negative integer or "unlimited". Null means
+// absent. Anything else marks the value set-but-invalid without an error.
+func (l *RepairMaxAttempts) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	l.Set = true
+	if s == `"unlimited"` {
+		l.Valid, l.Unlimited = true, true
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil
+	}
+	if f < 0 || f != float64(int(f)) || f > float64(1<<30) {
+		return nil
+	}
+	l.Valid, l.N = true, int(f)
+	return nil
 }
 
 // Server is the app's declared server.

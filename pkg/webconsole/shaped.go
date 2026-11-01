@@ -70,9 +70,15 @@ type ShapeOptions struct {
 	// ServerIdle stops a shaped app server no request has used for this
 	// long. Zero = 10m.
 	ServerIdle time.Duration
-	Delegate   Delegator
-	Verifier   Verifier
-	Activator  Activator
+	// RepairMaxAttempts is the host default capping self-repair attempts
+	// per incident when the app's shaped.json sets no repair.max_attempts.
+	// Nil means DefaultMaxRepairAttempts (2); 0 records and reports the
+	// incident without repairing; negative (RepairUnlimited) keeps trying
+	// until a repair activates, is refused, or the incident closes.
+	RepairMaxAttempts *int
+	Delegate          Delegator
+	Verifier          Verifier
+	Activator         Activator
 }
 
 func (o ShapeOptions) home() (string, error) {

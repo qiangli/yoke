@@ -45,7 +45,7 @@ func (a *shapedApp) recordIncident(principal string, kind IncidentKind, rel stri
 	if err != nil {
 		return Incident{}, false
 	}
-	s, err := openIncidents(st)
+	s, err := openIncidentsWithLimit(st, a.repairLimitForRev(baseRev))
 	if err != nil {
 		return Incident{}, false
 	}
@@ -356,7 +356,7 @@ func (s *server) handleShapeIncidentReport(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "incident store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	istore, err := openIncidents(st)
+	istore, err := openIncidentsWithLimit(st, a.repairLimitForRev(baseRev))
 	if err != nil {
 		http.Error(w, "incident store unavailable", http.StatusServiceUnavailable)
 		return
