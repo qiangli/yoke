@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -51,8 +52,13 @@ func TestFileJournalRoundTripAndTruncatedTail(t *testing.T) {
 	if none, _ := j.Load(ctx, "missing"); none != nil {
 		t.Fatalf("missing provider: %v", none)
 	}
-	info, _ := os.Stat(filepath.Join(dir, "p_1.jsonl"))
-	if info.Mode().Perm() != 0o600 {
+	info, err := os.Stat(filepath.Join(dir, "p_1.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows does not represent Unix owner/group permission bits in FileMode.
+	// Roundtrip/truncated-tail assertions above still run on every platform.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("journal file mode %v", info.Mode())
 	}
 }
@@ -64,7 +70,9 @@ func TestDefaultJournalDirHonorsBashyHome(t *testing.T) {
 		t.Fatalf("dir=%s err=%v", dir, err)
 	}
 	t.Setenv("BASHY_HOME", "")
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	dir, err = provider.DefaultJournalDir()
 	if err != nil || !strings.HasPrefix(dir, os.Getenv("HOME")) || !strings.HasSuffix(dir, filepath.Join(".bashy", "provider", "journal")) {
 		t.Fatalf("dir=%s err=%v", dir, err)

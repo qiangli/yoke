@@ -1,0 +1,35 @@
+name: Native Windows provider validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  provider:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.27.2
+          cache: false
+      - name: Provider contracts with explicit Git Bash interpreter
+        shell: bash
+        working-directory: pkg/provider
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: go1.27.2
+          GOMAXPROCS: '2'
+          GOFLAGS: '-p=2'
+          PROVIDER_TEST_SHELL: 'C:\Program Files\Git\bin\bash.exe'
+        run: |
+          set -o pipefail
+          go test -v ./... -count=1 -timeout=2m | tee "$RUNNER_TEMP/provider-native.log"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-native-windows
+          path: ${{ runner.temp }}/provider-native.log
+          if-no-files-found: error

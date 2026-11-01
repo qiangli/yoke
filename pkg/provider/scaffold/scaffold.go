@@ -16,6 +16,9 @@ type Options struct {
 	Form    provider.Form
 	Name    string
 	Summary string
+	// Interpreter is an explicit executable and optional arguments prepended to
+	// plugin.sh. Empty retains direct execution; adapters never infer a shell.
+	Interpreter []string
 }
 
 // Standard capabilities for generated providers.
@@ -189,6 +192,16 @@ declarative:
 }
 
 func initExecutable(opts Options) error {
+	argv := append(append([]string(nil), opts.Interpreter...), "./plugin.sh")
+	for _, arg := range opts.Interpreter {
+		if arg == "" {
+			return fmt.Errorf("scaffold: interpreter argv must not contain empty arguments")
+		}
+	}
+	encodedArgv, err := json.Marshal(argv)
+	if err != nil {
+		return err
+	}
 	manifestContent := fmt.Sprintf(`kind: infra
 name: %s
 form: executable
@@ -196,8 +209,8 @@ version: "1"
 protocol_version: provider/v1
 summary: %s
 capabilities: [validate, capacity, plan, create, inspect, list, start, stop, destroy]
-argv: ["./plugin.sh"]
-`, opts.Name, opts.Summary)
+argv: %s
+`, opts.Name, opts.Summary, encodedArgv)
 
 	manifestPath := filepath.Join(opts.Dir, "manifest.yaml")
 	if err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644); err != nil {
@@ -433,7 +446,7 @@ func main() {
 			provider.Capability(provider.OpStop),
 			provider.Capability(provider.OpDestroy),
 		},
-		Argv: []string{"./plugin.sh"},
+		Argv: ` + fmt.Sprintf("%#v", argv) + `,
 	}
 	adapter := &pluginAdapter{manifest: m}
 	if err := provider.Serve(context.Background(), adapter, os.Stdin, os.Stdout); err != nil {
