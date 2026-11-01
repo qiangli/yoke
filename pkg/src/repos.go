@@ -13,6 +13,8 @@ import (
 // origins never land under $BASHY_HOME/src.
 var allowedRepos = map[string]string{
 	"yoke":        "https://github.com/qiangli/yoke",
+	"bashy":       "https://github.com/qiangli/bashy",
+	"outpost":     "https://github.com/qiangli/outpost",
 	"coreutils":   "https://github.com/qiangli/coreutils",
 	"sh":          "https://github.com/qiangli/sh",
 	"filebrowser": "https://github.com/qiangli/filebrowser",

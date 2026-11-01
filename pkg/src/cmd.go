@@ -71,6 +71,8 @@ func newSrcCmd() *cobra.Command {
 	cmd.AddCommand(newDiffCmd())
 	cmd.AddCommand(newLogCmd())
 	cmd.AddCommand(newPrCmd())
+	cmd.AddCommand(newUpstreamCmd())
+	cmd.AddCommand(newReleaseCoreCmd())
 	cmd.AddCommand(newPatchCmd())
 	cmd.AddCommand(newUpgradeCmd())
 	cmd.AddCommand(newActivateCmd())

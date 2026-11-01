@@ -246,18 +246,26 @@ func newPrCmd() *cobra.Command {
 		Short: "Local pull requests against the host's own local branch",
 	}
 	c.AddCommand(newPrOpenCmd(), newPrShowCmd(), newPrListCmd(), newPrVerifyCmd(),
-		newPrMergeCmd(), newPrCloseCmd())
+		newPrMergeCmd(), newPrCloseCmd(), newPrReviewCmd())
 	return c
 }
 
 func newPrOpenCmd() *cobra.Command {
-	var title, testCmd string
+	var title, testCmd, profile, author string
 	c := &cobra.Command{
 		Use:   "open <repo> <branch>",
 		Short: "Open a pull request for a topic branch against local",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pr, err := OpenPR("", args[0], args[1], title, testCmd)
+			if err == nil && author != "" {
+				pr.Author = author
+				pr.AuthorVendor = vendor(author)
+				err = savePR("", pr)
+			}
+			if err == nil && profile != "" {
+				pr, err = RunPRSuite("", pr.ID, profile)
+			}
 			if err != nil {
 				return err
 			}
@@ -272,6 +280,8 @@ func newPrOpenCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&title, "title", "", "PR title (required)")
 	c.Flags().StringVar(&testCmd, "test", "", "test command to run now and record on the PR")
+	c.Flags().StringVar(&profile, "profile", "", "full-suite profile or completed evidence JSON")
+	c.Flags().StringVar(&author, "author", "", "author agent binding")
 	return c
 }
 
@@ -289,6 +299,15 @@ func newPrShowCmd() *cobra.Command {
 				pr.ID, pr.Repo, pr.Title, pr.Author, pr.Base, pr.Head, pr.HeadSHA, pr.State)
 			if pr.TestCmd != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "test_cmd: %s\ntest_result: %s\n", pr.TestCmd, pr.TestResult)
+			}
+			if pr.Profile != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "profile: %s\nsuite_complete: %t\n", pr.Profile, pr.SuiteComplete)
+				for _, r := range pr.Suites {
+					fmt.Fprintf(cmd.OutOrStdout(), "suite: %s %s exit=%d complete=%t duration_ms=%d\n", r.Name, r.Status, r.ExitCode, r.Complete, r.DurationMS)
+				}
+			}
+			if pr.Reviewer != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "reviewer: %s\nreview_verdict: %s\n", pr.Reviewer, pr.ReviewVerdict)
 			}
 			if pr.MergedSHA != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "merged_sha: %s\n", pr.MergedSHA)
@@ -321,7 +340,8 @@ func newPrListCmd() *cobra.Command {
 }
 
 func newPrVerifyCmd() *cobra.Command {
-	return &cobra.Command{
+	var profile string
+	c := &cobra.Command{
 		Use:   "verify <id>",
 		Short: "Verify a PR's candidate against the base contract and seal the result",
 		Long: `verify runs the base commit's checks against the PR's recorded head in
@@ -330,6 +350,11 @@ reaches, and seals the verdict for the resolved principal. Merging reads
 that record; a failing verdict is recorded too, and blocks.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if profile != "" {
+				if _, err := RunPRSuite("", args[0], profile); err != nil {
+					return err
+				}
+			}
 			rec, err := VerifyPR(cmd.Context(), "", args[0], nil)
 			if err != nil {
 				return err
@@ -351,6 +376,8 @@ that record; a failing verdict is recorded too, and blocks.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&profile, "profile", "", "full-suite profile or completed evidence JSON")
+	return c
 }
 
 func newPrMergeCmd() *cobra.Command {

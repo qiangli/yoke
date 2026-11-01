@@ -32,22 +32,30 @@ const (
 // exchange them by file (see patch export/apply). Merges only ever touch
 // `local` — never `pristine` and never any remote.
 type PR struct {
-	ID               string `json:"id"`
-	Repo             string `json:"repo"`
-	Title            string `json:"title"`
-	Author           string `json:"author"`
-	Base             string `json:"base"`
-	Head             string `json:"head"`
-	HeadSHA          string `json:"head_sha"`
-	TestCmd          string `json:"test_cmd,omitempty"`
-	TestResult       string `json:"test_result,omitempty"`
-	TestOutput       string `json:"test_output,omitempty"`
-	State            string `json:"state"`
-	TouchedProtected bool   `json:"touched_protected,omitempty"`
-	CreatedAt        string `json:"created_at"`
-	MergedSHA        string `json:"merged_sha,omitempty"`
-	MergedAt         string `json:"merged_at,omitempty"`
-	ClosedAt         string `json:"closed_at,omitempty"`
+	ID               string        `json:"id"`
+	Repo             string        `json:"repo"`
+	Title            string        `json:"title"`
+	Author           string        `json:"author"`
+	AuthorVendor     string        `json:"author_vendor,omitempty"`
+	Profile          string        `json:"profile,omitempty"`
+	Suites           []SuiteResult `json:"suites,omitempty"`
+	SuiteComplete    bool          `json:"suite_complete,omitempty"`
+	CoreRepair       bool          `json:"core_repair,omitempty"`
+	Reviewer         string        `json:"reviewer,omitempty"`
+	ReviewVerdict    string        `json:"review_verdict,omitempty"`
+	ReviewEvidence   string        `json:"review_evidence,omitempty"`
+	Base             string        `json:"base"`
+	Head             string        `json:"head"`
+	HeadSHA          string        `json:"head_sha"`
+	TestCmd          string        `json:"test_cmd,omitempty"`
+	TestResult       string        `json:"test_result,omitempty"`
+	TestOutput       string        `json:"test_output,omitempty"`
+	State            string        `json:"state"`
+	TouchedProtected bool          `json:"touched_protected,omitempty"`
+	CreatedAt        string        `json:"created_at"`
+	MergedSHA        string        `json:"merged_sha,omitempty"`
+	MergedAt         string        `json:"merged_at,omitempty"`
+	ClosedAt         string        `json:"closed_at,omitempty"`
 }
 
 // prsDir is $BASHY_HOME/src/.prs/.
@@ -133,7 +141,7 @@ func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
 		return PR{}, err
 	}
 	pr := PR{
-		ID: id, Repo: repo, Title: title, Author: agentName(),
+		ID: id, Repo: repo, Title: title, Author: agentName(), AuthorVendor: vendor(agentName()),
 		Base: localBranch, Head: branch, HeadSHA: headSHA,
 		State: PRStateOpen, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -279,19 +287,9 @@ func ClosePR(home, id string) (PR, error) {
 	return pr, nil
 }
 
-// MergePR merges the PR's recorded head SHA into `local` and records the
-// merge. It refuses, changing nothing, when the recorded test failed, when
-// the diff touches a core path (always), when no sealed passing
-// verification evidence is bound to exactly this candidate, or when the
-// diff touches a protected path without an approval covering it.
-// `pristine` and all remotes are never touched; no fetch, no push.
-//
-// The evidence requirement has exactly one override, and it is never
-// silent: an approval record covering every path in the change. An
-// operator who has reviewed the whole diff may merge it unverified, and
-// the approval is the record that they did. Core and protected rules are
-// unchanged by it — a core path is still immutable, and a protected path
-// still needs its own approval.
+// MergePR merges the recorded candidate into local. Core path changes require
+// a complete passing suite, independent different-vendor review, and sealed
+// verification. Other paths retain the established protected-path policy.
 func MergePR(home, id string) (PR, error) {
 	pr, err := GetPR(home, id)
 	if err != nil {
@@ -319,8 +317,23 @@ func MergePR(home, id string) (PR, error) {
 		return PR{}, err
 	}
 	if len(core) > 0 {
-		return PR{}, fmt.Errorf("src: refusing PR %s: core path(s) %s are immutable (no approval can unlock them)",
-			id, strings.Join(core, ", "))
+		var missing []string
+		if !suitePass(pr) {
+			missing = append(missing, "full-suite pass")
+		}
+		if pr.ReviewVerdict != "pass" || pr.Reviewer == "" || pr.AuthorVendor == "" || vendor(pr.Reviewer) == pr.AuthorVendor {
+			missing = append(missing, "different-vendor pass review")
+		}
+		baseSHA, e := mergeBase(dir, localBranch, pr.HeadSHA)
+		if e != nil {
+			return PR{}, e
+		}
+		if e = requireEvidence(home, dir, pr, baseSHA); e != nil {
+			missing = append(missing, "sealed verify: "+e.Error())
+		}
+		if len(missing) > 0 {
+			return PR{}, fmt.Errorf("src: refusing core PR %s: missing %s", id, strings.Join(missing, "; "))
+		}
 	}
 	var prot []string
 	for _, f := range files {
@@ -328,7 +341,7 @@ func MergePR(home, id string) (PR, error) {
 			prot = append(prot, f)
 		}
 	}
-	if !covered {
+	if !covered && len(core) == 0 {
 		return PR{}, fmt.Errorf("src: refusing PR %s: protected path(s) %s need an approval record (see the approve verb)",
 			id, strings.Join(prot, ", "))
 	}
@@ -339,7 +352,7 @@ func MergePR(home, id string) (PR, error) {
 	if err != nil {
 		return PR{}, err
 	}
-	if !waived {
+	if !waived && len(core) == 0 {
 		baseSHA, err := mergeBase(dir, localBranch, pr.HeadSHA)
 		if err != nil {
 			return PR{}, fmt.Errorf("src: PR %s head %s: %w", id, shortSHA(pr.HeadSHA), err)
@@ -383,6 +396,7 @@ func MergePR(home, id string) (PR, error) {
 	pr.MergedSHA = mergedSHA
 	pr.MergedAt = time.Now().UTC().Format(time.RFC3339)
 	pr.TouchedProtected = len(prot) > 0
+	pr.CoreRepair = len(core) > 0
 	if err := savePR(home, pr); err != nil {
 		restore()
 		return PR{}, err

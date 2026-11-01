@@ -278,7 +278,11 @@ func Upgrade(home, repo, newCommit string) ([]string, error) {
 		return nil, err
 	}
 	fetchErr := func() error {
-		_, err := ygit.Fetch(ygit.FetchOptions{RepoPath: dir})
+		origin, err := originFor(home, repo)
+		if err != nil {
+			return err
+		}
+		_, err = ygit.Fetch(ygit.FetchOptions{RepoPath: dir, Remote: origin, RefSpecs: []string{"+refs/heads/*:refs/remotes/installation/*"}})
 		return err
 	}()
 	newSHA, err := ygit.ResolveCommit(dir, newCommit)

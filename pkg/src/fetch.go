@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	ygit "github.com/qiangli/yoke/git"
 )
@@ -35,7 +36,7 @@ func Fetch(home, repo string) (string, error) {
 	if home == "" {
 		home = Home()
 	}
-	remote, err := remoteFor(repo)
+	origin, err := originFor(home, repo)
 	if err != nil {
 		return "", err
 	}
@@ -47,13 +48,9 @@ func Fetch(home, repo string) (string, error) {
 	if st, err := os.Stat(dest); err == nil && st.IsDir() {
 		return fetchExisting(dest, repo, commit)
 	}
-	origin := seedOrigin(home, repo)
-	if origin == "" {
-		if Offline() {
-			return "", fmt.Errorf("src: %s is not cached and BASHY_OFFLINE=1 forbids downloading it (install the Sprint 386 seed at %s)",
-				repo, filepath.Join(SeedDir(home), repo))
-		}
-		origin = remote
+	if Offline() && (strings.HasPrefix(origin, "http://") || strings.HasPrefix(origin, "https://") || strings.HasPrefix(origin, "git@")) {
+		return "", fmt.Errorf("src: %s is not cached and BASHY_OFFLINE=1 forbids downloading it (install the Sprint 386 seed at %s)",
+			repo, filepath.Join(SeedDir(home), repo))
 	}
 	if _, err := ygit.Clone(ygit.CloneOptions{URL: origin, Path: dest}); err != nil {
 		_ = os.RemoveAll(dest)
