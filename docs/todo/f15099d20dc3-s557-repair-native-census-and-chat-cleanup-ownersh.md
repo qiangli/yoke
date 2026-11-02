@@ -3,14 +3,17 @@ id: f15099d20dc3
 kind: bug
 title: S557 repair native census and chat cleanup ownership
 seq: 3048
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T19:27:07.399381Z
 weave: 1
 assignee: s557-manager
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:11.548111Z
 ---
 
 Sprint557 migration repair. Work only in assigned isolated workspace. Read local CLAUDE/AGENTS. Preserve all test assertions, coverage, thresholds and deadlines; diagnose before modifying. No release/push/parent pin changes. No heavy/full local builds/suites: bounded targeted tests only GOMAXPROCS=2 GOFLAGS=-p=2, full validation hosted by manager. Commit named files with Sprint: #557 and correct Story/Story-ID trailers and injected BASHY_AGENT. Report exact evidence and limitations. Native run41332670393 Ubuntu workspace: ratchet census omits pkg/nativepath and pkg/nfthelper; chat TestChatGrantSettlesACPPermissionRequest tempdir cleanup directory-not-empty (isolated retry passed). Inspect actual package census; repair missing entries without reducing checks; investigate ownership/worker shutdown before cleanup and add focused regression. Logs /tmp/s557-native-ubuntu-workspace-41332670393.
@@ -51,3 +54,7 @@ GOFLAGS despite selecting the native Linux engine. Its graph query needs an
 explicit native build-tag contract. The delegate heartbeat's 150ms failure is
 retained; its five 40ms shell sleeps do not distinguish scheduling stalls from
 post-output cleanup latency. No timeout or assertion weakening was applied.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

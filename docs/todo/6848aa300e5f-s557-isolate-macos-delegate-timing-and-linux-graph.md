@@ -3,13 +3,16 @@ id: 6848aa300e5f
 kind: bug
 title: S557 isolate macOS delegate timing and Linux graph fixture environments
 seq: 3049
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T22:19:00.177881Z
 assignee: s557-public-tooling
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:11.658986Z
 ---
 
 Remainingdeterministicnative41332670393 macOSfailures: TestDelegateVendorContract/claude/stderr_resets_idle hits150ms idle despite ticks; TestLinuxEngineSecureJoinIsPermissive crossGoListinheritsremote tags causingpkg/api/server allfilesexcluded. Repairdeterministicfixturetiming/environment preservingidle semantics/timeouts and Linuxenginegraphaudit. Coordinatewith lifecycleworker: onlydelegate_guard/testfixture andmplfreefiles, nochatlifecycle. Isolatedworktree, boundedtests, nofullsuites, committrailers,nopush.
@@ -38,3 +41,7 @@ Delivery evidence:
   These are local bounded measurements, not a claim about arbitrary host
   scheduling stalls. No production timeout or chat lifecycle code changed.
   Full hosted native rerun remains required for integration acceptance.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.
