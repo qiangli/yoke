@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -316,12 +317,14 @@ func vmValue(v any) (float64, error) {
 	return f, nil
 }
 
-// promLabels renders labels in Prometheus text form.
+// promLabels renders labels in stable key order, so identical series have
+// identical label text regardless of map iteration order.
 func promLabels(labels map[string]string) string {
 	keys := make([]string, 0, len(labels))
 	for k := range labels {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	var b strings.Builder
 	for i, k := range keys {
 		if i > 0 {

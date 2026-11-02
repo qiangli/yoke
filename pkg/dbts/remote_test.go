@@ -179,7 +179,9 @@ func TestTSRemoteIngestRendersPrometheusText(t *testing.T) {
 		t.Fatalf("imports = %d", len(v.imports))
 	}
 	body := v.imports[0]
-	if !strings.Contains(body, `http_requests{job="a\"b",path="/x"} 12.5 1725148800000`) {
+	want := `http_requests{job="a\"b",path="/x"} 12.5 1725148800000` + "\n" +
+		`http_requests{job="a\"b",path="/x"} 13 1725148860000` + "\n"
+	if body != want {
 		t.Fatalf("body:\n%s", body)
 	}
 	if v.query != "" {
@@ -218,5 +220,22 @@ func TestTSRemoteOpsThroughLifecycle(t *testing.T) {
 	}
 	if s := Spec(OpRemoteIngest, dbstore.Memory, 1); len(s.Modes) != 1 || s.Modes[0] != "remote" {
 		t.Fatalf("ingest spec = %+v", s)
+	}
+}
+
+func TestPromLabelsStableEscaping(t *testing.T) {
+	for _, keys := range [][]string{{"job", "path", "escape"}, {"escape", "job", "path"}, {"path", "escape", "job"}} {
+		values := map[string]string{"job": `a"b`, "path": "/x", "escape": "\\\n\""}
+		labels := make(map[string]string)
+		for _, key := range keys {
+			labels[key] = values[key]
+		}
+		want := `escape="\\\n\"",job="a\"b",path="/x"`
+		if got := promLabels(labels); got != want {
+			t.Fatalf("labels %v: %q, want %q", keys, got, want)
+		}
+	}
+	if got := promLabels(nil); got != "" {
+		t.Fatalf("empty labels: %q", got)
 	}
 }
