@@ -243,8 +243,9 @@ func TestVecCollectionsAndItemsBothModes(t *testing.T) {
 		if c := f.code(OpRm, Input{Collection: "e", ID: "a"}, false); c != "not_found" {
 			t.Fatalf("rm twice: %s", c)
 		}
-		if got := f.search(Input{Collection: "e", Vector: json.RawMessage(`[2,0,0,0]`)}); strings.Contains(got, "a@") {
-			t.Fatalf("deleted vector still searchable: %s", got)
+		hits := f.must(OpSearch, Input{Collection: "e", Vector: json.RawMessage(`[2,0,0,0]`)}, false).Result.(map[string]any)["hits"].([]Hit)
+		if searchHitsContainID(hits, "a") {
+			t.Fatalf("deleted vector still searchable: %+v", hits)
 		}
 		// Unknown fields for an op are refused, never ignored; there is no
 		// provider field, so a provider can never be chosen implicitly.
@@ -539,5 +540,26 @@ func TestSpecDeclaresEffects(t *testing.T) {
 	}
 	if _, _, _, err := dblifecycle.LookupCategoryOp(OpSearch, json.RawMessage(`{"filter":{"field":"a'","op":"eq","value":1}}`)); dbstore.Code(err) != "invalid_input" {
 		t.Fatalf("malformed filter admitted: %v", err)
+	}
+}
+
+// Compare identities, not suffixes of the diagnostic id@distance rendering.
+func searchHitsContainID(hits []Hit, id string) bool {
+	for _, hit := range hits {
+		if hit.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSearchHitsContainExactID(t *testing.T) {
+	hits := []Hit{{ID: "9be2916491880c77444f68cceb9f8d5a"}, {ID: "b"}}
+	if searchHitsContainID(hits, "a") {
+		t.Fatal("unrelated generated ID ending in a matched deleted ID a")
+	}
+	hits = append(hits, Hit{ID: "a"})
+	if !searchHitsContainID(hits, "a") {
+		t.Fatal("actual deleted ID a was not detected")
 	}
 }
