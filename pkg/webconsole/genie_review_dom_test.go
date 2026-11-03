@@ -208,11 +208,19 @@ func TestDOMGenieReviewBar(t *testing.T) {
 	if got := text(`document.querySelector('[data-bgn-review-note]').textContent`); !strings.Contains(got, "This page is protected") || !strings.Contains(got, c.ID) {
 		t.Errorf("protected note: %q", got)
 	}
-	// shape.js fetches the candidate list independently of the Genie banner.
-	// Wait for the actual card, retaining the same exact-text assertion.
-	until(`document.querySelector('#shape-list a.btn') && document.querySelector('#shape-list a.btn').textContent === 'Review in place'`)
-	if got := text(`document.querySelector('#shape-list a.btn') ? document.querySelector('#shape-list a.btn').textContent : ''`); got != "Review in place" {
-		t.Errorf("Shape page card link = %q, want Review in place", got)
+	// The simplified Shape card uses a plain Review link, with its in-place
+	// destination still expressed by the candidate-specific accessible name.
+	// Its fetch is independent of the Genie banner. Check both identity and
+	// destination, then drive the actual link before checking the banner too.
+	reviewSelector := `#shape-list a[aria-label="Review candidate ` + c.ID + ` in place, inside the app"]`
+	reviewNode := `document.querySelector(` + jsonString(reviewSelector) + `)`
+	until(reviewNode + ` && ` + reviewNode + `.textContent === 'Review' && ` + reviewNode + `.href === ` + jsonString(preview))
+	if err := chromedp.Run(ctx, chromedp.Click(reviewSelector), chromedp.WaitVisible(`[data-bgn-review]`)); err != nil {
+		t.Fatal(err)
+	}
+	until(`location.href === ` + jsonString(preview))
+	if err := chromedp.Run(ctx, chromedp.Navigate(base+"/shape/notes/"), chromedp.WaitVisible(`[data-bgn-review-note]`)); err != nil {
+		t.Fatal(err)
 	}
 	if err := chromedp.Run(ctx, chromedp.Click(`[data-bgn-review-note] .bgn-p`), chromedp.WaitVisible(`[data-bgn-review]`)); err != nil {
 		t.Fatal(err)
