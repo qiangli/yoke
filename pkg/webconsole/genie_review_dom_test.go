@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/qiangli/yoke/pkg/shape/contain"
 )
 
 // refusingVerifier refuses the first verification with a reason and passes
@@ -54,7 +56,8 @@ func TestDOMGenieReviewBar(t *testing.T) {
 		Auth: AuthSystem, Source: "registered", Available: true}
 	verifier := &refusingVerifier{}
 	base, ctx, errs := domEnv(t, Options{Panels: []Panel{notes},
-		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Delegate: &fakeShaper{},
+		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Runner: []string{"/bin/sh"},
+			Level: contain.LevelProcess, Delegate: &fakeShaper{},
 			Verifier: verifier, Activator: &fakeActivator{home: home}}})
 
 	// The test's own HTTP client is the same loopback principal as the
@@ -205,6 +208,9 @@ func TestDOMGenieReviewBar(t *testing.T) {
 	if got := text(`document.querySelector('[data-bgn-review-note]').textContent`); !strings.Contains(got, "This page is protected") || !strings.Contains(got, c.ID) {
 		t.Errorf("protected note: %q", got)
 	}
+	// shape.js fetches the candidate list independently of the Genie banner.
+	// Wait for the actual card, retaining the same exact-text assertion.
+	until(`document.querySelector('#shape-list a.btn') && document.querySelector('#shape-list a.btn').textContent === 'Review in place'`)
 	if got := text(`document.querySelector('#shape-list a.btn') ? document.querySelector('#shape-list a.btn').textContent : ''`); got != "Review in place" {
 		t.Errorf("Shape page card link = %q, want Review in place", got)
 	}
