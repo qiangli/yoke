@@ -257,7 +257,7 @@ func (s *sqliteStore) dropBucket(ctx context.Context, bucket string) error {
 	if !has {
 		return fmt.Errorf("%w: bucket %q not found", dbstore.ErrNotFound, bucket)
 	}
-	tx, err := s.db.SQL().BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -450,7 +450,7 @@ func (s *sqliteStore) putObject(ctx context.Context, obj ObjectInfo, data []byte
 		return nil, fmt.Errorf("%w: bucket %q not found", dbstore.ErrNotFound, obj.Bucket)
 	}
 
-	tx, err := s.db.SQL().BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +533,7 @@ func (s *sqliteStore) deleteObject(ctx context.Context, bucket, key, ifRevision 
 	if !has {
 		return false, fmt.Errorf("%w: bucket %q not found", dbstore.ErrNotFound, bucket)
 	}
-	tx, err := s.db.SQL().BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -563,7 +563,7 @@ func (s *sqliteStore) importAtomic(ctx context.Context, replace bool, buckets []
 	if err := s.ensureSchema(ctx); err != nil {
 		return 0, err
 	}
-	tx, err := s.db.SQL().BeginTx(ctx, nil)
+	tx, err := s.beginWrite(ctx)
 	if err != nil {
 		return 0, err
 	}
