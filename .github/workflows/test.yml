@@ -14,6 +14,9 @@ jobs:
         # every platform, no system binaries required.
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      GOMAXPROCS: "2"
+      GOFLAGS: "-p=2"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -28,9 +31,21 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y locales
+          sudo apt-get install -y locales pkg-config libgpgme-dev libbtrfs-dev libassuan-dev libdevmapper-dev libseccomp-dev
           sudo sed -i -E 's/^# *(de_DE ISO-8859-1)/\1/' /etc/locale.gen
           sudo locale-gen
+      # Match the public umbrella native gate and embed-podman.sh: desktop
+      # platforms build the supported remote client with pure-Go signatures.
+      - name: Select desktop native engine graph
+        if: runner.os != 'Linux'
+        shell: bash
+        run: echo 'GOFLAGS=-p=2 -tags=remote,exclude_graphdriver_btrfs,containers_image_openpgp' >> "$GITHUB_ENV"
+      - name: Provision macOS native engine prerequisites
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install pkg-config gpgme
+          pkg-config --exists gpgme
       - name: Configure git identity (weave tests create real commits)
         shell: bash
         run: |
@@ -69,12 +84,15 @@ jobs:
             github.com/qiangli/yoke/external/gotoolchain \
             github.com/qiangli/yoke/external/act \
             github.com/qiangli/yoke/external/gh"
+          # go list emits whitespace-free import paths; expand the package list.
+          # shellcheck disable=SC2086
           go vet $pkgs
           if [ "$RUNNER_OS" = "Windows" ]; then
             # POSIX applets require Unix process, permission, device and path
             # semantics. Compile every test natively here; Linux and Darwin
             # execute the behavioral suite, while Bashy's Windows integration
             # job exercises the portable room, shell and agent surfaces.
+            # shellcheck disable=SC2086
             go test -run '^$' $pkgs
           fi
       # Compile-only Windows checks cannot prove the native resource and
@@ -86,7 +104,6 @@ jobs:
         shell: bash
         env:
           GOMAXPROCS: "2"
-          GOFLAGS: "-p=2"
         run: |
           set -o pipefail
           go test -json -count=1 -timeout 3m ./pkg/resources -run 'Test(CollectLiveHost|CollectSingleSample|HostObservation|ResourceAlert|ResourcesObservationChild)' | tee "$RUNNER_TEMP/windows-resources.jsonl"
@@ -152,7 +169,12 @@ jobs:
       - name: E2E checks (bashy apps console, no browser)
         if: runner.os != 'Windows'
         shell: bash
-        run: go test ./pkg/webconsole -tags e2e -count=1 -timeout 10m
+        run: |
+          tags=e2e
+          if [ "$RUNNER_OS" = macOS ]; then
+            tags=e2e,remote,exclude_graphdriver_btrfs,containers_image_openpgp
+          fi
+          go test ./pkg/webconsole -tags "$tags" -count=1 -timeout 10m
 
       # Browser end-to-end checks for the bashy apps console. These are the only
       # tests that can see the CASCADE, the DOM, and a script that THROWS —
