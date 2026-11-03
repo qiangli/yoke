@@ -148,7 +148,17 @@ jobs:
       - name: Test (no-regression ratchet against test/known-failures.txt)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          YOKE_TEST_EVENTS: ${{ runner.temp }}/yoke-test-events.jsonl
         run: ./scripts/ci-test-gate.sh
+
+      - name: Retain complete primary test measurement
+        if: always() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yoke-test-events-${{ runner.os }}
+          path: ${{ runner.temp }}/yoke-test-events.jsonl
+          if-no-files-found: error
 
       # pkg/provider is a nested module (stdlib-only, Go 1.26 for cloudbox), so
       # the root `go list ./...` above does not include it.
