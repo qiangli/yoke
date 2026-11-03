@@ -62,6 +62,11 @@ func TestS525A10ProductionGateCLI(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
+	// These authored checks are POSIX scripts, and setup seals them with
+	// /bin/sh above. Select that same trusted host interpreter for the real
+	// CLI restore/undo verifier; standalone Yoke CI has no installed bashy.
+	// This uses the supported production selector, not a fake Runner/gate.
+	t.Setenv("BASHY_SHAPE_RUNNER", "/bin/sh")
 	dest, v1, v2, v3, _, narrow, _, broken := s525a10Fixture(t, home)
 	const principal = s525a10Alice
 	const app = s525a10App
