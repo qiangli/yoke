@@ -3,7 +3,6 @@ package scaffold_test
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/provider"
@@ -80,21 +79,5 @@ func TestScaffoldValidateRejectsInvalid(t *testing.T) {
 	}
 	if err := scaffold.Validate(dir); err == nil {
 		t.Fatal("expected error on syntax error")
-	}
-}
-
-func TestExecutableInterpreterArgvRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	interpreter := []string{`C:\Program Files\Git\bin\bash.exe`, "--noprofile"}
-	if err := scaffold.Init(scaffold.Options{Dir: dir, Form: provider.FormExecutable, Name: "test-interpreter", Interpreter: interpreter}); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := scaffold.Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := append(append([]string(nil), interpreter...), "./plugin.sh")
-	if !reflect.DeepEqual(manifest.Argv, want) {
-		t.Fatalf("argv=%q want %q", manifest.Argv, want)
 	}
 }

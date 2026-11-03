@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
-
-	"github.com/qiangli/yoke/pkg/shape/contain"
 )
 
 // refusingVerifier refuses the first verification with a reason and passes
@@ -56,8 +54,7 @@ func TestDOMGenieReviewBar(t *testing.T) {
 		Auth: AuthSystem, Source: "registered", Available: true}
 	verifier := &refusingVerifier{}
 	base, ctx, errs := domEnv(t, Options{Panels: []Panel{notes},
-		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Runner: []string{"/bin/sh"},
-			Level: contain.LevelProcess, Delegate: &fakeShaper{},
+		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Delegate: &fakeShaper{},
 			Verifier: verifier, Activator: &fakeActivator{home: home}}})
 
 	// The test's own HTTP client is the same loopback principal as the
@@ -208,19 +205,8 @@ func TestDOMGenieReviewBar(t *testing.T) {
 	if got := text(`document.querySelector('[data-bgn-review-note]').textContent`); !strings.Contains(got, "This page is protected") || !strings.Contains(got, c.ID) {
 		t.Errorf("protected note: %q", got)
 	}
-	// The simplified Shape card uses a plain Review link, with its in-place
-	// destination still expressed by the candidate-specific accessible name.
-	// Its fetch is independent of the Genie banner. Check both identity and
-	// destination, then drive the actual link before checking the banner too.
-	reviewSelector := `#shape-list a[aria-label="Review candidate ` + c.ID + ` in place, inside the app"]`
-	reviewNode := `document.querySelector(` + jsonString(reviewSelector) + `)`
-	until(reviewNode + ` && ` + reviewNode + `.textContent === 'Review' && ` + reviewNode + `.href === ` + jsonString(preview))
-	if err := chromedp.Run(ctx, chromedp.Click(reviewSelector), chromedp.WaitVisible(`[data-bgn-review]`)); err != nil {
-		t.Fatal(err)
-	}
-	until(`location.href === ` + jsonString(preview))
-	if err := chromedp.Run(ctx, chromedp.Navigate(base+"/shape/notes/"), chromedp.WaitVisible(`[data-bgn-review-note]`)); err != nil {
-		t.Fatal(err)
+	if got := text(`document.querySelector('#shape-list a.btn') ? document.querySelector('#shape-list a.btn').textContent : ''`); got != "Review in place" {
+		t.Errorf("Shape page card link = %q, want Review in place", got)
 	}
 	if err := chromedp.Run(ctx, chromedp.Click(`[data-bgn-review-note] .bgn-p`), chromedp.WaitVisible(`[data-bgn-review]`)); err != nil {
 		t.Fatal(err)

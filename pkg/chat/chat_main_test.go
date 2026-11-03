@@ -28,11 +28,11 @@ func TestMain(m *testing.M) {
 	if isolatedRealHome != "" {
 		isolatedRealShimDir = filepath.Join(isolatedRealHome, ".bashy", "shims")
 	}
-	home, err := os.MkdirTemp("", "yoke-chat-home-*")
+	home, err := os.MkdirTemp("/tmp", "yoke-chat-home-*")
 	if err != nil {
 		panic(err)
 	}
-	shims, err := os.MkdirTemp("", "yoke-chat-shims-*")
+	shims, err := os.MkdirTemp("/tmp", "yoke-chat-shims-*")
 	if err != nil {
 		panic(err)
 	}

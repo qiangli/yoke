@@ -5,9 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/qiangli/yoke/pkg/dblifecycle"
 )
 
 func kvEntries(t *testing.T, doc map[string]any) string {
@@ -80,51 +77,7 @@ func TestIndependentKVSharedOwner(t *testing.T) {
 		t.Fatalf("session start: %v", doc)
 	}
 	session := doc["result"].(map[string]any)["id"].(string)
-	// startSession intentionally detaches its process handle. This test still
-	// owns the child it spawned; retain a fresh handle before requesting stop.
-	// A stop response only acknowledges admission shutdown: Serve writes the
-	// final session metadata after draining its requests.
-	pid := int(doc["result"].(map[string]any)["pid"].(float64))
-	owner, err := os.FindProcess(pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		defer owner.Release()
-		// Even a malformed stop reply must not strand the owned process.
-		reaped := false
-		defer func() {
-			if !reaped {
-				_ = owner.Kill()
-				_, _ = owner.Wait()
-			}
-		}()
-		if code, reply := dbRun(t, root, "", "session", "stop", "--session", session, "--yes"); code != 0 {
-			t.Fatalf("session stop: exit %d: %v", code, reply)
-		}
-		type result struct {
-			state *os.ProcessState
-			err   error
-		}
-		joined := make(chan result, 1)
-		go func() { state, err := owner.Wait(); joined <- result{state, err} }()
-		select {
-		case exit := <-joined:
-			reaped = true
-			if exit.err != nil || exit.state == nil || !exit.state.Success() {
-				t.Fatalf("owner exit: state=%v err=%v", exit.state, exit.err)
-			}
-		case <-time.After(5 * time.Second):
-			_ = owner.Kill()
-			exit := <-joined
-			reaped = true
-			t.Fatalf("owner did not finish shutdown: state=%v err=%v", exit.state, exit.err)
-		}
-		info, err := dblifecycle.ReadSession(session)
-		if err != nil || info.State != "ended" {
-			t.Fatalf("joined owner metadata: state=%q err=%v", info.State, err)
-		}
-	})
+	defer dbRun(t, root, "", "session", "stop", "--session", session, "--yes")
 	m := []string{"--engine", "bbolt", "--mode", "memory", "--session", session, "--name", "kv"}
 	for _, step := range [][]string{
 		{"create"},

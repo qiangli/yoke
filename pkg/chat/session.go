@@ -94,17 +94,12 @@ type Session struct {
 	lastWrite  time.Time
 	// lastSteer is when we last SPOKE to the agent. WaitIdle measures silence from
 	// whichever came later, this or lastWrite — see the comment there.
-	lastSteer    time.Time
-	done         chan struct{}
-	cancel       context.CancelFunc // force-stops the PTY after Close's graceful /quit window
-	relayMu      sync.Mutex
-	relayStopped bool
-	relayCtx     context.Context
-	relayCancel  context.CancelFunc
-	relayDone    chan struct{}
-	exit         int
-	err          error
-	killed       string
+	lastSteer time.Time
+	done      chan struct{}
+	cancel    context.CancelFunc // force-stops the PTY after Close's graceful /quit window
+	exit      int
+	err       error
+	killed    string
 }
 
 // Card is the host-room member id the session joined. It is the session an
@@ -482,7 +477,6 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 			},
 		})
 		reportStarted(err)
-		s.stopRelay() // Join before budget, room, inbox and TTY cleanup.
 		s.mu.Lock()
 		s.exit, s.killed, s.err = exit, killed, err
 		if cmd.Process == nil {
@@ -1023,35 +1017,37 @@ func (s *Session) abortStart() {
 		s.closeACP()
 		return
 	}
-	s.stopRelay()
 	if s.cancel != nil {
 		s.cancel()
 	}
-	<-s.done
+	select {
+	case <-s.done:
+	case <-time.After(3 * time.Second):
+	}
 	_ = os.Remove(s.CtlSock)
 }
 
 func (s *Session) closePTY(grace time.Duration) {
-	s.stopRelay()
 	select {
 	case <-s.done:
 		return
 	default:
 	}
-	quitCtx, cancelQuit := context.WithTimeout(context.Background(), grace)
-	defer cancelQuit()
-	_ = agentpty.BrokerSayContext(quitCtx, s.CtlSock, "/quit")
+	_ = s.Quit()
 	select {
 	case <-s.done:
 		return
-	case <-quitCtx.Done():
+	case <-time.After(grace):
 	}
 	if s.cancel != nil {
 		s.cancel()
 	}
-	// agentpty owns escalation. Returning before its cleanup barrier would
-	// let room/TTY writers escape the session owner.
-	<-s.done
+	// agentpty escalates a cancelled process tree after two seconds. Bound this
+	// wait as well: Close must never deadlock its supervisor on a broken tool.
+	select {
+	case <-s.done:
+	case <-time.After(3 * time.Second):
+	}
 }
 
 // waitReady blocks until the control socket exists, so the first message is not

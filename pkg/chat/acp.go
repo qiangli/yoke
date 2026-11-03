@@ -73,7 +73,6 @@ type acpDriver struct {
 	principal string
 
 	closeOnce sync.Once
-	lifetime  acpLifetime
 }
 
 // acpTurn is one completed prompt: what the agent said, and why it stopped.
@@ -203,12 +202,9 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		return nil, true, budgetErr
 	}
 	s.budgetWorks = append(s.budgetWorks, budgetWork)
-	drv.lifetime.init(ctx)
 	handler := newACPHandler(drv, agentPermission(name, catalog))
 	client, err := acp.NewClient(ctx, handler, cmd)
 	if err != nil {
-		drv.lifetime.stop()
-		drv.lifetime.wait()
 		if cmd.Process == nil {
 			_ = budgetWork.abort()
 		} else {
@@ -219,9 +215,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	drv.client = client
 	sid, err := client.NewSession(ctx, cwd)
 	if err != nil {
-		drv.lifetime.stop()
 		_ = client.Close()
-		drv.lifetime.wait()
 		_ = budgetWork.finish("", err)
 		return nil, true, fmt.Errorf("chat: %s would not open an ACP session: %w", l.Binding(), err)
 	}
@@ -298,19 +292,9 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 // the agent has been asked, and WaitIdle is where a caller waits for the answer
 // — the same shape the pty path has, so callers do not change.
 func (d *acpDriver) prompt(text string) error {
-	parent := d.ctx
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, leave := d.lifetime.enter(parent)
-	if leave == nil {
-		return context.Canceled
-	}
-
 	d.mu.Lock()
 	if d.active {
 		d.mu.Unlock()
-		leave()
 		return fmt.Errorf("chat: ACP turn is still active")
 	}
 	d.active = true
@@ -326,8 +310,7 @@ func (d *acpDriver) prompt(text string) error {
 	d.mu.Unlock()
 
 	go func() {
-		defer leave()
-		callCtx, endObservation := startGenAIObservation(ctx, d.launch)
+		callCtx, endObservation := startGenAIObservation(d.ctx, d.launch)
 		reason, err := d.client.Prompt(callCtx, d.session, text)
 		d.flushThought()
 		d.mu.Lock()
@@ -358,8 +341,6 @@ func (s *Session) waitACPTurn(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-s.done:
-		return nil
 	case t := <-s.acp.end:
 		s.mu.Lock()
 		// The answer arrives as DATA. Turn() prefers it over the buffer for the
@@ -404,12 +385,8 @@ func (s *Session) Rung() agentlaunch.Rung {
 // subprocess, record what the conversation spent, and leave the room.
 func (s *Session) closeACP() {
 	s.acp.closeOnce.Do(func() {
-		s.acp.lifetime.stop()
-		// Closing the transport releases pending protocol writes/requests.
-		// Cancel notifications cannot be awaited on an unresponsive peer.
+		_ = s.acp.client.Cancel(context.Background(), s.acp.session)
 		_ = s.acp.client.Close()
-		s.stopRelay()
-		s.acp.lifetime.wait()
 		s.mu.Lock()
 		spoke := s.buf.String()
 		s.mu.Unlock()
@@ -455,14 +432,6 @@ func newACPHandler(d *acpDriver, perm string) *acpHandler {
 }
 
 func (h *acpHandler) RequestPermission(ctx context.Context, req acp.PermissionRequest) (acp.PermissionResponse, error) {
-	if h.d != nil {
-		owned, leave := h.d.lifetime.enter(ctx)
-		if leave == nil {
-			return acp.PermissionResponse{Cancelled: true}, context.Canceled
-		}
-		defer leave()
-		ctx = owned
-	}
 	var (
 		resp acp.PermissionResponse
 		err  error
@@ -492,12 +461,7 @@ func agentPermission(name string, catalog *fleet.Catalog) string {
 	return ""
 }
 
-func (h *acpHandler) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
-	_, leave := h.d.lifetime.enter(ctx)
-	if leave == nil {
-		return context.Canceled
-	}
-	defer leave()
+func (h *acpHandler) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
 	u := n.Update
 	if u.AgentThoughtChunk == nil {
 		// Reasoning streams in many small chunks; it is recorded as ONE entry

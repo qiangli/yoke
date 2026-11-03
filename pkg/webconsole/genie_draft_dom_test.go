@@ -9,14 +9,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
-
-	"github.com/qiangli/yoke/pkg/shape/contain"
 )
 
 // TestDOMGenieEditSession drives the edit session (S526.B1h) in a real
@@ -38,18 +34,8 @@ func TestDOMGenieEditSession(t *testing.T) {
 		Auth: AuthSystem, Source: "registered", Available: true}
 	verifier := &switchVerifier{pass: false, detail: "smoke check failed: the heading must keep its text"}
 	base, ctx, errs := domEnv(t, Options{Panels: []Panel{notes},
-		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Runner: []string{"/bin/sh"},
-			Level: contain.LevelProcess, Delegate: &fakeShaper{},
+		Shape: ShapeOptions{Home: home, WorkRoot: t.TempDir(), Delegate: &fakeShaper{},
 			Verifier: verifier, Activator: &fakeActivator{home: home}}})
-	// Failure-only evidence distinguishes an ignored/intercepted click from
-	// an Undo HTTP failure without changing the interaction itself.
-	var undoResponses, undoStatus atomic.Int64
-	chromedp.ListenTarget(ctx, func(ev any) {
-		if e, ok := ev.(*network.EventResponseReceived); ok && e.Response.URL == base+"/api/shape/notes/draft/undo" {
-			undoResponses.Add(1)
-			undoStatus.Store(e.Response.Status)
-		}
-	})
 	client := &http.Client{Timeout: 10 * time.Second}
 	draftState := func() (int, draftView) {
 		t.Helper()
@@ -76,8 +62,8 @@ func TestDOMGenieEditSession(t *testing.T) {
 			}
 			if time.Now().After(deadline) {
 				var bar string
-				_ = chromedp.Run(ctx, chromedp.Evaluate(`((document.querySelector('.bgn-bar') || {}).textContent || '') + ' @ ' + location.href + ' draft=' + localStorage.getItem('bashy.genie.draft') + ' controls=' + JSON.stringify(Array.from(document.querySelectorAll('[data-bgn-draft] button')).map(b => ({label:b.getAttribute('aria-label'),disabled:b.disabled}))) + ' overlays=' + JSON.stringify(Array.from(document.querySelectorAll('.bgn-overlay')).map(n => ({hidden:n.hidden,text:n.textContent.slice(0,120)})))`, &bar))
-				t.Fatalf("never true: %s (bar %q; undo responses=%d last status=%d; js errors %q)", expr, bar, undoResponses.Load(), undoStatus.Load(), errs())
+				_ = chromedp.Run(ctx, chromedp.Evaluate(`((document.querySelector('.bgn-bar') || {}).textContent || '') + ' @ ' + location.href + ' draft=' + localStorage.getItem('bashy.genie.draft')`, &bar))
+				t.Fatalf("never true: %s (bar %q; js errors %q)", expr, bar, errs())
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -156,15 +142,6 @@ func TestDOMGenieEditSession(t *testing.T) {
 	}
 
 	// Undo from the bar: the heading is the live one again, redo is on.
-	// A refreshed heading is not an actionable-control boundary: the wish
-	// panel and disabled controls can still be settling. Use the real hit
-	// target before the pointer click, without bypassing the browser UI.
-	until(`(() => {
-		const b = document.querySelector('[data-bgn-draft] .bgn-b[aria-label^="Undo"]');
-		if (!b || b.disabled) return false;
-		const r = b.getBoundingClientRect();
-		return r.width > 0 && r.height > 0 && b.contains(document.elementFromPoint(r.x + r.width/2, r.y + r.height/2));
-	})()`)
 	if err := chromedp.Run(ctx, chromedp.Click(`[data-bgn-draft] .bgn-b[aria-label^="Undo"]`)); err != nil {
 		t.Fatal(err)
 	}

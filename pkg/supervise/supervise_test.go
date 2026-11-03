@@ -370,11 +370,11 @@ func TestHelpMakesGateAndSupervisorOptional(t *testing.T) {
 // chat.ensureShims via agentChildEnv do not poison ~/.bashy/shims with a
 // go-build *.test binary.
 func TestMain(m *testing.M) {
-	home, err := os.MkdirTemp("", "yoke-supervise-home-*")
+	home, err := os.MkdirTemp("/tmp", "yoke-supervise-home-*")
 	if err != nil {
 		panic(err)
 	}
-	shims, err := os.MkdirTemp("", "yoke-supervise-shims-*")
+	shims, err := os.MkdirTemp("/tmp", "yoke-supervise-shims-*")
 	if err != nil {
 		panic(err)
 	}
@@ -387,11 +387,10 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("BASHY_SHIM_DIR", filepath.Join(shims, "shims")); err != nil {
 		panic(err)
 	}
-	if err := os.Setenv(chat.UnsafeLaunchEnv, "1"); err != nil {
-		panic(err)
-	}
-	code := m.Run()
-	_ = os.RemoveAll(home)
-	_ = os.RemoveAll(shims)
-	os.Exit(code)
+	defer func() {
+		_ = os.RemoveAll(home)
+		_ = os.RemoveAll(shims)
+	}()
+	os.Setenv(chat.UnsafeLaunchEnv, "1")
+	os.Exit(m.Run())
 }

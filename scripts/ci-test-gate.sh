@@ -56,18 +56,7 @@ github.com/qiangli/yoke/external/act
 github.com/qiangli/yoke/external/gh"
 
 events=$(mktemp)
-# shellcheck disable=SC2329 # Invoked by the EXIT trap.
-cleanup_events() {
-    local status=$?
-    # Keep the complete primary measurement when CI requests an artifact;
-    # console excerpts alone can omit the actual failing nested assertion.
-    if [ -n "${YOKE_TEST_EVENTS:-}" ]; then
-        cp "$events" "$YOKE_TEST_EVENTS" || status=2
-    fi
-    rm -f "$events" "$events".*
-    exit "$status"
-}
-trap cleanup_events EXIT
+trap 'rm -f "$events" "$events".*' EXIT
 # -json so a test name is attributed to its package even when packages run in
 # parallel. Failure is expected here; the ratchet below decides the verdict.
 # Serial pkg/weave exceeded Go's default 10m package timeout.

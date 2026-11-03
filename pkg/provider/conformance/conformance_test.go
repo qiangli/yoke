@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -322,7 +321,7 @@ func TestConformanceDetectsDestroyForStop(t *testing.T) {
 
 	t.Run("executable", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := scaffold.Init(scaffold.Options{Dir: dir, Form: provider.FormExecutable, Name: "wrong-exec", Interpreter: scaffoldInterpreter(t)}); err != nil {
+		if err := scaffold.Init(scaffold.Options{Dir: dir, Form: provider.FormExecutable, Name: "wrong-exec"}); err != nil {
 			t.Fatal(err)
 		}
 		rewritePluginStop(t, dir)
@@ -365,7 +364,7 @@ func rewritePluginStop(t *testing.T, dir string) {
 // against its own plugin, with no source change.
 func TestScaffoldExecutablePassesConformance(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Init(scaffold.Options{Dir: dir, Form: provider.FormExecutable, Name: "scaffold-exec", Interpreter: scaffoldInterpreter(t)}); err != nil {
+	if err := scaffold.Init(scaffold.Options{Dir: dir, Form: provider.FormExecutable, Name: "scaffold-exec"}); err != nil {
 		t.Fatalf("scaffold.Init failed: %v", err)
 	}
 	if err := scaffold.Validate(dir); err != nil {
@@ -375,23 +374,10 @@ func TestScaffoldExecutablePassesConformance(t *testing.T) {
 		return executableSetup(t, dir, fake)
 	}, nil)
 	liveDir := t.TempDir()
-	if err := scaffold.Init(scaffold.Options{Dir: liveDir, Form: provider.FormExecutable, Name: "scaffold-exec-live", Interpreter: scaffoldInterpreter(t)}); err != nil {
+	if err := scaffold.Init(scaffold.Options{Dir: liveDir, Form: provider.FormExecutable, Name: "scaffold-exec-live"}); err != nil {
 		t.Fatal(err)
 	}
 	conformance.Run(t, func(t *testing.T, fake *conformance.FakeAPI) conformance.Setup {
 		return executableSetup(t, liveDir, fake)
 	}, nil, conformance.WithLive("scaffold-exec-live"))
-}
-
-func scaffoldInterpreter(t *testing.T) []string {
-	t.Helper()
-	shell := os.Getenv("PROVIDER_TEST_SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-	resolved, err := exec.LookPath(shell)
-	if err != nil {
-		t.Fatalf("executable scaffold requires a POSIX interpreter (set PROVIDER_TEST_SHELL): %v", err)
-	}
-	return []string{resolved}
 }
