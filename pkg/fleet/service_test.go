@@ -77,7 +77,7 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	if meet, _ := cat.Service("meet"); !reflect.DeepEqual(meet.Exec, []string{"bashy", "meet", "serve", "--port", "{port}", "--bind", "{bind}"}) {
 		t.Errorf("meet exec = %v, want foreground serve", meet.Exec)
 	}
-	if hub, _ := cat.Service("browser-hub"); !reflect.DeepEqual(hub.Exec, []string{"bashy", "browser", "--mode", "live", "hub"}) || hub.Enabled {
+	if hub, _ := cat.Service("browser-hub"); !reflect.DeepEqual(hub.Exec, []string{"bashy", "browser", "--mode", "live", "--live-port", "{port}", "hub"}) || hub.Enabled {
 		t.Errorf("browser-hub exec = %v enabled = %v, want opt-in foreground live hub", hub.Exec, hub.Enabled)
 	}
 	if sdlc, _ := cat.Service("sdlc"); !reflect.DeepEqual(sdlc.Exec, []string{"bashy", "sdlc", "serve", "--interval", "{settings.interval}"}) {

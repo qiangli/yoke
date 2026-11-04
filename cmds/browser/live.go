@@ -19,10 +19,13 @@ import (
 // process is signalled. The already-installed Chrome extension connects
 // to ws://127.0.0.1:<port>/ws; subsequent `bashy browser --mode live
 // <action>` calls (or POSTs to /dispatch) drive the connected tab.
-func browserHub(rc *tool.RunContext, ctx context.Context, args []string, asJSON bool) int {
+func browserHub(rc *tool.RunContext, ctx context.Context, args []string, livePort int, asJSON bool) int {
 	fs := flag.NewFlagSet("hub", flag.ContinueOnError)
 	fs.SetOutput(rc.Err)
-	port := fs.Int("port", live.DefaultPort, "loopback port the extension connects to")
+	// The global --live-port is the hub port: the top-level parser takes
+	// GNU-interspersed flags, so `hub --port N` never reaches this flag set
+	// (S563 F18). --port stays for `hub -- --port N`.
+	port := fs.Int("port", livePort, "loopback port the extension connects to (default: --live-port)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

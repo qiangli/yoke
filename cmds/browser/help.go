@@ -245,8 +245,8 @@ var subcommands = map[string]subcommand{
 		Out:  "the body on stdout; --json emits {url,status,status_code,headers,body,truncated}",
 	},
 	"hub": {
-		Name: "hub", Args: "[--port N]",
-		One:  "run the live-mode WebSocket hub in the foreground",
+		Name: "hub", Args: "",
+		One:  "run the live-mode WebSocket hub in the foreground on --live-port (default 58082)",
 		Mode: "live",
 		Out:  "progress on stdout, diagnostics on stderr (this is the ONLY subcommand that logs)",
 	},

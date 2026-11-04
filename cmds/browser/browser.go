@@ -163,7 +163,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Out, "stopped probe browser at %s\n", *probeURL)
 		return 0
 	case "hub":
-		return browserHub(rc, ctx, operands[1:], *asJSON)
+		return browserHub(rc, ctx, operands[1:], *livePort, *asJSON)
 	case "setup":
 		return browserSetup(rc, operands[1:], *asJSON, *noOpen)
 	case "fetch":
