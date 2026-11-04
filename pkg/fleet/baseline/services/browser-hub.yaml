@@ -1,0 +1,18 @@
+name: browser-hub
+kind: service
+description: Live-mode browser hub — lets agents drive the owner's real, logged-in Chrome through the Bashy MV3 extension (`bashy browser --mode live ...`); start it from the outpost admin when needed
+exec: [bashy, browser, --mode, live, hub]  # the hub listens on 127.0.0.1:58082 (fixed; `hub --port` is not accepted yet, S563 F18)
+ports:
+  - name: ws
+    port: 58082
+    bind: loopback
+health:
+  tcp: true
+  interval: 10s
+  timeout: 2s
+  failures: 3
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+enabled: false

@@ -34,6 +34,7 @@ type kv = map[string]string
 var serviceDefaultsGolden = map[string]serviceDefaultGolden{
 	"actrunner":     {false, "opt-in: the runner joins only when the operator points it at work", kv{"forge_unit": "loom", "labels": "host:host", "sandbox": "false", "docker_host": ""}},
 	"apps":          {true, "default-on: paired hosts need the human front door after an upgrade", kv{"pair": "false", "launcher": ""}},
+	"browser-hub":   {false, "opt-in: drives the owner's real logged-in Chrome; started from the outpost admin when needed", nil},
 	"events":        {false, "opt-in: the event bus has no subscriber until the operator wires one", nil},
 	"files":         {true, "default-on: pre-418 FilesOn defaulted on; embedded file manager is base host", kv{"scope": "", "allow_write": "false"}},
 	"headlamp":      {false, "opt-in: the cluster dashboard needs an operator-attached cluster", kv{"kubeconfig": "", "namespace": "headlamp", "target": "svc/headlamp"}},

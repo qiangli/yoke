@@ -14,7 +14,7 @@ import (
 
 // Sprint 418 S15 (story d1d045dd536f): service units in the registry rings.
 
-var builtinUnits = []string{"actrunner", "apps", "events", "files", "headlamp", "index", "kopia", "lan-inference", "llm", "loom", "meet",
+var builtinUnits = []string{"actrunner", "apps", "browser-hub", "events", "files", "headlamp", "index", "kopia", "lan-inference", "llm", "loom", "meet",
 	"ollama", "ollama-pool", "otel", "otel-stack", "podman", "sandbox", "schedule", "sdlc", "seaweedfs", "shard", "warm", "ycode", "zot"}
 
 func serviceOpts(root string) []Option {
@@ -62,6 +62,7 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	ports := map[string]int{
 		"apps": 22749, "meet": 8637, "llm": 24556, "loom": 31880,
 		"zot": 5000, "seaweedfs": 8333, "kopia": 51515, "otel-stack": 31415,
+		"browser-hub": 58082,
 	}
 	cat := New(serviceOpts(root)...)
 	for name, want := range ports {
@@ -75,6 +76,9 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	}
 	if meet, _ := cat.Service("meet"); !reflect.DeepEqual(meet.Exec, []string{"bashy", "meet", "serve", "--port", "{port}", "--bind", "{bind}"}) {
 		t.Errorf("meet exec = %v, want foreground serve", meet.Exec)
+	}
+	if hub, _ := cat.Service("browser-hub"); !reflect.DeepEqual(hub.Exec, []string{"bashy", "browser", "--mode", "live", "hub"}) || hub.Enabled {
+		t.Errorf("browser-hub exec = %v enabled = %v, want opt-in foreground live hub", hub.Exec, hub.Enabled)
 	}
 	if sdlc, _ := cat.Service("sdlc"); !reflect.DeepEqual(sdlc.Exec, []string{"bashy", "sdlc", "serve", "--interval", "{settings.interval}"}) {
 		t.Errorf("sdlc exec = %v, want foreground serve", sdlc.Exec)
