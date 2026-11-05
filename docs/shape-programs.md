@@ -10,6 +10,15 @@ shaping:
   test: [go, test, -json, ./...]
 ```
 
+The managed source must contain complete local Git history. The current local
+clone transport cannot serve a shallow boundary consistently across candidate
+creation, verification and activation. A shallow source is refused before a
+candidate or tracking item is created. Shaping never fetches upstream history
+implicitly. The operator may explicitly fetch full history from the source's
+trusted upstream (`git fetch --unshallow`), preserving its selected commit/tree,
+and retry. A refused attempt remains a failure; this does not substitute a
+source snapshot or change an installed artifact's identity.
+
 Use the existing app `--set` interface to update this registry policy. The
 candidate cannot supply or replace it. Build and test are required argv arrays;
 `{output}` is the binary destination (or a container build's image-ID receipt),

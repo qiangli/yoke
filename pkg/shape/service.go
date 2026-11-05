@@ -327,6 +327,9 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if e != nil {
 		return Candidate{}, e
 	}
+	if e = shapeverify.RequireCompleteSource(s.App.SourceDir); e != nil {
+		return Candidate{}, e
+	}
 	var id [8]byte
 	if _, e = rand.Read(id[:]); e != nil {
 		return Candidate{}, e

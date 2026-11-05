@@ -437,6 +437,9 @@ func capText(effects []string) string {
 // directions: nothing it does reaches the source repository, and nothing
 // in it can follow a remote back to one.
 func IsolatedClone(repo, rev string) (string, error) {
+	if err := RequireCompleteSource(repo); err != nil {
+		return "", err
+	}
 	dir, err := os.MkdirTemp("", "shape-verify-")
 	if err != nil {
 		return "", err

@@ -9,6 +9,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/qiangli/yoke/pkg/shape/appserver"
+	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"io"
 	"os"
 	"path/filepath"
@@ -115,6 +116,9 @@ func BriefWithExtra(app string, w Wish, extra string) string {
 // cloneAt makes an isolated clone of src detached at rev. Branches and the
 // shaping refs are fetched so a principal's revision is reachable.
 func CloneAt(ctx context.Context, src, dst, rev string) (*gogit.Repository, error) {
+	if e := shapeverify.RequireCompleteSource(src); e != nil {
+		return nil, e
+	}
 	r, err := gogit.PlainInit(dst, false)
 	if err != nil {
 		return nil, err
