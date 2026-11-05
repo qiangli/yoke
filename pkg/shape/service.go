@@ -692,6 +692,20 @@ func (s Service) VerifyRecord(ctx context.Context, caller Caller, c *Candidate, 
 		return e
 	}
 	defer l.Release()
+	// Legacy web records predate tracking identity. Fill only missing fields
+	// from its authenticated owner after checking the record belongs to that scope.
+	if c == nil || c.App != s.App.Name || c.Principal != caller.Principal {
+		return fs.ErrNotExist
+	}
+	if strings.TrimSpace(caller.Actor) == "" {
+		return errors.New("shape: candidate verification needs an authenticated actor")
+	}
+	if c.Actor == "" {
+		c.Actor = c.Principal
+	}
+	if c.RepresentedUser == "" {
+		c.RepresentedUser = caller.Principal
+	}
 	return s.verify(ctx, c, dir)
 }
 

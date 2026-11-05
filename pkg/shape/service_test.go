@@ -308,3 +308,79 @@ func TestServiceActivationSwitchThenErrorIsReconciled(t *testing.T) {
 		t.Fatalf("retry %+v %v calls %d", again, e, a.calls)
 	}
 }
+
+func TestServiceLegacyRecordKeepsAuthenticatedOwnerAttribution(t *testing.T) {
+	s, caller, input, _, _ := testService(t)
+	ctx := context.Background()
+	candidate, e := s.Import(ctx, caller, Wish{Request: "legacy candidate"}, input)
+	if e != nil {
+		t.Fatal(e)
+	}
+	dir, e := s.CandidateDir(caller.Principal, candidate.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	candidate.Actor = ""
+	candidate.RepresentedUser = ""
+	candidate.Agent = "original-generator"
+	candidate.Receipt = "original-receipt"
+	if e = SaveCandidate(dir, candidate); e != nil {
+		t.Fatal(e)
+	}
+	caller.Actor = "authenticated-device"
+	tracked := 0
+	expectedActor := caller.Principal
+	s.Options.Track = func(_ context.Context, c *Candidate) error {
+		tracked++
+		if c.Actor != expectedActor || c.RepresentedUser != caller.Principal {
+			t.Fatalf("untrusted tracking identity: %+v", c)
+		}
+		return nil
+	}
+	if e = s.VerifyRecord(ctx, caller, &candidate, dir); e != nil {
+		t.Fatal(e)
+	}
+	stored, e := s.Show(ctx, caller, candidate.ID)
+	if e != nil || stored.Actor != caller.Principal || stored.RepresentedUser != caller.Principal || stored.Agent != "original-generator" || stored.Receipt != "original-receipt" {
+		t.Fatalf("identity not persisted: %+v %v", stored, e)
+	}
+	caller.Actor = "later-device"
+	if e = s.VerifyRecord(ctx, caller, &candidate, dir); e != nil {
+		t.Fatal(e)
+	}
+	if candidate.Actor != caller.Principal {
+		t.Fatal("original actor rewritten")
+	}
+	candidate.Actor = "original-agent"
+	expectedActor = candidate.Actor
+	if e = s.VerifyRecord(ctx, caller, &candidate, dir); e != nil {
+		t.Fatal(e)
+	}
+	if candidate.Actor != "original-agent" || candidate.Agent != "original-generator" || candidate.Receipt != "original-receipt" {
+		t.Fatal("existing provenance rewritten")
+	}
+	for _, field := range []string{"app", "principal", "missing-actor", "missing-authenticated-actor"} {
+		t.Run(field, func(t *testing.T) {
+			bad := candidate
+			scope := caller
+			switch field {
+			case "app":
+				bad.App = "other"
+			case "principal":
+				bad.Principal = "bob"
+			case "missing-authenticated-actor":
+				scope.Actor = ""
+			case "missing-actor":
+				bad.Actor = ""
+				scope.Actor = ""
+			}
+			before := tracked
+			if e = s.VerifyRecord(ctx, scope, &bad, dir); e == nil {
+				t.Fatal("unsafe legacy record accepted")
+			}
+			if tracked != before {
+				t.Fatal("unsafe record reached tracking")
+			}
+		})
+	}
+}

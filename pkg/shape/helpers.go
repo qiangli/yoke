@@ -286,8 +286,14 @@ func TouchesProtected(work, base, rev string, paths []string) error {
 		}
 		ae, x := at.FindEntry(p)
 		be, y := bt.FindEntry(p)
-		if (x == nil) != (y == nil) || (x == nil && ae.Hash != be.Hash) {
-			bad = append(bad, p)
+		switch {
+		case x != nil && y != nil:
+		case x == nil && y != nil:
+			bad = append(bad, p+" (dropped)")
+		case x != nil && y == nil:
+			bad = append(bad, p+" (added)")
+		case ae.Hash != be.Hash:
+			bad = append(bad, p+" (overridden)")
 		}
 	}
 	if len(bad) > 0 {
