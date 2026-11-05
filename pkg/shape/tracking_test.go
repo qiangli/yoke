@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/issue"
+	verifyevidence "github.com/qiangli/yoke/pkg/shape/evidence"
 	"github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -41,7 +42,7 @@ func TestTrackerCreatesOneOrdinaryTodoAndUpdatesEvidence(t *testing.T) {
 		t.Fatalf("got %d tracked items", len(items))
 	}
 	got := items[0]
-	if got.Sprint != 0 || got.SprintID != "" || got.Status != todo.StatusTodo || got.Origin != "shape" || len(got.Shape) != 1 || got.Shape[0] != change {
+	if got.Sprint != 0 || got.SprintID != "" || got.Status != todo.StatusTodo || got.Origin != "shape" || len(got.Shape) != 1 || got.Shape[0].App != change.App || got.Shape[0].Version != change.Version || got.Shape[0].Evidence != "shape-evidence:"+change.Version {
 		t.Fatalf("bad item %#v", got)
 	}
 }
@@ -105,7 +106,7 @@ func TestTrackingCallbackKeepsStoreAndReciprocalLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(item.Shape) != 1 || item.Shape[0].Version != "version" || item.Shape[0].Evidence != "evidence" {
+	if len(item.Shape) != 1 || item.Shape[0].Version != "version" || item.Shape[0].Evidence != "shape-evidence:version" {
 		t.Fatalf("missing reciprocal evidence %#v", item)
 	}
 	c.Story = "abc"
@@ -161,5 +162,42 @@ func TestTrackingAutomaticTodoUsesConfiguredHome(t *testing.T) {
 	items, err := (&issue.Store{Root: want, Sub: "."}).List()
 	if err != nil || len(items) != 1 {
 		t.Fatalf("ordinary todo missing: %v %#v", err, items)
+	}
+}
+
+func TestTrackingEvidenceLocatorContainsNoPrivatePath(t *testing.T) {
+	home := t.TempDir()
+	privatePath := filepath.Join(home, "private", "evidence.json")
+	store := &issue.Store{Root: t.TempDir()}
+	change := trackedChange("1234567890abcdef")
+	change.Version = strings.Repeat("a", 40)
+	change.Evidence = privatePath
+	ref, err := (Tracker{Store: store}).Record(context.Background(), change, "Change greeting", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.Resolve(strings.TrimPrefix(ref, "todo:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := item.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), home) || strings.Contains(string(encoded), privatePath) || item.Shape[0].Evidence != "shape-evidence:"+change.Version {
+		t.Fatalf("private locator escaped into public item: %s", encoded)
+	}
+	got, err := ResolveShapeEvidence(home, item.Shape[0].Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := verifyevidence.Path(home, change.Version)
+	if got != want {
+		t.Fatalf("resolver differs from verifier location: %s, want %s", got, want)
+	}
+	for _, bad := range []string{"shape-evidence:../private", "shape-evidence:/private", "shape-evidence:a\\b", "/private/evidence.json"} {
+		if _, err := ResolveShapeEvidence(home, bad); err == nil {
+			t.Fatalf("unsafe locator accepted: %q", bad)
+		}
 	}
 }

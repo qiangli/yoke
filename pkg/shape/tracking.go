@@ -11,6 +11,8 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/issue"
+	"github.com/qiangli/yoke/pkg/shape/evidence"
+	"github.com/qiangli/yoke/pkg/src"
 	"github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -101,12 +103,26 @@ func (t Tracker) Record(ctx context.Context, change issue.ShapeChange, request, 
 			if change.Evidence == "" {
 				change.Evidence = previous.Evidence
 			}
+			if change.Evidence != "" {
+				var err error
+				change.Evidence, err = ShapeEvidenceReference(change.Version)
+				if err != nil {
+					return "", err
+				}
+			}
 			item.Shape[i] = change
 			found = true
 			break
 		}
 	}
 	if !found {
+		if change.Evidence != "" {
+			var err error
+			change.Evidence, err = ShapeEvidenceReference(change.Version)
+			if err != nil {
+				return "", err
+			}
+		}
 		item.Shape = append(item.Shape, change)
 	}
 	if _, err = t.Store.Save(item); err != nil {
@@ -170,3 +186,29 @@ func NewTracking(home string) func(context.Context, *Candidate) error {
 
 // TrackCandidate uses the ordinary default todo-store resolution.
 func TrackCandidate(ctx context.Context, c *Candidate) error { return NewTracking("")(ctx, c) }
+
+// ShapeEvidenceReference is a public-safe locator for a revision's host-local
+// verifier record. Store paths and user-specific directories are never encoded.
+func ShapeEvidenceReference(revision string) (string, error) {
+	if revision == "" || revision == "." || revision == ".." || strings.ContainsAny(revision, "/\\: \t\r\n") {
+		return "", errors.New("shape tracking: evidence needs a revision identity")
+	}
+	return "shape-evidence:" + revision, nil
+}
+
+// ResolveShapeEvidence resolves a stable locator against a selected local home.
+// Resolving a location is not verification; readers must still check its seal.
+func ResolveShapeEvidence(home, reference string) (string, error) {
+	const prefix = "shape-evidence:"
+	if !strings.HasPrefix(reference, prefix) {
+		return "", errors.New("shape tracking: unsupported evidence reference")
+	}
+	revision := strings.TrimPrefix(reference, prefix)
+	if _, err := ShapeEvidenceReference(revision); err != nil {
+		return "", err
+	}
+	if home == "" {
+		home = src.Home()
+	}
+	return evidence.Path(home, revision), nil
+}
