@@ -184,8 +184,8 @@ func TestShapedHistoryView(t *testing.T) {
 	}
 
 	opts := productionShapeOptions()
-	opts.Home, opts.WorkRoot, opts.Runner = home, filepath.Join(t.TempDir(), "shape-work"), []string{"/bin/sh"}
-	opts.Verifier = productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}}
+	opts.Home, opts.WorkRoot, opts.Runner = home, filepath.Join(t.TempDir(), "shape-work"), shapedFixtureRunner(t)
+	opts.Verifier = productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: shapedFixtureRunner(t)[0], Effects: []string{"read"}}}
 	opts.Activator.(*productionActivator).home = home
 	panel := Panel{Name: "notes", Label: "Notes", Path: "/notes/",
 		ShapedSource: source, Auth: AuthSystem, Source: "registered", Available: true}

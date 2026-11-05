@@ -106,9 +106,9 @@ func newServerAppHarness(t *testing.T, home string, panels ...Panel) *serverAppH
 		t.Skip("go toolchain not on PATH")
 	}
 	opts := productionShapeOptions()
-	opts.Home, opts.WorkRoot, opts.Runner = home, filepath.Join(t.TempDir(), "shape-work"), []string{"/bin/sh"}
+	opts.Home, opts.WorkRoot, opts.Runner = home, filepath.Join(t.TempDir(), "shape-work"), shapedFixtureRunner(t)
 	opts.Level = contain.LevelProcess
-	opts.Verifier = productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}}
+	opts.Verifier = productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: shapedFixtureRunner(t)[0], Effects: []string{"read"}}}
 	opts.Activator.(*productionActivator).home = home
 	opts.ServerIdle = time.Hour
 	s, _, closer, err := newHandler(Options{Ctx: context.Background(), Panels: panels, Shape: opts})
@@ -238,7 +238,7 @@ func TestShapedServerRestoreUndoSwitchesBinary(t *testing.T) {
 	if got := version(); got != "v2" {
 		t.Fatalf("after activating v2 served %s", got)
 	}
-	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}
+	runner := shapeverify.TrustedRunner{Bin: shapedFixtureRunner(t)[0], Effects: []string{"read"}}
 	if _, err := src.RestoreSealed(context.Background(), home, "serverapp", v1, alice, src.RestoreSealedOptions{Runner: runner}); err != nil {
 		t.Fatalf("restore v1: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestShapedAdoptVerifiesForTheAdopter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("offer: %v", err)
 	}
-	runner := shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}
+	runner := shapeverify.TrustedRunner{Bin: shapedFixtureRunner(t)[0], Effects: []string{"read"}}
 	if _, err := src.Adopt(home, "serverapp", offer.ID, bob, src.AdoptOptions{Runner: runner}); err != nil {
 		t.Fatalf("bob adopt: %v", err)
 	}
