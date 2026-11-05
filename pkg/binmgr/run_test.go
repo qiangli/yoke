@@ -57,7 +57,7 @@ func TestWaitHealth_Ready(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := waitHealth(context.Background(), srv.URL, 5*time.Second); err != nil {
+	if err := waitHealth(context.Background(), "test-svc", srv.URL, 5*time.Second); err != nil {
 		t.Fatalf("waitHealth: %v", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestWaitHealth_Timeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := waitHealth(context.Background(), srv.URL, 400*time.Millisecond); err == nil {
+	if err := waitHealth(context.Background(), "test-svc", srv.URL, 400*time.Millisecond); err == nil {
 		t.Fatal("expected a timeout error")
 	}
 }

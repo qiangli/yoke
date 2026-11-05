@@ -209,3 +209,62 @@ func TestDisabledTelemetryIsAPureNoOp(t *testing.T) {
 		t.Errorf("telemetry is off and %d spans were still produced", n)
 	}
 }
+
+// THE TYPED PRODUCER REPORTS FOR ITSELF. `bashy service status ...` now emits
+// one collapsed service.status record per change through the typed seam, so a
+// generic exec span per poll would duplicate the flood the P0 repair exists to
+// stop. The middleware steps aside only after the actual producer acknowledges
+// handling through the dispatch context.
+func TestServiceStatusPollEmitsNoGenericExecSpan(t *testing.T) {
+	sr := withRecorder(t)
+
+	called := false
+	h := ExecMiddleware(func(ctx context.Context, args []string) error {
+		called = true
+		MarkServiceStatusReported(ctx)
+		return nil
+	})
+	for _, argv := range [][]string{
+		{"service", "status", "--json"},
+		{"bashy", "service", "status", "--json"},
+		{"bashy", "service", "status"},
+		{"/usr/bin/bashy", "service", "status", "loom"},
+		{"bashy.exe", "service", "status", "--json"},
+	} {
+		if err := h(context.Background(), argv); err != nil {
+			t.Fatalf("%v: middleware changed the result: %v", argv, err)
+		}
+	}
+
+	if !called {
+		t.Fatal("the middleware swallowed the status command")
+	}
+	if n := len(sr.Ended()); n != 0 {
+		t.Errorf("typed status polls produced %d generic exec spans — the per-poll flood is back", n)
+	}
+}
+
+// SUPPRESSION IS NOT CLASSIFICATION. Anything that is not exactly the typed
+// producer still records a generic exec span: a bare `service` binary, other
+// service controls, and other hosts' CLIs must never be mistaken for one.
+func TestNearMissCommandsStillRecord(t *testing.T) {
+	sr := withRecorder(t)
+
+	h := ExecMiddleware(func(ctx context.Context, args []string) error { return nil })
+	for _, argv := range [][]string{
+		{"service", "status"},
+		{"bashy", "service", "start", "loom"},
+		{"bashy", "service", "logs", "loom"},
+		{"bashy", "service"},
+		{"yoke", "service", "status"},
+		{"bashy"},
+	} {
+		if err := h(context.Background(), argv); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if n := len(sr.Ended()); n != 6 {
+		t.Errorf("near-miss commands produced %d spans, want 6 — suppression is over-broad", n)
+	}
+}

@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/telemetry"
 )
 
 // RunSpec describes how to launch a managed binary. The caller supplies the args
@@ -70,7 +73,7 @@ func Launch(ctx context.Context, path string, spec RunSpec) (*Process, error) {
 		if wait <= 0 {
 			wait = 30 * time.Second
 		}
-		if err := waitHealth(ctx, spec.HealthURL, wait); err != nil {
+		if err := waitHealth(ctx, spec.Tool.Name, spec.HealthURL, wait); err != nil {
 			_ = p.Stop(5 * time.Second)
 			return nil, err
 		}
@@ -116,14 +119,32 @@ func terminate(proc *os.Process) error {
 }
 
 // waitHealth polls url until it returns a non-5xx response or the deadline.
-func waitHealth(ctx context.Context, url string, max time.Duration) error {
+//
+// Every poll passes through the TYPED status seam (telemetry.ServiceStatus /
+// ServiceStatusQueryFailed), which records first observations and meaningful
+// transitions and collapses identical repeats — a service that answers
+// "healthy" every 200 ms for the whole wait window produces O(1) records, not
+// one per poll. The seam also keeps a failed query (transport error) separate
+// from a reported state, and reports the HTTP status as structured state: a
+// 404 is "degraded", not "healthy", even though the readiness decision below
+// (non-5xx = ready, unchanged from before) still accepts it.
+func waitHealth(ctx context.Context, service, url string, max time.Duration) error {
 	deadline := time.Now().Add(max)
 	client := &http.Client{Timeout: 2 * time.Second}
 	for {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		resp, err := client.Do(req)
-		if err == nil {
+		switch {
+		case err != nil:
+			telemetry.ServiceStatusQueryFailed(ctx, telemetry.StatusQueryFailure{
+				Service: service, Target: url, Err: err.Error(), ObservedAt: time.Now().UTC(),
+			})
+		default:
 			_ = resp.Body.Close()
+			state, detail := probeState(resp.StatusCode)
+			telemetry.ServiceStatus(ctx, telemetry.StatusObservation{
+				Service: service, Target: url, State: state, Detail: detail, ObservedAt: time.Now().UTC(),
+			})
 			if resp.StatusCode < 500 {
 				return nil
 			}
@@ -136,6 +157,19 @@ func waitHealth(ctx context.Context, url string, max time.Duration) error {
 			return ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}
+	}
+}
+
+// probeState maps one HTTP probe answer to the structured reported state. The
+// exit of the probe command is NOT the service's state; this answer is.
+func probeState(code int) (state, detail string) {
+	switch {
+	case code < 400:
+		return telemetry.StatusHealthy, ""
+	case code < 500:
+		return telemetry.StatusDegraded, "HTTP " + strconv.Itoa(code)
+	default:
+		return telemetry.StatusError, "HTTP " + strconv.Itoa(code)
 	}
 }
 
