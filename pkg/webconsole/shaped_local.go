@@ -14,7 +14,7 @@ import (
 type LocalIncidentReport = incidentReport
 
 func localShaped(app core.App, opts core.Options) *shapedApp {
-	return &shapedApp{name: app.Name, repo: app.SourceDir, protected: app.Protected, seed: app.Seed, opts: ShapeOptions{Home: opts.Home, WorkRoot: opts.WorkRoot, Track: opts.Track, Delegate: opts.Delegate, Verifier: opts.Verifier, Activator: opts.Activator}}
+	return &shapedApp{name: app.Name, repo: app.SourceDir, shaping: app.Shaping, releasePath: app.ReleasePath, releaseRevision: app.ReleaseRevision, protected: app.Protected, seed: app.Seed, opts: ShapeOptions{Home: opts.Home, WorkRoot: opts.WorkRoot, ProgramRunner: opts.ProgramRunner, ServiceRuntime: opts.ServiceRuntime, Track: opts.Track, Delegate: opts.Delegate, Verifier: opts.Verifier, Activator: opts.Activator}}
 }
 
 // LocalShapeSuggest uses the console's version/config suggestion resolver directly.
@@ -47,6 +47,9 @@ func LocalShapeSuggest(ctx context.Context, app core.App, caller core.Caller, op
 
 // LocalShapeIncidents reads the same principal-private incident records as the UI.
 func LocalShapeIncidents(ctx context.Context, app core.App, caller core.Caller, opts core.Options, id string) (any, error) {
+	if (core.Service{App: app}).Kind() != "web" {
+		return nil, errors.New("shape: native incident repair is outside the MVP")
+	}
 	if strings.TrimSpace(caller.Principal) == "" {
 		return nil, errors.New("shape: a principal is required")
 	}
@@ -68,6 +71,9 @@ func LocalShapeIncidents(ctx context.Context, app core.App, caller core.Caller, 
 // LocalShapeReportIncident records through the same store and runs a bounded
 // repair synchronously: a one-shot CLI must not abandon an in-flight repair.
 func LocalShapeReportIncident(ctx context.Context, app core.App, caller core.Caller, opts core.Options, rep LocalIncidentReport) (Incident, error) {
+	if (core.Service{App: app}).Kind() != "web" {
+		return Incident{}, errors.New("shape: native incident repair is outside the MVP; use the app's service diagnostics and ordinary shaping workflow")
+	}
 	if strings.TrimSpace(caller.Principal) == "" {
 		return Incident{}, errors.New("shape: a principal is required")
 	}

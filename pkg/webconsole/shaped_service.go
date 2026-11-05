@@ -8,7 +8,7 @@ import (
 )
 
 func (a *shapedApp) candidateService() core.Service {
-	return core.Service{App: core.App{Name: a.name, SourceDir: a.repo, Protected: a.protected, Seed: a.seed}, Options: core.Options{Home: a.opts.Home, WorkRoot: a.opts.WorkRoot, Delegate: a.opts.Delegate, Verifier: a.opts.Verifier, Activator: a.opts.Activator, Track: shapeTracking(a.opts)}}
+	return core.Service{App: core.App{Name: a.name, SourceDir: a.repo, Shaping: a.shaping, ReleasePath: a.releasePath, ReleaseRevision: a.releaseRevision, Protected: a.protected, Seed: a.seed}, Options: core.Options{Home: a.opts.Home, WorkRoot: a.opts.WorkRoot, Delegate: a.opts.Delegate, Verifier: a.opts.Verifier, Activator: a.opts.Activator, Track: shapeTracking(a.opts), ProgramRunner: a.opts.ProgramRunner, ServiceRuntime: a.opts.ServiceRuntime}}
 }
 func shapeCallerContext(p string) core.Caller {
 	return core.Caller{Principal: p, Actor: p, RepresentedUser: p}

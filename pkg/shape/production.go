@@ -12,6 +12,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	shapegate "github.com/qiangli/yoke/pkg/shape/gate"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
+	shapestate "github.com/qiangli/yoke/pkg/shape/state"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 	"path/filepath"
@@ -59,9 +60,12 @@ type VerifyRequest struct {
 
 // Verdict is the verifier's answer. Only Pass permits activation.
 type Verdict struct {
-	Pass     bool   `json:"pass"`
-	Evidence string `json:"evidence,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Artifact     string `json:"artifact,omitempty"`
+	ArtifactPath string `json:"artifact_path,omitempty"`
+	Policy       string `json:"policy,omitempty"`
+	Pass         bool   `json:"pass"`
+	Evidence     string `json:"evidence,omitempty"`
+	Detail       string `json:"detail,omitempty"`
 }
 
 // ProductionVerifier is the console's trusted verifier. Tests may supply a
@@ -143,8 +147,10 @@ type ActivateRequest struct {
 // reads the sealed verifier evidence again; the Verdict received over HTTP is
 // never itself authority to activate.
 type ProductionActivator struct {
-	Home string
-	mu   sync.Mutex
+	gate           shapestate.ActivationGate
+	beforeActivate func() error
+	Home           string
+	mu             sync.Mutex
 }
 
 func (a *ProductionActivator) Activate(ctx context.Context, req ActivateRequest) error {
@@ -216,7 +222,10 @@ func (a *ProductionActivator) Activate(ctx context.Context, req ActivateRequest)
 	// The gate is the shared production gate: the sealed verifier
 	// evidence is re-checked here, and the Verdict received over HTTP is
 	// never itself authority to activate.
-	gate := shapegate.New(home, req.Evidence)
-	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{ExpectedBase: req.BaseRev, Gate: gate, Request: req.Request, Trigger: req.Trigger})
+	gate := a.gate
+	if gate == nil {
+		gate = shapegate.New(home, req.Evidence)
+	}
+	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{PreSwitchHook: a.beforeActivate, ExpectedBase: req.BaseRev, Gate: gate, Request: req.Request, Trigger: req.Trigger})
 	return err
 }

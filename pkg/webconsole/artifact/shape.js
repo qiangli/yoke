@@ -193,8 +193,9 @@ async function refreshHistory() {
 async function refresh() {
   let st;
   try { st = await call("GET", ""); } catch (e) { $("shape-result").textContent = e.message; return; }
-  $("shape-who").textContent = st.principal;
-  $("shape-active").textContent = st.active ? "your version " + st.active.slice(0, 10) : "";
+  $("shape-who").textContent = st.principal + (st.host ? " · host scope" : "");
+  $("shape-who").title = st.host ? "This version is shared by users on this host" : "Changes you make here are yours alone";
+  $("shape-active").textContent = st.active ? (st.host ? "host version " : "your version ") + st.active.slice(0, 10) : "";
   const list = $("shape-list");
   list.replaceChildren(...(st.candidates || []).sort((a, b) => (a.created < b.created ? 1 : -1)).map(render));
   if (st.draft) list.prepend(renderDraft(st.draft));

@@ -99,16 +99,20 @@ const candKindRepair = "repair"
 
 // Candidate is the metadata record of one shaping attempt.
 type Candidate struct {
-	Actor           string `json:"actor,omitempty"`
-	RepresentedUser string `json:"represented_user,omitempty"`
-	Scope           string `json:"scope,omitempty"`
-	AppKind         string `json:"app_kind,omitempty"`
-	Story           string `json:"story,omitempty"`
-	Todo            string `json:"todo,omitempty"`
-	TrackingItem    string `json:"tracking_item,omitempty"`
-	TrackingRoot    string `json:"tracking_root,omitempty"`
-	Workspace       string `json:"workspace,omitempty"`
-	Artifact        string `json:"artifact,omitempty"`
+	ActivationPrincipal string                    `json:"activation_principal,omitempty"`
+	ArtifactPath        string                    `json:"artifact_path,omitempty"`
+	ProgramPolicy       string                    `json:"program_policy,omitempty"`
+	ProgramPreview      *shapecore.ProgramPreview `json:"program_preview,omitempty"`
+	Actor               string                    `json:"actor,omitempty"`
+	RepresentedUser     string                    `json:"represented_user,omitempty"`
+	Scope               string                    `json:"scope,omitempty"`
+	AppKind             string                    `json:"app_kind,omitempty"`
+	Story               string                    `json:"story,omitempty"`
+	Todo                string                    `json:"todo,omitempty"`
+	TrackingItem        string                    `json:"tracking_item,omitempty"`
+	TrackingRoot        string                    `json:"tracking_root,omitempty"`
+	Workspace           string                    `json:"workspace,omitempty"`
+	Artifact            string                    `json:"artifact,omitempty"`
 
 	ID        string `json:"id"`
 	App       string `json:"app"`
@@ -644,6 +648,14 @@ func (s *server) shapeCaller(w http.ResponseWriter, r *http.Request) (*shapedApp
 		http.Error(w, "shaping needs a signed-in person; this session has no principal", http.StatusForbidden)
 		return nil, "", false
 	}
+	if a.candidateService().Kind() != "web" && (strings.Contains(r.URL.Path, "/draft") || strings.Contains(r.URL.Path, "/incidents")) {
+		http.Error(w, "native draft editing and incident repair are outside the MVP", http.StatusConflict)
+		return nil, "", false
+	}
+	if a.candidateService().Kind() != "web" && (r.Method != "GET" || strings.Contains(r.URL.Path, "/preview/")) && !s.operatorSession(r) {
+		http.Error(w, "host-scoped shaping requires an operator session", http.StatusForbidden)
+		return nil, "", false
+	}
 	return a, principal, true
 }
 
@@ -657,6 +669,15 @@ func (s *server) handleShapePage(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleShapeState(w http.ResponseWriter, r *http.Request) {
 	a, principal, ok := s.shapeCaller(w, r)
 	if !ok {
+		return
+	}
+	if a.candidateService().Kind() != "web" {
+		status, e := a.candidateService().Status(r.Context(), a.caller(principal))
+		if e != nil {
+			http.Error(w, e.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
 		return
 	}
 	active := ""
@@ -683,6 +704,15 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	in, ok := readWish(w, r)
 	if !ok {
+		return
+	}
+	if a.candidateService().Kind() != "web" {
+		c, e := a.candidateService().Wish(r.Context(), a.caller(principal), shapecore.Wish{Request: in.Request, Page: in.Page, Element: in.Element, Story: in.Story, Todo: in.Todo})
+		if e != nil {
+			http.Error(w, e.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, webCandidate(c))
 		return
 	}
 	in.operator = s.operatorSession(r)
@@ -869,6 +899,25 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Rev == "" {
 		http.Error(w, "candidate has no result yet", http.StatusConflict)
+		return
+	}
+	if a.candidateService().Kind() != "web" {
+		preview, e := a.candidateService().PreviewProgram(r.Context(), a.caller(c.Principal), c.ID)
+		if e != nil {
+			http.Error(w, e.Error(), http.StatusConflict)
+			return
+		}
+		if preview.Kind == "service" {
+			http.Redirect(w, r, preview.URL, http.StatusSeeOther)
+			return
+		}
+		out, e := a.candidateService().RunProgramPreview(r.Context(), a.caller(c.Principal), c.ID)
+		if e != nil {
+			http.Error(w, e.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, "<pre>"+html.EscapeString(out.Stdout+out.Stderr)+"</pre>")
 		return
 	}
 	repo, err := gogit.PlainOpen(filepath.Join(dir, "work"))

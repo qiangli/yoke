@@ -18,7 +18,9 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/qiangli/coreutils/pkg/lockfile"
+	"github.com/qiangli/yoke/pkg/fleet"
 	state "github.com/qiangli/yoke/pkg/shape/state"
+	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 )
 
 const (
@@ -35,6 +37,9 @@ var ErrVerification = errors.New("shape: verification failed")
 
 type Caller struct{ Principal, Actor, RepresentedUser string }
 type App struct {
+	Shaping         *fleet.AppShaping
+	ReleasePath     string
+	ReleaseRevision string
 	Name, SourceDir string
 	Protected       []string
 	Seed            func() error
@@ -45,6 +50,8 @@ type Options struct {
 	Verifier       Verifier
 	Activator      Activator
 	Track          func(context.Context, *Candidate) error
+	ProgramRunner  shapeverify.ProgramRunner
+	ServiceRuntime ServiceRuntime
 }
 
 func ProductionOptions(home string) Options {
@@ -68,38 +75,43 @@ type CoverageSummary struct {
 	NotCovered []string `json:"not_covered"`
 }
 type Candidate struct {
-	ID              string           `json:"id"`
-	App             string           `json:"app"`
-	Principal       string           `json:"principal"`
-	Request         string           `json:"request"`
-	Page            string           `json:"page,omitempty"`
-	Element         string           `json:"element,omitempty"`
-	Kind            string           `json:"kind,omitempty"`
-	Status          string           `json:"status"`
-	Error           string           `json:"error,omitempty"`
-	BaseRev         string           `json:"base_rev,omitempty"`
-	Rev             string           `json:"rev,omitempty"`
-	Agent           string           `json:"agent,omitempty"`
-	Identity        string           `json:"agent_identity,omitempty"`
-	Receipt         string           `json:"agent_receipt,omitempty"`
-	Coverage        *CoverageSummary `json:"coverage,omitempty"`
-	Next            []string         `json:"next,omitempty"`
-	Verdict         *Verdict         `json:"verdict,omitempty"`
-	NewApp          json.RawMessage  `json:"new_app,omitempty"`
-	Deciding        bool             `json:"deciding,omitempty"`
-	Created         time.Time        `json:"created"`
-	Actor           string           `json:"actor,omitempty"`
-	RepresentedUser string           `json:"represented_user,omitempty"`
-	Scope           string           `json:"scope,omitempty"`
-	AppKind         string           `json:"app_kind,omitempty"`
-	Story           string           `json:"story,omitempty"`
-	Todo            string           `json:"todo,omitempty"`
-	TrackingItem    string           `json:"tracking_item,omitempty"`
-	TrackingRoot    string           `json:"tracking_root,omitempty"`
-	Workspace       string           `json:"workspace,omitempty"`
-	Artifact        string           `json:"artifact,omitempty"`
+	ProgramPreview      *ProgramPreview  `json:"program_preview,omitempty"`
+	ActivationPrincipal string           `json:"activation_principal,omitempty"`
+	ArtifactPath        string           `json:"artifact_path,omitempty"`
+	ProgramPolicy       string           `json:"program_policy,omitempty"`
+	ID                  string           `json:"id"`
+	App                 string           `json:"app"`
+	Principal           string           `json:"principal"`
+	Request             string           `json:"request"`
+	Page                string           `json:"page,omitempty"`
+	Element             string           `json:"element,omitempty"`
+	Kind                string           `json:"kind,omitempty"`
+	Status              string           `json:"status"`
+	Error               string           `json:"error,omitempty"`
+	BaseRev             string           `json:"base_rev,omitempty"`
+	Rev                 string           `json:"rev,omitempty"`
+	Agent               string           `json:"agent,omitempty"`
+	Identity            string           `json:"agent_identity,omitempty"`
+	Receipt             string           `json:"agent_receipt,omitempty"`
+	Coverage            *CoverageSummary `json:"coverage,omitempty"`
+	Next                []string         `json:"next,omitempty"`
+	Verdict             *Verdict         `json:"verdict,omitempty"`
+	NewApp              json.RawMessage  `json:"new_app,omitempty"`
+	Deciding            bool             `json:"deciding,omitempty"`
+	Created             time.Time        `json:"created"`
+	Actor               string           `json:"actor,omitempty"`
+	RepresentedUser     string           `json:"represented_user,omitempty"`
+	Scope               string           `json:"scope,omitempty"`
+	AppKind             string           `json:"app_kind,omitempty"`
+	Story               string           `json:"story,omitempty"`
+	Todo                string           `json:"todo,omitempty"`
+	TrackingItem        string           `json:"tracking_item,omitempty"`
+	TrackingRoot        string           `json:"tracking_root,omitempty"`
+	Workspace           string           `json:"workspace,omitempty"`
+	Artifact            string           `json:"artifact,omitempty"`
 }
 type Status struct {
+	Host       *HostStatus `json:"host,omitempty"`
 	App        string      `json:"app"`
 	Principal  string      `json:"principal"`
 	Active     string      `json:"active"`
@@ -231,7 +243,7 @@ func (s Service) active(p string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	st, e := state.OpenAt(home, s.App.Name, p)
+	st, e := state.OpenAt(home, s.App.Name, s.ActivationPrincipal(p))
 	if e != nil {
 		return "", e
 	}
@@ -260,6 +272,13 @@ func (s Service) Status(ctx context.Context, c Caller) (Status, error) {
 		return Status{}, e
 	}
 	out := Status{App: s.App.Name, Principal: c.Principal, Active: active, Candidates: []Candidate{}}
+	if s.Kind() != "web" {
+		host, e := s.HostStatus(ctx, c)
+		if e != nil {
+			return out, e
+		}
+		out.Host = &host
+	}
 	r, e := s.root()
 	if e != nil {
 		return out, e
@@ -276,6 +295,23 @@ func (s Service) Status(ctx context.Context, c Caller) (Status, error) {
 	return out, nil
 }
 func (s Service) Begin(ctx context.Context, caller Caller, w Wish) (Candidate, error) {
+	return s.begin(ctx, caller, w, false)
+}
+func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool) (Candidate, error) {
+	if s.Kind() != "web" {
+		if e := s.RecoverProgram(ctx); e != nil {
+			return Candidate{}, e
+		}
+		if !recovery {
+			st, e := s.HostStatus(ctx, caller)
+			if e != nil {
+				return Candidate{}, e
+			}
+			if st.Pending {
+				return Candidate{}, errors.New("shape: reconcile host source/artifact with restore before creating a candidate")
+			}
+		}
+	}
 	l, e := s.lock(caller)
 	if e != nil {
 		return Candidate{}, e
@@ -295,7 +331,7 @@ func (s Service) Begin(ctx context.Context, caller Caller, w Wish) (Candidate, e
 	if _, e = rand.Read(id[:]); e != nil {
 		return Candidate{}, e
 	}
-	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: "web", Scope: "principal", Created: time.Now().UTC()}
+	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: s.Kind(), Scope: s.Scope(), ActivationPrincipal: s.ActivationPrincipal(caller.Principal), Created: time.Now().UTC()}
 	if c.RepresentedUser == "" {
 		c.RepresentedUser = c.Principal
 	}
@@ -337,7 +373,9 @@ func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runEr
 		c.Error = runErr.Error()
 	} else {
 		c.Status = Ready
-		c.Artifact = c.Rev
+		if s.Kind() == "web" {
+			c.Artifact = c.Rev
+		}
 	}
 	if s.Options.Track != nil {
 		if e = s.Options.Track(ctx, &c); e != nil {
@@ -363,7 +401,7 @@ func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, er
 	if e != nil {
 		return s.complete(ctx, caller, c, e)
 	}
-	res, e := s.Options.Delegate.Delegate(ctx, DelegateRequest{Dir: c.Workspace, Task: Brief(s.App.Name, w)})
+	res, e := s.Options.Delegate.Delegate(ctx, DelegateRequest{Dir: c.Workspace, Task: s.GenerationBrief(w)})
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	c.Coverage = ParseCoverage(res.Output)
 	c.Next = ParseNext(res.Output)
@@ -418,14 +456,19 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
 		}
 		return SaveCandidate(dir, *c)
 	}
-	if s.Options.Verifier == nil {
+	if s.Verifier() == nil {
 		return errors.New("shape: no verifier configured")
 	}
-	v, e := s.Options.Verifier.Verify(ctx, VerifyRequest{App: c.App, Principal: c.Principal, SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(dir, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Agent: c.Agent})
+	v, e := s.Verifier().Verify(ctx, VerifyRequest{App: c.App, Principal: s.ActivationPrincipal(c.Principal), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(dir, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Agent: c.Agent})
 	if e != nil {
 		return e
 	}
 	c.Verdict = &v
+	if v.Artifact != "" {
+		c.Artifact = v.Artifact
+		c.ArtifactPath = v.ArtifactPath
+		c.ProgramPolicy = v.Policy
+	}
 	if v.Pass {
 		c.Status = Verified
 	} else {
@@ -475,6 +518,11 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 		return c, e
 	}
 	defer appLock.Release()
+	if s.Kind() != "web" {
+		if e = s.RecoverProgram(ctx); e != nil {
+			return c, e
+		}
+	}
 	active, e := s.active(c.Principal)
 	if e != nil {
 		return c, e
@@ -501,7 +549,7 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 	if c.Verdict == nil || !c.Verdict.Pass {
 		return c, ErrVerification
 	}
-	if s.Options.Activator == nil {
+	if s.Kind() == "web" && s.Options.Activator == nil {
 		return c, errors.New("shape: no activator configured")
 	}
 	message := OneLine(c.Request)
@@ -517,14 +565,30 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 	if e = SaveCandidate(d, c); e != nil {
 		return c, e
 	}
-	e = s.Options.Activator.Activate(ctx, ActivateRequest{App: c.App, Principal: c.Principal, SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(d, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: message, Agent: c.Agent, Evidence: c.Verdict.Evidence})
+	if s.Kind() == "web" {
+		e = s.Options.Activator.Activate(ctx, ActivateRequest{App: c.App, Principal: s.ActivationPrincipal(c.Principal), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(d, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: message, Agent: c.Agent, Evidence: c.Verdict.Evidence})
+	} else {
+		e = s.activateProgram(ctx, c)
+	}
 	if e != nil {
 		current, readErr := s.active(c.Principal)
 		if readErr == nil && current == c.Rev {
+			if s.Kind() != "web" {
+				if recoverErr := s.RecoverProgram(ctx); recoverErr != nil {
+					return c, errors.Join(e, recoverErr)
+				}
+			}
 			c.Status = Approved
 			return s.finishApproval(ctx, c, d)
 		}
 		if readErr == nil && current == c.BaseRev {
+			if s.Kind() != "web" {
+				if _, pending := s.readTransition(); pending == nil {
+					return c, fmt.Errorf("shape: rollback pending; retry recovery: %w", e)
+				} else if !os.IsNotExist(pending) {
+					return c, errors.Join(e, pending)
+				}
+			}
 			c.Status = Verified
 			_ = SaveCandidate(d, c)
 			return c, e
@@ -537,6 +601,12 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 }
 func (s Service) finishApproval(ctx context.Context, c Candidate, d string) (Candidate, error) {
 	var e error
+	if c.ProgramPreview != nil {
+		if e = s.cleanupProgramPreview(ctx, c); e != nil {
+			return c, fmt.Errorf("shape: activated; preview cleanup pending: %w", e)
+		}
+		c.ProgramPreview = nil
+	}
 	// Preserve truthful active state even if the durable archive write fails.
 	if _, se := os.Stat(d); se == nil {
 		_ = SaveCandidate(d, c)
@@ -595,11 +665,18 @@ func (s Service) approvedDir(p, id string) (string, error) {
 	return filepath.Join(r, ".approved", s.App.Name, PrincipalKey(p), id), nil
 }
 func (s Service) remove(p, id, dir string) error {
+	if s.Kind() != "web" {
+		if c, _, e := s.load(p, id); e == nil {
+			if e = s.cleanupProgramPreview(context.Background(), c); e != nil {
+				return e
+			}
+		}
+	}
 	home, e := s.home()
 	if e != nil {
 		return e
 	}
-	if st, e := state.OpenAt(home, s.App.Name, p); e == nil {
+	if st, e := state.OpenAt(home, s.App.Name, s.ActivationPrincipal(p)); e == nil {
 		if e = os.RemoveAll(filepath.Join(st.Dir(), "preview", id)); e != nil {
 			return e
 		}

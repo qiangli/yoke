@@ -278,6 +278,12 @@ func TouchesProtected(work, base, rev string, paths []string) error {
 	}
 	var bad []string
 	for _, p := range paths {
+		if p == "" {
+			if at.Hash != bt.Hash {
+				bad = append(bad, "whole repository")
+			}
+			continue
+		}
 		ae, x := at.FindEntry(p)
 		be, y := bt.FindEntry(p)
 		if (x == nil) != (y == nil) || (x == nil && ae.Hash != be.Hash) {

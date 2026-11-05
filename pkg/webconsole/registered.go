@@ -74,7 +74,7 @@ func discoverRegistered(taken map[string]bool) ([]Panel, []error) {
 				Name: m.Mount, Label: m.Label, Path: "/" + m.Mount + "/",
 				LaunchPath: "/shape/" + m.Mount + "/",
 				Mode:       atlas.WebInProcess, Icon: m.Icon, Tip: m.Tip, Auth: m.Auth,
-				ShapedSource: a.Source, Source: "registered", Available: true,
+				ShapedSource: a.Source, Shaping: a.Shaping, Source: "registered", Available: true,
 			})
 			continue
 		}

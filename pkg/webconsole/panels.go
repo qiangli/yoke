@@ -24,6 +24,7 @@ import (
 
 	"github.com/qiangli/yoke/external/loom"
 	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/webterm"
 )
 
@@ -79,7 +80,8 @@ type Panel struct {
 
 	// ShapedSource is the git checkout of a shaped app (shaped.go). Non-empty
 	// means the console serves the app itself, per principal, from this tree.
-	ShapedSource string `json:"-"`
+	ShapedSource string            `json:"-"`
+	Shaping      *fleet.AppShaping `json:"-"`
 
 	handler http.Handler
 }

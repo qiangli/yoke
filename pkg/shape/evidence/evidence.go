@@ -75,6 +75,9 @@ var (
 // the seal; any difference between the binding a reader recomputes and the
 // one in the record makes the record stale.
 type Binding struct {
+	// Artifact and Policy additionally bind trusted CLI/service builds; omitted for legacy web evidence.
+	Artifact string `json:"artifact,omitempty"`
+	Policy   string `json:"policy,omitempty"`
 	// Candidate is the commit the verifier ran against.
 	Candidate string `json:"candidate"`
 	// Base is the commit the frozen contract and checks were read from.
@@ -311,6 +314,8 @@ func (b Binding) differs(want Binding) string {
 		{"contract digest", b.Contract, want.Contract},
 		{"dependency digest", b.Dependency, want.Dependency},
 		{"principal", b.Principal, want.Principal},
+		{"artifact digest", b.Artifact, want.Artifact},
+		{"program policy", b.Policy, want.Policy},
 	} {
 		if f.want == "" || f.got == f.want {
 			continue

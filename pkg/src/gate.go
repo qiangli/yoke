@@ -64,9 +64,23 @@ func GateBinding(home string, want evidence.Binding) error {
 // binding from the repository, then demand a sealed passing record for it.
 // Every refusal names the approval override, because a blocked merge the
 // operator cannot consciously unblock is a trap rather than a gate.
+// ShapeProgramEvidence resolves native shaping proof using current trusted registry policy.
+// It must recheck the final proposal, artifact bytes, policy and sealed evidence.
+var ShapeProgramEvidence func(context.Context, string, string, PR, string) (evidence.Record, error)
+
+// ShapeProgramVerify reruns the native kind verifier for the recorded proposal.
+var ShapeProgramVerify func(context.Context, string, string, PR, string) (evidence.Record, error)
+
 func requireEvidence(home, dir string, pr PR, baseSHA string) error {
 	if home == "" {
 		home = Home()
+	}
+	if pr.Shape != nil && (pr.Shape.Kind == "cli" || pr.Shape.Kind == "service") {
+		if ShapeProgramEvidence == nil {
+			return errors.New("src: native shaping proof resolver unavailable")
+		}
+		_, err := ShapeProgramEvidence(context.Background(), home, dir, pr, baseSHA)
+		return err
 	}
 	principal := Principal()
 	if principal == "" {
@@ -146,6 +160,9 @@ func VerifyPR(ctx context.Context, home, id string, runner verify.Runner) (evide
 		return evidence.Record{}, fmt.Errorf("src: PR %s is %s, not open", id, pr.State)
 	}
 	principal := Principal()
+	if pr.Shape != nil && (pr.Shape.Kind == "cli" || pr.Shape.Kind == "service") {
+		principal = "host"
+	}
 	if principal == "" {
 		return evidence.Record{}, fmt.Errorf("src: refusing to verify PR %s: no principal is resolved "+
 			"(a verdict is always for someone)", id)
@@ -157,6 +174,22 @@ func VerifyPR(ctx context.Context, home, id string, runner verify.Runner) (evide
 	baseSHA, err := mergeBase(dir, localBranch, pr.HeadSHA)
 	if err != nil {
 		return evidence.Record{}, fmt.Errorf("src: PR %s head %s: %w", id, shortSHA(pr.HeadSHA), err)
+	}
+	if pr.Shape != nil && (pr.Shape.Kind == "cli" || pr.Shape.Kind == "service") {
+		if ShapeProgramVerify == nil {
+			return evidence.Record{}, errors.New("src: native shaping verifier unavailable")
+		}
+		rec, err := ShapeProgramVerify(ctx, home, dir, pr, baseSHA)
+		if err != nil {
+			return rec, err
+		}
+		if rec.Verdict == evidence.VerdictPass {
+			pr.Shape.Evidence = evidence.Path(home, pr.HeadSHA)
+			if err = savePR(home, pr); err != nil {
+				return rec, err
+			}
+		}
+		return rec, nil
 	}
 	rep, err := verify.Run(ctx, verify.Options{
 		Home: home, RepoDir: dir, BaseSHA: baseSHA, CandidateSHA: pr.HeadSHA,

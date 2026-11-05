@@ -183,7 +183,7 @@ func (s *server) historyFor(w http.ResponseWriter, r *http.Request) (*shapedApp,
 		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return nil, "", "", src.VersionHistory{}, false
 	}
-	h, err := src.History(home, a.name, principal)
+	h, err := src.History(home, a.name, a.candidateService().ActivationPrincipal(principal))
 	if err != nil {
 		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return nil, "", "", src.VersionHistory{}, false
@@ -192,13 +192,13 @@ func (s *server) historyFor(w http.ResponseWriter, r *http.Request) (*shapedApp,
 }
 
 func (s *server) handleShapeHistory(w http.ResponseWriter, r *http.Request) {
-	a, _, _, h, ok := s.historyFor(w, r)
+	a, principal, _, h, ok := s.historyFor(w, r)
 	if !ok {
 		return
 	}
 	view := toHistoryView(h)
 	for i := range view.Versions {
-		view.Versions[i].Submittable = a.candidateService().Submittable(r.Context(), a.caller(h.Principal), view.Versions[i].Revision)
+		view.Versions[i].Submittable = a.candidateService().Submittable(r.Context(), a.caller(principal), view.Versions[i].Revision)
 	}
 	if h.Base != "" && len(h.Entries) > 0 {
 		if repo, err := gogit.PlainOpen(a.repo); err == nil {
@@ -354,6 +354,15 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "send {\"rev\": \"<version>\"}", http.StatusBadRequest)
 		return
 	}
+	if a.candidateService().Kind() != "web" {
+		status, e := a.candidateService().HostRestore(r.Context(), a.caller(principal), in.Rev)
+		if e != nil {
+			http.Error(w, e.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"active": status.SourceRevision, "host": status})
+		return
+	}
 	res, err := s.restoreVersion(r.Context(), a, principal, home, in.Rev)
 	if err != nil {
 		slog.Warn("shape history restore refused", "app", a.name, "principal", principal, "rev", in.Rev, "err", err)
@@ -373,6 +382,15 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) {
 	a, principal, home, h, ok := s.historyFor(w, r)
 	if !ok {
+		return
+	}
+	if a.candidateService().Kind() != "web" {
+		status, e := a.candidateService().HostUndo(r.Context(), a.caller(principal))
+		if e != nil {
+			http.Error(w, e.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"active": status.SourceRevision, "host": status})
 		return
 	}
 	res, err := s.undoVersion(r.Context(), a, principal, home)
@@ -395,6 +413,10 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 func (s *server) handleShapeHistoryPreview(w http.ResponseWriter, r *http.Request) {
 	a, principal, _, h, ok := s.historyFor(w, r)
 	if !ok {
+		return
+	}
+	if a.candidateService().Kind() != "web" {
+		http.Error(w, "native history preview requires a freshly verified candidate", http.StatusConflict)
 		return
 	}
 	rev := r.PathValue("rev")

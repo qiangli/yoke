@@ -36,7 +36,69 @@ type App struct {
 	Type            string   `yaml:"type,omitempty" json:"type,omitempty" doc:"app type: proxy (default, a loopback server) or shaped (served from a versioned source tree)"`
 	Source          string   `yaml:"source,omitempty" json:"source,omitempty" doc:"shaped only: absolute path of the app's git checkout"`
 
+	Shaping *AppShaping `yaml:"shaping,omitempty" json:"shaping,omitempty" doc:"trusted shaping kind, build/test argv and service unit"`
+
 	Ring assetring.Ring `yaml:"-" json:"ring"`
+}
+
+// AppShaping is operator-owned registry policy, never read from candidate source.
+// Build writes {output}: a CLI binary or a service image-ID receipt file.
+// Test may use {artifact}; both commands may use {revision}.
+type AppShaping struct {
+	Kind    string   `yaml:"kind,omitempty" json:"kind,omitempty" doc:"web (default), cli or service"`
+	Build   []string `yaml:"build,omitempty" json:"build,omitempty" doc:"trusted build argv; {output} is required for cli/service"`
+	Test    []string `yaml:"test,omitempty" json:"test,omitempty" doc:"trusted test argv; optional {artifact} and {revision}"`
+	Service string   `yaml:"service,omitempty" json:"service,omitempty" doc:"service kind only: existing container-backed service unit"`
+}
+
+func (s AppShaping) Validate() error {
+	switch s.Kind {
+	case "", "web":
+		if len(s.Build) > 0 || len(s.Test) > 0 || s.Service != "" {
+			return fmt.Errorf("fleet: web shaping uses its existing frozen source contract")
+		}
+		return nil
+	case "cli", "service":
+	default:
+		return fmt.Errorf("fleet: shaping kind %q: want web, cli or service", s.Kind)
+	}
+	if len(s.Build) == 0 || len(s.Test) == 0 || strings.TrimSpace(s.Build[0]) == "" || strings.TrimSpace(s.Test[0]) == "" {
+		return fmt.Errorf("fleet: %s shaping needs build and test argv", s.Kind)
+	}
+	output := false
+	for _, arg := range s.Build {
+		if strings.Contains(arg, "{output}") {
+			output = true
+		}
+		if strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("fleet: shaping build argv contains NUL")
+		}
+	}
+	for _, arg := range s.Test {
+		if strings.ContainsRune(arg, 0) {
+			return fmt.Errorf("fleet: shaping test argv contains NUL")
+		}
+	}
+	if !output {
+		return fmt.Errorf("fleet: shaping build argv must name {output}")
+	}
+	if s.Kind == "service" {
+		if s.Service == "" {
+			return fmt.Errorf("fleet: service shaping needs a unit")
+		}
+		if err := validName(s.Service); err != nil {
+			return err
+		}
+	} else if s.Service != "" {
+		return fmt.Errorf("fleet: cli shaping does not name a service unit")
+	}
+	return nil
+}
+func (a App) ShapingKind() string {
+	if a.Shaping == nil || a.Shaping.Kind == "" {
+		return "web"
+	}
+	return a.Shaping.Kind
 }
 
 // AppValidator is the embedding console's check of an app record — reserved
@@ -77,6 +139,14 @@ func (a App) Validate() error {
 	}
 	if a.Kind != "" && a.Kind != KindApp {
 		return fmt.Errorf("fleet: app %q: kind %q, want %s", a.Name, a.Kind, KindApp)
+	}
+	if a.Shaping != nil {
+		if err := a.Shaping.Validate(); err != nil {
+			return err
+		}
+		if a.Type != AppTypeShaped {
+			return fmt.Errorf("fleet: shaping policy requires type shaped")
+		}
 	}
 	switch a.Type {
 	case "", AppTypeProxy:

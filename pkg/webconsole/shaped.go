@@ -24,10 +24,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	_ "github.com/qiangli/yoke/git" // pure-Go file transport for local clones
+	"github.com/qiangli/yoke/pkg/fleet"
 	shapecore "github.com/qiangli/yoke/pkg/shape"
 	"github.com/qiangli/yoke/pkg/shape/boundary"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
+	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
+	"github.com/qiangli/yoke/pkg/src"
 	"github.com/qiangli/yoke/pkg/unit"
 )
 
@@ -44,7 +47,9 @@ import (
 // the panel refuses to start a candidate, without a Verifier nothing can be
 // approved.
 type ShapeOptions struct {
-	Track func(context.Context, *shapecore.Candidate) error
+	ProgramRunner  shapeverify.ProgramRunner
+	ServiceRuntime shapecore.ServiceRuntime
+	Track          func(context.Context, *shapecore.Candidate) error
 	// Actor fields are supplied only by trusted local adapters, never request bodies.
 	Actor           string
 	RepresentedUser string
@@ -114,11 +119,13 @@ func (o ShapeOptions) runner() []string {
 
 // shapedApp is one shaped panel bound to its checkout.
 type shapedApp struct {
-	name    string
-	repo    string
-	opts    ShapeOptions
-	calls   *callBroker
-	servers *shapedServers
+	shaping                      *fleet.AppShaping
+	releasePath, releaseRevision string
+	name                         string
+	repo                         string
+	opts                         ShapeOptions
+	calls                        *callBroker
+	servers                      *shapedServers
 	// seed, when set, makes the checkout exist before it is opened: the
 	// seam for an app whose base tree the host embeds (console_shaped.go).
 	seed func() error
@@ -139,7 +146,12 @@ type shapedApp struct {
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
-	return &shapedApp{name: p.Name, repo: p.ShapedSource, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path), label: p.Label}
+	a := &shapedApp{name: p.Name, repo: p.ShapedSource, shaping: p.Shaping, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path), label: p.Label}
+	if p.Name == "bashy" && p.Shaping != nil && p.Shaping.Kind == "cli" {
+		a.releasePath = selfbin.Resolve("")
+		a.releaseRevision = src.ReleaseCommit()
+	}
+	return a
 }
 
 // panelMount is a panel's mount path as the Genie tag carries it: relative,
@@ -158,7 +170,7 @@ func (a *shapedApp) store(principal string) (*shape.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return shape.OpenAt(home, a.name, principal)
+	return shape.OpenAt(home, a.name, a.candidateService().ActivationPrincipal(principal))
 }
 
 func (a *shapedApp) open() (*gogit.Repository, error) {

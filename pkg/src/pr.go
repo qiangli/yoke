@@ -34,6 +34,7 @@ const (
 // `local` — never `pristine` and never any remote.
 // ShapePR records submission provenance without changing normal merge gates.
 type ShapePR struct {
+	Kind            string `json:"kind,omitempty"`
 	SubmittedBy     string `json:"submitted_by"`
 	Submission      string `json:"submission"`
 	SourceRevision  string `json:"source_revision"`

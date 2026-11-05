@@ -60,6 +60,10 @@ type ReleaseTag struct {
 // rename into a major release. When overrides the tag time; zero means the
 // server clock now (UTC).
 type ReleaseOptions struct {
+	// Actor optionally identifies the authorized caller recorded as tagger.
+	// It does not change principal scope or grant release authority. Empty keeps
+	// the historical principal-as-tagger behavior and tag message unchanged.
+	Actor  string
 	Repair bool
 	// Shared publishes an app-wide release. Only the operator CLI sets this;
 	// self-repair leaves it false and creates a principal-private tag.
@@ -375,13 +379,22 @@ func quoteAll(items []string) string {
 // bump. A removal or rename without approval, a repair that adds surface,
 // a revision already released, or a tree identical to the previous
 // release are refused and nothing is tagged. The tag is annotated with the
-// kind and the compare result; principal is recorded as the tagger. Shared
+// kind and the compare result; opts.Actor is the tagger when supplied, otherwise
+// principal is recorded as before. Shared
 // releases require opts.Shared; all others belong to principal's tag namespace.
 func Release(home, app, rev, principal string, opts ReleaseOptions) (ReleaseResult, error) {
 	var out ReleaseResult
 	principal = strings.TrimSpace(principal)
 	if principal == "" {
 		return out, fmt.Errorf("src: release needs a principal")
+	}
+	actor := strings.TrimSpace(opts.Actor)
+	if strings.ContainsAny(actor, "\r\n") {
+		return out, fmt.Errorf("src: release actor must be one line")
+	}
+	tagger := principal
+	if actor != "" {
+		tagger = actor
 	}
 	if home == "" {
 		home = Home()
@@ -458,8 +471,11 @@ func Release(home, app, rev, principal string, opts ReleaseOptions) (ReleaseResu
 	msg := fmt.Sprintf("Release %s %s (%s)\n\nRevision: %s\nKind: %s\nPrevious: %s\nAdded: %s\nContracted: %s\nPrincipal: %s\n",
 		app, out.Version, out.Kind, revSHA, out.Kind, out.Previous,
 		strings.Join(out.Added, ","), strings.Join(out.Contracted, ","), principal)
+	if actor != "" {
+		msg += "Actor: " + actor + "\n"
+	}
 	_, err = r.CreateTag(out.Version, plumbing.NewHash(revSHA), &gogit.CreateTagOptions{
-		Tagger:  &object.Signature{Name: principal, Email: "bashy@localhost", When: when},
+		Tagger:  &object.Signature{Name: tagger, Email: "bashy@localhost", When: when},
 		Message: msg,
 	})
 	if err != nil {

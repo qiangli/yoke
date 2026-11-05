@@ -195,7 +195,7 @@ func (s Service) Submit(ctx context.Context, caller Caller, revision string, opt
 	if strings.TrimSpace(caller.Actor) == "" {
 		return Submission{}, errors.New("shape: submit requires an accountable actor")
 	}
-	if s.Options.Verifier == nil {
+	if s.Verifier() == nil {
 		return Submission{}, errors.New("shape: no verifier configured")
 	}
 	home, err := s.home()
@@ -309,7 +309,7 @@ func (s Service) Submit(ctx context.Context, caller Caller, revision string, opt
 	if _, err = CloneAt(ctx, s.App.SourceDir, work, v.ProposalRevision); err != nil {
 		return v, err
 	}
-	verdict, err := s.Options.Verifier.Verify(ctx, VerifyRequest{App: c.App, Principal: c.Principal, SourceDir: s.App.SourceDir, CandidateDir: work, BaseRev: v.BaseRevision, CandidateRev: v.ProposalRevision, Agent: c.Agent})
+	verdict, err := s.Verifier().Verify(ctx, VerifyRequest{App: c.App, Principal: s.ActivationPrincipal(c.Principal), SourceDir: s.App.SourceDir, CandidateDir: work, BaseRev: v.BaseRevision, CandidateRev: v.ProposalRevision, Agent: c.Agent})
 	if err != nil {
 		return v, err
 	}
@@ -332,7 +332,7 @@ func (s Service) Submit(ctx context.Context, caller Caller, revision string, opt
 	if err = saveSubmission(home, v); err != nil {
 		return v, err
 	}
-	pr, err := src.OpenShapePR(home, c.App, v.Branch, "Submit shaped "+c.App, src.ShapePR{SubmittedBy: v.SubmittedBy, Submission: id, SourceRevision: c.Rev, Candidate: c.ID, Actor: c.Actor, RepresentedUser: c.RepresentedUser, Item: itemRef, TrackingRoot: trackRoot, Evidence: v.Evidence, Run: v.Run.ID, RunRepo: v.Run.Repo})
+	pr, err := src.OpenShapePR(home, c.App, v.Branch, "Submit shaped "+c.App, src.ShapePR{Kind: s.Kind(), SubmittedBy: v.SubmittedBy, Submission: id, SourceRevision: c.Rev, Candidate: c.ID, Actor: c.Actor, RepresentedUser: c.RepresentedUser, Item: itemRef, TrackingRoot: trackRoot, Evidence: v.Evidence, Run: v.Run.ID, RunRepo: v.Run.Repo})
 	if err != nil {
 		return v, err
 	}
@@ -415,7 +415,11 @@ func submittedItem(home string, v Submission) (*issue.Issue, error) {
 	return store.Resolve(strings.TrimPrefix(v.Item, "todo:"))
 }
 
-func init() { weave.ShapeSubmissionResolver = ResolveSubmittedShapeItem }
+func init() {
+	weave.ShapeSubmissionResolver = ResolveSubmittedShapeItem
+	src.ShapeProgramEvidence = resolveProgramSubmissionEvidence
+	src.ShapeProgramVerify = refreshProgramSubmissionEvidence
+}
 
 // Submittable reports whether this principal has retained approved provenance
 // for the revision. It performs no tracking or submission writes.
