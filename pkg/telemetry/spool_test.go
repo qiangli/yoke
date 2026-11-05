@@ -178,7 +178,7 @@ func TestRotateKeepsValidJSONLines(t *testing.T) {
 	// Write past the bound with distinguishable records.
 	line := `{"_msg":"pad","filler":"` + strings.Repeat("x", 512) + `"}` + "\n"
 	var buf strings.Builder
-	for buf.Len() < maxSpoolBytes+(1<<20) {
+	for int64(buf.Len()) < maxSpoolBytes+(1<<20) {
 		buf.WriteString(line)
 	}
 	if _, err := e.f.WriteString(buf.String()); err != nil {
