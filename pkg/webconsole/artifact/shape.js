@@ -158,7 +158,17 @@ function renderVersion(v) {
     refresh();
   };
   const restoreBtn = button("Restore", "primary", restore, "Restore version " + short(v.revision));
-  acts.append(details, el("span", "spacer"), restoreBtn);
+  acts.append(details, el("span", "spacer"));
+  if (v.submittable) {
+    acts.append(button("Submit for review", "", async () => {
+      historyStatus("Submitting for review…");
+      try {
+        const submitted = await call("POST", "/submit", { rev: v.revision });
+        historyStatus("Submitted for review: proposal " + submitted.pr_id + ", run " + submitted.run.id + ".");
+      } catch (e) { historyStatus(e.message); }
+    }, "Submit version " + short(v.revision) + " for review"));
+  }
+  acts.append(restoreBtn);
   li.append(acts);
   return li;
 }

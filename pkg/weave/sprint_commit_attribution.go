@@ -167,6 +167,11 @@ func sprintCommitCheckRange(cmd *cobra.Command, mode weavecli.OutputMode, revRan
 		if err != nil {
 			return err
 		}
+		if err := ValidateShapeCommitMessage(message); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: %v\n", sha, err)
+			failures = append(failures, sha)
+			continue
+		}
 		trace, err := parseCommitTrace(message)
 		if err != nil {
 			// Commits without delivery trailers (e.g. initial repository creation)

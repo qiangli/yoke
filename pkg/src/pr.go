@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	ygit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	"github.com/qiangli/yoke/pkg/shape/verify"
@@ -31,7 +32,23 @@ const (
 // Records live as JSON under $BASHY_HOME/src/.prs/<id>.json so hosts can
 // exchange them by file (see patch export/apply). Merges only ever touch
 // `local` — never `pristine` and never any remote.
+// ShapePR records submission provenance without changing normal merge gates.
+type ShapePR struct {
+	SubmittedBy     string `json:"submitted_by"`
+	Submission      string `json:"submission"`
+	SourceRevision  string `json:"source_revision"`
+	Candidate       string `json:"candidate"`
+	Actor           string `json:"actor"`
+	RepresentedUser string `json:"represented_user"`
+	Item            string `json:"item"`
+	TrackingRoot    string `json:"tracking_root"`
+	Evidence        string `json:"evidence"`
+	Run             int64  `json:"run"`
+	RunRepo         string `json:"run_repo"`
+}
+
 type PR struct {
+	Shape            *ShapePR      `json:"shape,omitempty"`
 	ID               string        `json:"id"`
 	Repo             string        `json:"repo"`
 	Title            string        `json:"title"`
@@ -77,7 +94,24 @@ func savePR(home string, pr PR) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(prPath(home, pr.ID), append(raw, '\n'), 0o644)
+	// A crash while persisting a proposal must not leave a truncated record
+	// that prevents idempotent submission recovery or blinds ListPRs.
+	f, err := os.CreateTemp(prsDir(home), ".pr-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err = f.Chmod(0644); err == nil {
+		_, err = f.Write(append(raw, '\n'))
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), prPath(home, pr.ID))
 }
 
 // nextPRID allocates the next integer id for home.
@@ -101,6 +135,42 @@ func nextPRID(home string) (string, error) {
 // recorded test failed. A PR with no test command carries no result and is
 // gated on verification evidence and policy alone.
 func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
+	lock, err := lockfile.AcquireWithin(filepath.Join(prsDir(home), ".open.lock"), 30*time.Second, lockfile.Holder{Name: agentName(), Intent: "open source proposal"})
+	if err != nil {
+		return PR{}, err
+	}
+	defer lock.Release()
+	return openPRUnlocked(home, repo, branch, title, testCmd, nil)
+}
+
+// OpenShapePR records one idempotent proposal for a shaping submission.
+// It does not grant review approval, waive checks or merge the proposal.
+func OpenShapePR(home, repo, branch, title string, shape ShapePR) (PR, error) {
+	if shape.Submission == "" {
+		return PR{}, fmt.Errorf("src: shaping proposal requires a submission identity")
+	}
+	lock, err := lockfile.AcquireWithin(filepath.Join(prsDir(home), ".open.lock"), 30*time.Second, lockfile.Holder{Name: shape.Actor, Intent: "open shaped source proposal"})
+	if err != nil {
+		return PR{}, err
+	}
+	defer lock.Release()
+	existing, err := ListPRs(home, repo)
+	if err != nil {
+		return PR{}, err
+	}
+	for _, pr := range existing {
+		if pr.Shape != nil && pr.Shape.Submission == shape.Submission {
+			return pr, nil
+		}
+	}
+	pr, err := openPRUnlocked(home, repo, branch, title, "", &shape)
+	if err != nil {
+		return pr, err
+	}
+	return pr, nil
+}
+
+func openPRUnlocked(home, repo, branch, title, testCmd string, shape *ShapePR) (PR, error) {
 	if strings.TrimSpace(title) == "" {
 		return PR{}, fmt.Errorf("src: pr open needs --title")
 	}
@@ -142,9 +212,14 @@ func OpenPR(home, repo, branch, title, testCmd string) (PR, error) {
 		return PR{}, err
 	}
 	pr := PR{
-		ID: id, Repo: repo, Title: title, Author: agentName(), AuthorVendor: vendor(agentName()),
+		Shape: shape,
+		ID:    id, Repo: repo, Title: title, Author: agentName(), AuthorVendor: vendor(agentName()),
 		Base: localBranch, Head: branch, HeadSHA: headSHA,
 		State: PRStateOpen, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if shape != nil && shape.SubmittedBy != "" {
+		pr.Author = shape.SubmittedBy
+		pr.AuthorVendor = vendor(pr.Author)
 	}
 	if testCmd != "" {
 		pr.TestCmd = testCmd

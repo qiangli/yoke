@@ -436,6 +436,9 @@ func newSprintCommitMsgCmd() *cobra.Command {
 		if err != nil {
 			return fail(fmt.Errorf("read commit message: %w", err))
 		}
+		if err := ValidateShapeCommitMessage(string(raw)); err != nil {
+			return fail(err)
+		}
 		if reason, ok, aerr := parseAdhocTrailer(string(raw)); ok || aerr != nil {
 			if aerr != nil {
 				return fail(fmt.Errorf("commit provenance: %w", aerr))

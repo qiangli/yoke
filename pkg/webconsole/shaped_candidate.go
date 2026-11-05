@@ -956,6 +956,7 @@ func (s *server) shapedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/verify", s.handleShapeVerify)
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/approve", s.handleShapeApprove)
 	mux.HandleFunc("POST /api/shape/{app}/candidates/{id}/reject", s.handleShapeReject)
+	mux.HandleFunc("POST /api/shape/{app}/submit", s.handleShapeSubmit)
 	mux.HandleFunc("GET /api/shape/{app}/suggest", s.handleShapeSuggest)
 	mux.HandleFunc("POST /api/shape/{app}/incidents", s.handleShapeIncidentReport)
 	mux.HandleFunc("GET /api/shape/{app}/incidents/{id}", s.handleShapeIncident)

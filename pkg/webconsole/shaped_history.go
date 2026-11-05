@@ -32,20 +32,21 @@ import (
 // historyVersion is one version as the history view serves it: the src
 // record plus the names pinned to it and whether it is the active one.
 type historyVersion struct {
-	Activation string    `json:"activation"`
-	Revision   string    `json:"revision"`
-	Version    string    `json:"version,omitempty"`
-	Kind       string    `json:"kind"`
-	Request    string    `json:"request,omitempty"`
-	Summary    string    `json:"summary,omitempty"`
-	Verdict    string    `json:"verdict,omitempty"`
-	Evidence   string    `json:"evidence,omitempty"`
-	Trigger    string    `json:"trigger,omitempty"`
-	Principal  string    `json:"principal,omitempty"`
-	Author     string    `json:"author,omitempty"`
-	When       time.Time `json:"when,omitempty"`
-	Names      []string  `json:"names,omitempty"`
-	Active     bool      `json:"active,omitempty"`
+	Activation  string    `json:"activation"`
+	Revision    string    `json:"revision"`
+	Version     string    `json:"version,omitempty"`
+	Kind        string    `json:"kind"`
+	Request     string    `json:"request,omitempty"`
+	Summary     string    `json:"summary,omitempty"`
+	Verdict     string    `json:"verdict,omitempty"`
+	Evidence    string    `json:"evidence,omitempty"`
+	Trigger     string    `json:"trigger,omitempty"`
+	Principal   string    `json:"principal,omitempty"`
+	Author      string    `json:"author,omitempty"`
+	When        time.Time `json:"when,omitempty"`
+	Names       []string  `json:"names,omitempty"`
+	Active      bool      `json:"active,omitempty"`
+	Submittable bool      `json:"submittable,omitempty"`
 }
 
 // historyView is the GET history response: every version newest-first with
@@ -196,6 +197,9 @@ func (s *server) handleShapeHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := toHistoryView(h)
+	for i := range view.Versions {
+		view.Versions[i].Submittable = a.candidateService().Submittable(r.Context(), a.caller(h.Principal), view.Versions[i].Revision)
+	}
 	if h.Base != "" && len(h.Entries) > 0 {
 		if repo, err := gogit.PlainOpen(a.repo); err == nil {
 			if commit, err := repo.CommitObject(plumbing.NewHash(h.Base)); err == nil {
