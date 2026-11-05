@@ -39,8 +39,8 @@ Windows file-lock/deletion failures, sustained bounded export, typed status
 changes, query failures, restart persistence, and the producer acknowledgment.
 The manager reports all 56 required Windows-native P0 controls passed on the
 exact frozen source `052a0d2363b156fac9484ac017fceffb3354be39` with paired Bashy
-`ba00dfff6149a5df26072ff448c7a46b98cf6c0f`. This result does not establish
-portable-package acceptance or acceptance of this canonical-based variant. No Go tests or builds were run locally for this integration.
+`ba00dfff6149a5df26072ff448c7a46b98cf6c0f`. This Windows result does not itself establish acceptance of this canonical-based
+variant. The separate portable result is recorded below. No Go tests or builds were run locally for this integration.
 
 Package-tree equality, including file modes, can establish that these two package
 sources match the frozen candidate. It does not establish identical binaries or
@@ -79,6 +79,29 @@ canary uses the frozen source, not this canonical-based integration variant.
 The final emergency delta changes only `pkg/telemetry/spool_windows_test.go`.
 Its diagnostics and fixture behavior are retained exactly in this candidate.
 Production package source is unchanged from the preceding frozen revision.
-Portable package validation and live paired-producer storage observation remain
-separate obligations. The canonical imported-source closure caveat above still
+Portable package validation is recorded below. Live paired-producer storage
+observation remains a separate obligation. The canonical imported-source closure caveat above still
 applies; the Windows result is not attributed to an unbuilt integration binary.
+
+## Portable selected-package result
+
+The remote Darwin/arm64 gate passed all 47 selected portable controls on frozen
+`052a0d2363b156fac9484ac017fceffb3354be39`: 45 in `pkg/telemetry` and two readiness
+controls in `pkg/binmgr`, with zero skips, missing tests, or failures. The test
+stage completed in 11.717 seconds. Windows-only tests and child-helper entry
+points were excluded from this portable selection; they were not counted as
+portable passes. This was not a full-package or full-repository gate.
+
+The source archive SHA-256 was
+`35f122396599c61c7523dd21d6f3fd62f3aeaba5c30262e37b29e1e0b7540360`.
+Go 1.27.2 executable SHA-256 was
+`516c1fbb53b5f8f4852f0c3c379d45bcff53a1032e5cd1a9ca1738f03ba07cb1`, matching
+the existing managed SDK and independently retained SDK bytes. Dependency
+resolution and tests ran offline, using private mutable caches and existing
+module-cache inputs read-only. The source inventory and SDK hash were unchanged
+afterward. Raw Go test JSON SHA-256:
+`387e546e8c5452c2a8b2204b16ad7e76446b6fa179761598bf36f08332d99e88`.
+
+These results belong to the frozen source and selected packages. The imported
+closure caveat for this canonical-based integration still applies. No test or
+build ran on the development host.
