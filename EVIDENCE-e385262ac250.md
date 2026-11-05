@@ -10,7 +10,7 @@ not a publication, rollout, or acceptance record.
 
 - Canonical integration base: `2c22ccb619d432d4f3b71c57e6a65c80c4e3af64`.
 - Emergency branch base: `89df473c6035d6b07471a0267e41fdb466d939a0`.
-- Frozen emergency source: `9f1851689915e3786567f0524acaf3df509c16ca`.
+- Frozen emergency source: `b40a573850393f7aad7cc83ec88dc05ce16cd474`.
 - Imported patch: only the 22 changed code/test files under `pkg/telemetry` and
   `pkg/binmgr` between the emergency base and frozen source.
 
@@ -58,6 +58,16 @@ live storage before the sprint resumes its primary Bash# tests and examples.
 The frozen source now includes the Windows append handle read-access correction
 and platform-specific open helpers, with accompanying snapshot/platform fixture
 updates. The manager reported the native Windows independent-writer control passed
-on this frozen source; the remaining native gate results are pending. This is a
+on predecessor `9f1851689915e3786567f0524acaf3df509c16ca`; the latest frozen
+source has a new pending native gate. This is a
 scoped control result, not full integration or rollout acceptance. No local Go
 tests or builds were run while updating this candidate.
+
+## Lock-timeout accounting follow-up
+
+The latest frozen source increments dropped-span counters for lock failures under
+the existing mutex. A new authored control forces timeout, releases the lock,
+and checks the resumed export's gap report. The concurrency fixture now permits
+only a deadline-exceeded result accompanied by the drop marker; other errors
+remain failures. Native validation of this revision is pending. The manager's
+canary uses the frozen source, not this canonical-based integration variant.

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -538,10 +539,12 @@ func TestConcurrentExportersStayBounded(t *testing.T) {
 			defer e.Shutdown(context.Background())
 			for i := 0; i < batches; i++ {
 				if err := e.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{padSpan("w" + strconv.Itoa(w) + "-" + strconv.Itoa(i))}); err != nil {
-					// A hard-bound drop is the DESIGNED behaviour under
-					// sustained pressure: bounded and observable. Anything
-					// else is a real failure.
-					if !strings.Contains(err.Error(), "hard bound") {
+					// Both hard-cap pressure and the bounded transaction-lock
+					// wait deliberately drop observably instead of queuing.
+					// Never accept access errors or other storage failures.
+					lockTimeout := errors.Is(err, context.DeadlineExceeded) &&
+						strings.Contains(err.Error(), "spool lock unavailable, dropped")
+					if !strings.Contains(err.Error(), "hard bound") && !lockTimeout {
 						errs <- err
 						return
 					}
@@ -560,7 +563,7 @@ func TestConcurrentExportersStayBounded(t *testing.T) {
 		}
 	}
 	if drops > 0 {
-		t.Logf("note: %d hard-bound drops under %d-way contention (bounded and observable, as designed)", drops, writers)
+		t.Logf("note: %d bounded observable drops under %d-way contention (bounded and observable, as designed)", drops, writers)
 	}
 
 	fi, err := os.Stat(path)
@@ -664,4 +667,70 @@ func newTestSpanContext() trace.SpanContext {
 		SpanID:     trace.SpanID{0x02},
 		TraceFlags: trace.FlagsSampled,
 	})
+}
+
+// Bounded lock waits must leave a durable gap marker when writing resumes,
+// not merely a transient error/notice that disappears from future context.
+func TestLockTimeoutDropSummaryRecordedOnResume(t *testing.T) {
+	withSmallSpoolCap(t, 16<<10)
+	notice := withNoticeCapture(t)
+	path := filepath.Join(t.TempDir(), "spans.jsonl")
+	e, err := newSpoolExporter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Shutdown(context.Background())
+	holder, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	release, err := lockSpool(context.Background(), holder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			_ = release()
+		}
+	}()
+	err = e.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{padSpan("lost-one"), padSpan("lost-two")})
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "spool lock unavailable, dropped 2 spans") {
+		t.Fatalf("want explicit bounded lock drop, got %v", err)
+	}
+	if !strings.Contains(notice.String(), "export dropped 2 spans") {
+		t.Fatalf("drop notice missing: %s", notice.String())
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() != 0 {
+		t.Fatalf("failed transaction wrote bytes: info=%v error=%v", fi, err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	released = true
+	if err := e.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{padSpan("after-lock")}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want gap marker and successful export, got %d lines: %s", len(lines), b)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["_msg"] != "telemetry.spool.dropped" || summary["dropped_batches"] != float64(1) || summary["dropped_spans"] != float64(2) {
+		t.Fatalf("wrong durable loss accounting: %v", summary)
+	}
+	if !strings.Contains(lines[1], `"_msg":"after-lock"`) {
+		t.Fatalf("successful export missing: %s", b)
+	}
+	if e.droppedBatches != 0 || e.droppedSpans != 0 {
+		t.Fatal("persisted gap accounting was not consumed")
+	}
 }

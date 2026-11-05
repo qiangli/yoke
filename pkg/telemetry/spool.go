@@ -379,6 +379,8 @@ func (e *spoolExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnly
 	release, err := lockSpool(context.Background(), e.f)
 	if err != nil {
 		e.rotationFailures++
+		e.droppedBatches++
+		e.droppedSpans += int64(len(spans))
 		e.noticef("export dropped %d spans: spool lock unavailable (%v) — contention or a wedged compactor; the batch is dropped observably, never queued unboundedly", len(spans), err)
 		return fmt.Errorf("telemetry: spool lock unavailable, dropped %d spans: %w", len(spans), err)
 	}
