@@ -11,7 +11,7 @@ joins it unless `--sprint N` or `--no-sprint` is given; personal todos stay
 standalone. Explicit operands always win. An empty board is an error — create
 or select a sprint explicitly. See `bashy sprint --help`.
 
-This Go module (`github.com/qiangli/yoke`) is bashy's agentic userland: everything on top of the certified POSIX package `github.com/qiangli/coreutils` (a flat sibling this module imports, never the reverse). Non-POSIX command packages live in `cmds/`, one utility per directory (`cmds/tar`, `cmds/jq`, `cmds/browser`); `cmds/all` blank-imports coreutils' certified `cmds/all` and adds these, so it registers the WHOLE userland. `cmd/yoke` is the busybox-style binary (+ `yoke mcp`). Shared runtime and flags come from coreutils' `tool/`; in-process git support is in `git/`; the AgentOS hub packages are in `pkg/`. Docs live in `docs/`; managed externals and the mirrored ollama/podman forks live under `external/`.
+This Go module (`github.com/qiangli/yoke`) is bashy's agentic userland: everything on top of the POSIX implementation package `github.com/qiangli/coreutils` (a flat sibling this module imports, never the reverse). Non-POSIX command packages live in `cmds/`, one utility per directory (`cmds/tar`, `cmds/jq`, `cmds/browser`); `cmds/all` blank-imports coreutils' POSIX/GNU `cmds/all` and adds these, so it registers the WHOLE userland. `cmd/yoke` is the busybox-style binary (+ `yoke mcp`). Shared runtime and flags come from coreutils' `tool/`; in-process git support is in `git/`; the AgentOS hub packages are in `pkg/`. Docs live in `docs/`; managed externals and the mirrored ollama/podman forks live under `external/`.
 
 ## Build, Test, and Development Commands
 

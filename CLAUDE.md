@@ -15,10 +15,10 @@ standalone. Explicit operands always win. An empty board is an error — create
 or select a sprint explicitly. See `bashy sprint --help`.
 
 `yoke` is bashy's **agentic userland**: everything the bashy shell adds on
-top of the certified POSIX package that is not itself a POSIX-required or
+top of the POSIX implementation package that is not itself a POSIX-required or
 GNU coreutils program. It was split out of
 [coreutils](https://github.com/qiangli/coreutils) in Sprint 208 (2026-09-18)
-so that yoke can change rapidly with AI advancements while the certified
+so that yoke can change rapidly with AI advancements while the POSIX implementation
 package (`bash` engine + `coreutils`) stays stable — bug fixes only. The
 dependency direction is load-bearing: **yoke imports coreutils
 (`tool/`, `multicall/`, `shell/`, `pkg/{weavecli,schedule,lockfile,…}`);
@@ -34,7 +34,7 @@ What lives here:
 - the **non-POSIX applets and front-door verbs** — `cmds/{ast,browser,fetch,
   jq,lens,tar,gzip,tree,which,watch,tokens,tz,ntp,cal,hexdump,clip,duration,why,
   atq,atrm,graph,foreman,resources}`; `cmds/all` blank-imports coreutils'
-  certified `cmds/all` and adds these, so a consumer that wants the whole
+  POSIX/GNU `cmds/all` and adds these, so a consumer that wants the whole
   userland imports `github.com/qiangli/yoke/cmds/all`;
 - `git/` — the pure-Go git client; `mcp/` — the MCP server (`yoke mcp`);
 - `external/` — managed externals, toolchain provisioners, the ollama and

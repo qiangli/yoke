@@ -1,7 +1,12 @@
 # yoke
 
+**Certification status:** coreutils/Bashy conformance results do not certify
+Yoke or its agentic commands. [S561 evidence](https://github.com/qiangli/bashy/blob/main/docs/s561/a4-licensed-results.md) records engineering
+closure with 67 residual non-passes; [S571](https://github.com/dhnt/umbrella/blob/main/docs/plan-s571-posix-certification-readiness.md) owns their resolution
+and submission readiness. No official POSIX certification is claimed.
+
 bashy's **agentic userland**: everything the [bashy](https://github.com/qiangli/bashy)
-shell adds on top of the certified POSIX package
+shell adds on top of the POSIX implementation package
 [coreutils](https://github.com/qiangli/coreutils) that is not itself a
 POSIX-required or GNU coreutils program. Pure Go, no cgo in core, one
 identical toolset on Linux, macOS and Windows.
@@ -9,7 +14,7 @@ identical toolset on Linux, macOS and Windows.
 yoke **imports** coreutils (its `tool/` framework, `multicall/`, `shell/`
 adapter and the handful of shared packages the applets need) and coreutils
 never imports yoke. The split (Sprint 208, 2026-09-18) exists so the
-certified package can stay stable — bug fixes only — while this one changes
+POSIX implementation package can stay stable — bug fixes only — while this one changes
 as fast as agentic tooling does.
 
 ## What is here
