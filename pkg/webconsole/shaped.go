@@ -24,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	_ "github.com/qiangli/yoke/git" // pure-Go file transport for local clones
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 	"github.com/qiangli/yoke/pkg/shape/boundary"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
@@ -43,6 +44,11 @@ import (
 // the panel refuses to start a candidate, without a Verifier nothing can be
 // approved.
 type ShapeOptions struct {
+	Track func(context.Context, *shapecore.Candidate) error
+	// Actor fields are supplied only by trusted local adapters, never request bodies.
+	Actor           string
+	RepresentedUser string
+	TrackingRoot    string
 	// Home is the Bashy home holding per-principal state. Empty = shape.Home().
 	Home string
 	// WorkRoot holds candidate workspaces. Empty = <Home>/shape-work. It is

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"os"
 	"path/filepath"
 	"sort"
@@ -160,6 +161,11 @@ const incidentCauseWindow = 10 * time.Second
 // The returned incident tells the caller whether to start a repair
 // (State == repairing and no attempt in flight).
 func (s *incidentStore) Observe(in Incident, now time.Time) (Incident, bool, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return Incident{}, false, err
+	}
+	defer fileLock.Release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if in.Signature == "" {
@@ -245,6 +251,11 @@ func foldScriptFallout(all []Incident, now time.Time) (Incident, bool) {
 // Attempt records the outcome of one repair attempt and moves the incident.
 // It refuses any attempt past the store's limit with ErrAttemptsExhausted.
 func (s *incidentStore) Attempt(id string, a RepairAttempt) (Incident, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return Incident{}, err
+	}
+	defer fileLock.Release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	in, err := s.getLocked(id)
@@ -276,6 +287,11 @@ func (s *incidentStore) Attempt(id string, a RepairAttempt) (Incident, error) {
 // alone. The bool reports whether this call healed it (true) or it was
 // already closed (false: nothing left to do either way).
 func (s *incidentStore) Heal(id string, now time.Time) (Incident, bool, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return Incident{}, false, err
+	}
+	defer fileLock.Release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	in, err := s.getLocked(id)
@@ -295,6 +311,11 @@ func (s *incidentStore) Heal(id string, now time.Time) (Incident, bool, error) {
 // evidence gate refuses the attempt as bound to the moved base. A closed
 // incident is left alone.
 func (s *incidentStore) Rebase(id, rev string) (Incident, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return Incident{}, err
+	}
+	defer fileLock.Release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	in, err := s.getLocked(id)
@@ -310,6 +331,11 @@ func (s *incidentStore) Rebase(id, rev string) (Incident, error) {
 
 // Get returns one incident.
 func (s *incidentStore) Get(id string) (Incident, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return Incident{}, err
+	}
+	defer fileLock.Release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.getLocked(id)
@@ -317,6 +343,11 @@ func (s *incidentStore) Get(id string) (Incident, error) {
 
 // List returns incidents, newest first.
 func (s *incidentStore) List() ([]Incident, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return nil, err
+	}
+	defer fileLock.Release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listLocked()

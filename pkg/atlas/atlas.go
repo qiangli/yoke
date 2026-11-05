@@ -1412,6 +1412,8 @@ func init() {
 	// working-tree edits under core or protected paths. Diagnostics group: it
 	// verifies the supply chain rather than shipping anything.
 	addVerb("src", Entry{Stage: StageCross, Group: GroupDiagnostics, Caps: []string{CapJSON, CapNeedsNetwork}})
+	// shape operates the installed application's scoped change lifecycle.
+	addVerb("shape", Entry{Stage: StageCross, Group: GroupPlatform, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses, CapNeedsNetwork}, Effects: []string{EffRead, EffWrite, EffDestroy, EffNet, EffExec, EffSpend, EffPersist, EffRemote}, Reversibility: RevIrreversible, Stability: StabilityExperimental})
 	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
 	// nobody tested, but because the gate (the command that decides pass/fail)
 	// was spelled four incompatible ways across four packages: weave's

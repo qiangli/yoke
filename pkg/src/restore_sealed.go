@@ -133,6 +133,15 @@ func prepareRestoreWorkspace(ctx context.Context, srcDir, target, base string) (
 // with the reason, identically for the web route and the src CLI on every
 // OS.
 func RestoreSealed(ctx context.Context, home, app, rev, principal string, opts RestoreSealedOptions) (ActivateResult, error) {
+	lock, err := lockActivation(home, app, principal)
+	if err != nil {
+		return ActivateResult{}, err
+	}
+	defer lock.Release()
+	return restoreSealedUnlocked(ctx, home, app, rev, principal, opts)
+}
+
+func restoreSealedUnlocked(ctx context.Context, home, app, rev, principal string, opts RestoreSealedOptions) (ActivateResult, error) {
 	var out ActivateResult
 	principal = strings.TrimSpace(principal)
 	if principal == "" {
@@ -196,7 +205,7 @@ func RestoreSealed(ctx context.Context, home, app, rev, principal string, opts R
 	if request == "" {
 		request = "restore to " + restoreDisplay(rev, targetSHA)
 	}
-	return Restore(home, app, targetSHA, principal, RestoreOptions{
+	return restoreUnlocked(home, app, targetSHA, principal, RestoreOptions{
 		Gate: shapegate.New(home, report.Path), Request: request, When: opts.When,
 	})
 }
@@ -206,6 +215,15 @@ func RestoreSealed(ctx context.Context, home, app, rev, principal string, opts R
 // gated like one. With nothing to undo it refuses and the active revision
 // stays where it is.
 func UndoSealed(ctx context.Context, home, app, principal string, opts RestoreSealedOptions) (ActivateResult, error) {
+	lock, err := lockActivation(home, app, principal)
+	if err != nil {
+		return ActivateResult{}, err
+	}
+	defer lock.Release()
+	return undoSealedUnlocked(ctx, home, app, principal, opts)
+}
+
+func undoSealedUnlocked(ctx context.Context, home, app, principal string, opts RestoreSealedOptions) (ActivateResult, error) {
 	var out ActivateResult
 	principal = strings.TrimSpace(principal)
 	if principal == "" {
@@ -226,5 +244,5 @@ func UndoSealed(ctx context.Context, home, app, principal string, opts RestoreSe
 		return out, fmt.Errorf("src: nothing to undo: no previous version is recorded")
 	}
 	opts.Undo = true
-	return RestoreSealed(ctx, home, app, st.LastKnownGood, principal, opts)
+	return restoreSealedUnlocked(ctx, home, app, st.LastKnownGood, principal, opts)
 }

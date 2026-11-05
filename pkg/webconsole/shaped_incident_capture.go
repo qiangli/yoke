@@ -6,6 +6,7 @@ package webconsole
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -312,62 +313,13 @@ func (s *server) handleShapeIncidentReport(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "incident report is not JSON", http.StatusBadRequest)
 		return
 	}
-	if rep.Kind != IncidentAsset && rep.Kind != IncidentScript {
-		http.Error(w, "incident kind must be asset or script", http.StatusBadRequest)
-		return
-	}
-	path := rep.Path
-	if i := strings.IndexByte(path, '?'); i >= 0 {
-		path = path[:i]
-	}
-	path = strings.TrimSpace(strings.TrimPrefix(path, "/"))
-	if len(path) > 256 {
-		path = path[:256]
-	}
-	if path == "" {
-		path = "/"
-	}
-	msg := incidentLine(rep.Message)
-	if len(msg) > 1024 {
-		msg = msg[:1024]
-	}
-	stack := strings.TrimSpace(rep.Stack)
-	if len(stack) > 2048 {
-		stack = stack[len(stack)-2048:]
-	}
-	if msg == "" {
-		msg = incidentLine(string(rep.Kind) + " error: " + rep.URL)
-		if msg == "" {
-			msg = string(rep.Kind) + " error"
+	in, start, err := observeIncidentReport(a, principal, rep, rep.Offline || crossOrigin(r, rep.URL))
+	if err != nil {
+		code := http.StatusServiceUnavailable
+		if errors.Is(err, errIncidentKind) {
+			code = http.StatusBadRequest
 		}
-	}
-	state := IncidentStatus("")
-	if rep.Offline || crossOrigin(r, rep.URL) {
-		state = IncidentExternal
-	}
-	baseRev := ""
-	if repo, err := a.open(); err == nil {
-		if c, err := a.active(repo, principal); err == nil {
-			baseRev = c.Hash.String()
-		}
-	}
-	st, err := a.store(principal)
-	if err != nil {
-		http.Error(w, "incident store unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	istore, err := openIncidentsWithLimit(st, a.repairLimitForRev(baseRev))
-	if err != nil {
-		http.Error(w, "incident store unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	in, start, err := istore.Observe(Incident{
-		App: a.name, Kind: rep.Kind, Path: path,
-		Message: msg, Evidence: redactEvidence(msg + "\n" + stack),
-		BaseRev: baseRev, State: state,
-	}, time.Now())
-	if err != nil {
-		http.Error(w, "incident not recorded", http.StatusServiceUnavailable)
+		http.Error(w, err.Error(), code)
 		return
 	}
 	if start && startRepair != nil {
@@ -423,3 +375,64 @@ func (s *server) handleShapeIncident(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, in)
 }
+
+func observeIncidentReport(a *shapedApp, principal string, rep incidentReport, external bool) (Incident, bool, error) {
+	if rep.Kind != IncidentAsset && rep.Kind != IncidentScript {
+		return Incident{}, false, errIncidentKind
+	}
+	path := rep.Path
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	path = strings.TrimSpace(strings.TrimPrefix(path, "/"))
+	if len(path) > 256 {
+		path = path[:256]
+	}
+	if path == "" {
+		path = "/"
+	}
+	msg := incidentLine(rep.Message)
+	if len(msg) > 1024 {
+		msg = msg[:1024]
+	}
+	stack := strings.TrimSpace(rep.Stack)
+	if len(stack) > 2048 {
+		stack = stack[len(stack)-2048:]
+	}
+	if msg == "" {
+		msg = incidentLine(string(rep.Kind) + " error: " + rep.URL)
+		if msg == "" {
+			msg = string(rep.Kind) + " error"
+		}
+	}
+	state := IncidentStatus("")
+	if external {
+		state = IncidentExternal
+	}
+	baseRev := ""
+	if repo, err := a.open(); err == nil {
+		if c, err := a.active(repo, principal); err == nil {
+			baseRev = c.Hash.String()
+		}
+	}
+	st, err := a.store(principal)
+	if err != nil {
+		return Incident{}, false, err
+	}
+	istore, err := openIncidentsWithLimit(st, a.repairLimitForRev(baseRev))
+	if err != nil {
+		return Incident{}, false, err
+	}
+	in, start, err := istore.Observe(Incident{
+		App: a.name, Kind: rep.Kind, Path: path,
+		Message: msg, Evidence: redactEvidence(msg + "\n" + stack),
+		BaseRev: baseRev, State: state,
+	}, time.Now())
+	if err != nil {
+		return Incident{}, false, err
+	}
+
+	return in, start, nil
+}
+
+var errIncidentKind = errors.New("incident kind must be asset or script")

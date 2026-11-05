@@ -260,6 +260,8 @@ func recordReviewVersion(dir, slug, tipSHA, targetSHA string) (string, error) {
 // callers. When overrides the activation time; zero means the server clock
 // now (UTC).
 type ActivateOptions struct {
+	// ExpectedBase, when set, is checked under the shared activation lock before the gate.
+	ExpectedBase  string
 	Gate          state.ActivationGate
 	PreSwitchHook func() error
 	Request       string
@@ -305,6 +307,15 @@ var gateOverridden bool
 // active revision in place. Only the calling principal's line and record
 // move; nothing shared and no data directory is touched.
 func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateResult, error) {
+	lock, err := lockActivation(home, app, principal)
+	if err != nil {
+		return ActivateResult{}, err
+	}
+	defer lock.Release()
+	return activateUnlocked(home, app, rev, principal, opts)
+}
+
+func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (ActivateResult, error) {
 	var out ActivateResult
 	principal = strings.TrimSpace(principal)
 	if principal == "" {
@@ -349,6 +360,9 @@ func Activate(home, app, rev, principal string, opts ActivateOptions) (ActivateR
 	gateBase := st.ActiveRevision
 	if gateBase == "" {
 		gateBase = lineParent
+	}
+	if opts.ExpectedBase != "" && opts.ExpectedBase != gateBase {
+		return out, fmt.Errorf("%w: expected %s, current %s", ErrStaleBase, shortSHA(opts.ExpectedBase), shortSHA(gateBase))
 	}
 	verdict, err := opts.Gate.Check(revSHA, gateBase, principal)
 	if err != nil {

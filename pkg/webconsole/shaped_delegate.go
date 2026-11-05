@@ -4,16 +4,10 @@
 package webconsole
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"github.com/qiangli/yoke/pkg/shape/selfbin"
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -75,38 +69,5 @@ func (d BashyDelegate) delegateTimeouts() (timeout, idle time.Duration) {
 
 // Delegate runs the agent and parses the bashy-chat-v1 envelope.
 func (d BashyDelegate) Delegate(ctx context.Context, req DelegateRequest) (DelegateResult, error) {
-	if strings.TrimSpace(d.Agent) == "" {
-		return DelegateResult{}, errors.New("no shaping agent configured (tool:model)")
-	}
-	bin := selfbin.Resolve(d.Bashy)
-	timeout, idle := d.delegateTimeouts()
-	cmd := exec.CommandContext(ctx, bin, "delegate", "--json", "--agent", d.Agent,
-		"--timeout", timeout.String(), "--idle-timeout", idle.String(), "--cwd", req.Dir, req.Task)
-	cmd.Dir = req.Dir
-	cmd.Env = delegateEnv(d.Agent)
-	var out, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &stderr
-	runErr := cmd.Run()
-	var env struct {
-		SchemaVersion string `json:"schema_version"`
-		Agent         string `json:"agent"`
-		Identity      string `json:"identity"`
-		Receipt       string `json:"receipt"`
-		ExitCode      int    `json:"exit_code"`
-		Output        string `json:"output"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &env); err != nil {
-		if runErr != nil {
-			return DelegateResult{}, fmt.Errorf("delegate: %v: %s", runErr, strings.TrimSpace(stderr.String()))
-		}
-		return DelegateResult{}, fmt.Errorf("delegate: unreadable result envelope: %w", err)
-	}
-	res := DelegateResult{Agent: env.Agent, Identity: env.Identity, Receipt: env.Receipt, Output: env.Output}
-	if res.Agent == "" {
-		res.Agent = d.Agent
-	}
-	if runErr != nil || env.ExitCode != 0 {
-		return res, fmt.Errorf("delegate: agent %s exited %d", res.Agent, env.ExitCode)
-	}
-	return res, nil
+	return (shapecore.BashyDelegate{Bashy: d.Bashy, Agent: d.Agent, Timeout: d.Timeout, IdleTimeout: d.IdleTimeout}).Delegate(ctx, req)
 }

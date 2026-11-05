@@ -244,6 +244,17 @@ func LabelsInUse(items []*Issue) []WordCount {
 	return CountWords(items, func(it *Issue) []string { return it.Labels })
 }
 
+// ShapeChange links one ordinary tracked item to a shaping candidate/version.
+// Several changes may refer to the same story without replacing earlier links.
+type ShapeChange struct {
+	App             string `yaml:"app" json:"app"`
+	Candidate       string `yaml:"candidate" json:"candidate"`
+	Version         string `yaml:"version,omitempty" json:"version,omitempty"`
+	Actor           string `yaml:"actor" json:"actor"`
+	RepresentedUser string `yaml:"represented_user" json:"represented_user"`
+	Evidence        string `yaml:"evidence,omitempty" json:"evidence,omitempty"`
+}
+
 // Issue is one record in the register.
 //
 // It is a markdown file with a YAML frontmatter block — the same shape kb uses for its
@@ -315,6 +326,13 @@ type Issue struct {
 	Closed     *time.Time `yaml:"closed,omitempty" json:"closed,omitempty"`
 	Resolution string     `yaml:"resolution,omitempty" json:"resolution,omitempty"` // fixed | declined | duplicate | obsolete
 	ClosedBy   string     `yaml:"closed_by,omitempty" json:"closed_by,omitempty"`
+
+	// Origin identifies how ordinary work entered the tracker.
+	Origin string        `yaml:"origin,omitempty" json:"origin,omitempty"`
+	Shape  []ShapeChange `yaml:"shape,omitempty" json:"shape,omitempty"`
+	// Extra preserves unrelated extension frontmatter through a read/write cycle.
+	// Known fields remain typed above; extensions are not a second issue store.
+	Extra map[string]any `yaml:",inline" json:"-"`
 
 	Body string `yaml:"-" json:"body,omitempty"`
 }

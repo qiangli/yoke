@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 	"github.com/qiangli/yoke/pkg/shape/appserver"
 )
 
@@ -188,30 +189,7 @@ func trailerValues(msg, key string) []string {
 // parseNextSteps reads Genie's follow-up list: the bullets under the last
 // NEXT: heading, up to the next heading or blank line, cleaned like a
 // declared example list. "- (none)" and prose are dropped.
-func parseNextSteps(output string) []string {
-	var items []string
-	in := false
-	for _, raw := range strings.Split(output, "\n") {
-		line := strings.TrimSpace(raw)
-		heading := strings.TrimSpace(strings.Trim(line, "#* "))
-		if heading == nextHeading {
-			items, in = nil, true
-			continue
-		}
-		if !in {
-			continue
-		}
-		if line == "" || strings.HasSuffix(heading, ":") {
-			in = false
-			continue
-		}
-		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
-			continue
-		}
-		items = append(items, line[2:])
-	}
-	return cleanWishes(items)
-}
+func parseNextSteps(output string) []string { return shapecore.ParseNext(output) }
 
 var (
 	reSpace = regexp.MustCompile(`\s+`)

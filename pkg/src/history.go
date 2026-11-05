@@ -545,6 +545,15 @@ func isHexSHA(s string) bool {
 // refusal, fails before anything is recorded or switched: the active
 // revision stays where it was.
 func Restore(home, app, rev, principal string, opts RestoreOptions) (ActivateResult, error) {
+	lock, err := lockActivation(home, app, principal)
+	if err != nil {
+		return ActivateResult{}, err
+	}
+	defer lock.Release()
+	return restoreUnlocked(home, app, rev, principal, opts)
+}
+
+func restoreUnlocked(home, app, rev, principal string, opts RestoreOptions) (ActivateResult, error) {
 	var out ActivateResult
 	principal = strings.TrimSpace(principal)
 	if principal == "" {

@@ -334,6 +334,15 @@ func findOffering(home, app, target, principal string) (Offering, error) {
 
 // Adopt previews or accepts an offering.
 func Adopt(home, app, offerTarget, principal string, opts AdoptOptions) (AdoptResult, error) {
+	lock, err := lockActivation(home, app, principal)
+	if err != nil {
+		return AdoptResult{}, err
+	}
+	defer lock.Release()
+	return adoptUnlocked(home, app, offerTarget, principal, opts)
+}
+
+func adoptUnlocked(home, app, offerTarget, principal string, opts AdoptOptions) (AdoptResult, error) {
 	principal = strings.TrimSpace(principal)
 	if principal == "" {
 		return AdoptResult{}, fmt.Errorf("src: adopt needs a principal")
@@ -420,7 +429,7 @@ func Adopt(home, app, offerTarget, principal string, opts AdoptOptions) (AdoptRe
 			return AdoptResult{}, err
 		}
 	}
-	actRes, err := Activate(home, app, candidateSHA, principal, ActivateOptions{Gate: gate})
+	actRes, err := activateUnlocked(home, app, candidateSHA, principal, ActivateOptions{Gate: gate, ExpectedBase: oursSHA})
 	if err != nil {
 		return AdoptResult{}, err
 	}
