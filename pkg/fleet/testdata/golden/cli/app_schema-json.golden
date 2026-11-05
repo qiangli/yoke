@@ -35,6 +35,41 @@
     "description": "loopback port the app listens on; the console proxies /\u003cname\u003e/ to it"
   },
   {
+    "path": "shaping",
+    "type": "object",
+    "description": "trusted shaping kind, build/test argv and service unit"
+  },
+  {
+    "path": "shaping.build",
+    "type": "[]string",
+    "description": "trusted build argv; {output} is required for cli/service"
+  },
+  {
+    "path": "shaping.build.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "shaping.kind",
+    "type": "string",
+    "description": "web (default), cli or service"
+  },
+  {
+    "path": "shaping.service",
+    "type": "string",
+    "description": "service kind only: existing container-backed service unit"
+  },
+  {
+    "path": "shaping.test",
+    "type": "[]string",
+    "description": "trusted test argv; optional {artifact} and {revision}"
+  },
+  {
+    "path": "shaping.test.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
     "path": "source",
     "type": "string",
     "description": "shaped only: absolute path of the app's git checkout"
