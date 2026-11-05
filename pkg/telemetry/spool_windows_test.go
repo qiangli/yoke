@@ -20,8 +20,10 @@ package telemetry
 // natively too (Process.Kill is TerminateProcess).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -158,10 +160,11 @@ func TestWindowsIndependentWriterProcessesStayBounded(t *testing.T) {
 
 	const writers = 4
 	cmds := make([]*exec.Cmd, writers)
+	outputs := make([]bytes.Buffer, writers)
 	for i := range cmds {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestWindowsWriterChild$", "-test.v")
 		cmd.Env = append(os.Environ(), writerChildEnv, "BASHY_OTEL_SPOOL="+path)
-		cmd.Stdout, cmd.Stderr = nil, nil
+		cmd.Stdout, cmd.Stderr = &outputs[i], &outputs[i]
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -193,15 +196,18 @@ func TestWindowsIndependentWriterProcessesStayBounded(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	for _, cmd := range cmds {
+	childFailed := false
+	for i, cmd := range cmds {
 		if err := cmd.Wait(); err != nil {
-			close(stop)
-			sampler.Wait()
-			t.Fatalf("writer child failed: %v", err)
+			t.Errorf("writer child %d failed: %v; output:\n%s", i, err, outputs[i].String())
+			childFailed = true
 		}
 	}
 	close(stop)
 	sampler.Wait()
+	if childFailed {
+		t.FailNow()
+	}
 	if got := peak.Load(); got > hardSpoolBytes() {
 		t.Errorf("multi-process spool transiently crossed the hard bound: peak %d > %d", got, hardSpoolBytes())
 	}
@@ -245,7 +251,9 @@ func TestWindowsWriterChild(t *testing.T) {
 	}
 	for i := 0; i < 250; i++ {
 		if err := e.ExportSpans(context.Background(), []sdktrace.ReadOnlySpan{padSpan(fmt.Sprintf("child-%d", i))}); err != nil {
-			if !strings.Contains(err.Error(), "hard bound") {
+			lockTimeout := errors.Is(err, context.DeadlineExceeded) &&
+				strings.Contains(err.Error(), "spool lock unavailable, dropped")
+			if !strings.Contains(err.Error(), "hard bound") && !lockTimeout {
 				t.Fatal(err)
 			}
 		}

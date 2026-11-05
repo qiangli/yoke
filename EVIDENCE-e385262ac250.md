@@ -10,7 +10,7 @@ not a publication, rollout, or acceptance record.
 
 - Canonical integration base: `2c22ccb619d432d4f3b71c57e6a65c80c4e3af64`.
 - Emergency branch base: `89df473c6035d6b07471a0267e41fdb466d939a0`.
-- Frozen emergency source: `b40a573850393f7aad7cc83ec88dc05ce16cd474`.
+- Frozen emergency source: `052a0d2363b156fac9484ac017fceffb3354be39`.
 - Imported patch: only the 22 changed code/test files under `pkg/telemetry` and
   `pkg/binmgr` between the emergency base and frozen source.
 
@@ -37,8 +37,10 @@ before deployment; source availability is not rollout evidence.
 Regression controls are authored for rotation, concurrency, interrupted copying,
 Windows file-lock/deletion failures, sustained bounded export, typed status
 changes, query failures, restart persistence, and the producer acknowledgment.
-Native validation is pending in the manager-controlled gate on the frozen
-emergency source. No Go tests or builds were run locally for this integration.
+The manager reports all 56 required Windows-native P0 controls passed on the
+exact frozen source `052a0d2363b156fac9484ac017fceffb3354be39` with paired Bashy
+`ba00dfff6149a5df26072ff448c7a46b98cf6c0f`. This result does not establish
+portable-package acceptance or acceptance of this canonical-based variant. No Go tests or builds were run locally for this integration.
 
 Package-tree equality, including file modes, can establish that these two package
 sources match the frozen candidate. It does not establish identical binaries or
@@ -58,8 +60,8 @@ live storage before the sprint resumes its primary Bash# tests and examples.
 The frozen source now includes the Windows append handle read-access correction
 and platform-specific open helpers, with accompanying snapshot/platform fixture
 updates. The manager reported the native Windows independent-writer control passed
-on predecessor `9f1851689915e3786567f0524acaf3df509c16ca`; the latest frozen
-source has a new pending native gate. This is a
+on predecessor `9f1851689915e3786567f0524acaf3df509c16ca`; the final frozen
+source subsequently passed the 56-control native gate recorded above. This is a
 scoped control result, not full integration or rollout acceptance. No local Go
 tests or builds were run while updating this candidate.
 
@@ -69,5 +71,14 @@ The latest frozen source increments dropped-span counters for lock failures unde
 the existing mutex. A new authored control forces timeout, releases the lock,
 and checks the resumed export's gap report. The concurrency fixture now permits
 only a deadline-exceeded result accompanied by the drop marker; other errors
-remain failures. Native validation of this revision is pending. The manager's
+remain failures. The final frozen source passed the native controls recorded above. The manager's
 canary uses the frozen source, not this canonical-based integration variant.
+
+## Final native-control fixture update
+
+The final emergency delta changes only `pkg/telemetry/spool_windows_test.go`.
+Its diagnostics and fixture behavior are retained exactly in this candidate.
+Production package source is unchanged from the preceding frozen revision.
+Portable package validation and live paired-producer storage observation remain
+separate obligations. The canonical imported-source closure caveat above still
+applies; the Windows result is not attributed to an unbuilt integration binary.
