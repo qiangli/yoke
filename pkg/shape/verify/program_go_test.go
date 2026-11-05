@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,7 +32,7 @@ func TestProgramNativeGoLayouts(t *testing.T) {
 }
 
 func TestProgramGoAccountingRequiresBaselineCompletion(t *testing.T) {
-	expected := map[string]bool{"fixture\x00TestBaseline": true}
+	expected := &programGoBaseline{Checks: map[string]bool{"fixture\x00TestBaseline": true}}
 	for _, action := range []string{"", "skip", "fail"} {
 		output := ""
 		if action != "" {
@@ -69,7 +70,7 @@ func TestProgramGoAccountingRejectsProductionInitExitZero(t *testing.T) {
 		}
 		return string(output)
 	}
-	expected := map[string]bool{"shape-accounting-fixture\x00TestBaseline": true}
+	expected := &programGoBaseline{Checks: map[string]bool{"shape-accounting-fixture\x00TestBaseline": true}}
 	if _, err := accountProgramGoTests(run(), expected); err != nil {
 		t.Fatalf("baseline: %v", err)
 	}
@@ -79,5 +80,29 @@ func TestProgramGoAccountingRejectsProductionInitExitZero(t *testing.T) {
 	}
 	if _, err := accountProgramGoTests(run(), expected); err == nil {
 		t.Fatal("exit-zero process without baseline test completion was accepted")
+	}
+}
+
+func TestProgramGoAccountingAllowsOnlyBaselineKnownNoTestPackages(t *testing.T) {
+	baseline := &programGoBaseline{Checks: map[string]bool{"fixture\x00TestBaseline": true}, EmptyPackages: map[string]bool{"fixture/empty": true}}
+	pass := `{"Action":"pass","Package":"fixture","Test":"TestBaseline"}` + "\n"
+	noTests := `{"Action":"build-output","ImportPath":"fixture/empty","Output":"?\tfixture/empty\t[no test files]\n"}` + "\n" + `{"Action":"skip","Package":"fixture/empty"}` + "\n"
+	if _, e := accountProgramGoTests(pass+noTests, baseline); e != nil {
+		t.Fatal(e)
+	}
+	for name, out := range map[string]string{
+		"named skipped test":            pass + noTests + `{"Action":"skip","Package":"fixture/empty","Test":"TestUnexpected"}`,
+		"new package skip":              pass + strings.ReplaceAll(noTests, "fixture/empty", "fixture/new"),
+		"missing required test":         noTests,
+		"early exit":                    `{"Action":"pass","Package":"fixture"}` + "\n" + noTests,
+		"empty package fail":            pass + noTests + `{"Action":"fail","Package":"fixture/empty"}`,
+		"skip without no-test metadata": pass + `{"Action":"skip","Package":"fixture/empty"}`,
+		"mismatched package metadata":   pass + strings.Replace(noTests, `"ImportPath":"fixture/empty"`, `"ImportPath":"fixture/other"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, e := accountProgramGoTests(out, baseline); e == nil {
+				t.Fatal("unsafe package skip accepted")
+			}
+		})
 	}
 }

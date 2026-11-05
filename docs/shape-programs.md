@@ -55,6 +55,9 @@ Both declared commands must succeed. Supported Go checks use direct
 `scripts/go-product.sh` supports builds only and cannot serve as a test gate. Selected
 checks are listed from the trusted base; every selected baseline check must
 complete successfully. Missing, skipped and failed checks refuse verification.
+Packages reported as `[no test files]` by that same baseline listing are recorded
+separately. Only those exact package-level no-test results are accepted from the
+candidate; a skipped named test or newly appearing skipped package still fails.
 Existing tests, fixtures, build scripts, dependency manifests and trust adapters
 are frozen; adding native checker/test files is also refused in this MVP. A fixed
 external checker must resolve outside the candidate repository. Unsupported

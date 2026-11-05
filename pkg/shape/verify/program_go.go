@@ -138,10 +138,11 @@ func confineProgramGoDirectory(root, relative string) error {
 }
 
 type programGoEvent struct {
-	Action  string
-	Package string
-	Test    string
-	Output  string
+	Action     string
+	ImportPath string
+	Package    string
+	Test       string
+	Output     string
 }
 
 func programGoEvents(output string) ([]programGoEvent, error) {
@@ -160,7 +161,45 @@ func programGoEvents(output string) ([]programGoEvent, error) {
 	}
 	return events, scan.Err()
 }
-func programBaselineChecks(ctx context.Context, o ProgramOptions, runner ProgramRunner, isolated ...string) (map[string]bool, bool, error) {
+
+type programGoBaseline struct {
+	Checks        map[string]bool
+	EmptyPackages map[string]bool
+}
+
+// noTestPackages recognizes Go's package-level no-test-files result. Both the
+// output metadata and terminal skip must identify the same package; a named
+// skipped test is never an empty package.
+func noTestPackages(events []programGoEvent) map[string]bool {
+	messages, skipped := map[string]bool{}, map[string]bool{}
+	for _, event := range events {
+		if event.Action == "skip" && event.Test == "" && event.Package != "" {
+			skipped[event.Package] = true
+		}
+		pkg := ""
+		if event.Action == "output" && event.Test == "" {
+			pkg = event.Package
+		}
+		if event.Action == "build-output" {
+			pkg = event.ImportPath
+		}
+		if pkg != "" {
+			fields := strings.Fields(event.Output)
+			if len(fields) == 5 && fields[0] == "?" && fields[1] == pkg && fields[2] == "[no" && fields[3] == "test" && fields[4] == "files]" {
+				messages[pkg] = true
+			}
+		}
+	}
+	empty := map[string]bool{}
+	for pkg := range messages {
+		if skipped[pkg] {
+			empty[pkg] = true
+		}
+	}
+	return empty
+}
+
+func programBaselineChecks(ctx context.Context, o ProgramOptions, runner ProgramRunner, isolated ...string) (*programGoBaseline, bool, error) {
 	index, native, e := nativeGoTest(o.Test)
 	if e != nil {
 		return nil, native, e
@@ -217,7 +256,7 @@ func programBaselineChecks(ctx context.Context, o ProgramOptions, runner Program
 	if e = runner.RunProgram(ctx, ProgramRun{Dir: baseline, Argv: args, Output: &output, Timeout: 30 * time.Minute}); e != nil {
 		return nil, true, fmt.Errorf("trusted base test listing failed: %w", e)
 	}
-	expected := map[string]bool{}
+	expected := &programGoBaseline{Checks: map[string]bool{}}
 	events, e := programGoEvents(output)
 	if e != nil {
 		return nil, true, fmt.Errorf("invalid baseline event stream: %w", e)
@@ -231,22 +270,30 @@ func programBaselineChecks(ctx context.Context, o ProgramOptions, runner Program
 			continue
 		}
 		if strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Example") || strings.HasPrefix(name, "Fuzz") {
-			expected[event.Package+"\x00"+name] = true
+			expected.Checks[event.Package+"\x00"+name] = true
 		}
 	}
-	if len(expected) == 0 {
+	if len(expected.Checks) == 0 {
 		return nil, true, errors.New("native shaping gate selected no baseline checks")
+	}
+	expected.EmptyPackages = noTestPackages(events)
+	for key := range expected.Checks {
+		delete(expected.EmptyPackages, strings.SplitN(key, "\x00", 2)[0])
 	}
 	return expected, true, nil
 }
-func accountProgramGoTests(output string, expected map[string]bool) ([]evidence.CheckResult, error) {
+func accountProgramGoTests(output string, expected *programGoBaseline) ([]evidence.CheckResult, error) {
 	completed := map[string]bool{}
 	failed := ""
 	events, e := programGoEvents(output)
 	if e != nil {
 		return nil, fmt.Errorf("invalid test event stream: %w", e)
 	}
+	empty := noTestPackages(events)
 	for _, event := range events {
+		if event.Action == "skip" && event.Test == "" && expected.EmptyPackages[event.Package] && empty[event.Package] {
+			continue
+		}
 		if event.Action == "skip" || event.Action == "fail" {
 			failed = "native gate reported " + event.Action + " for " + event.Package + "/" + event.Test
 		}
@@ -255,7 +302,7 @@ func accountProgramGoTests(output string, expected map[string]bool) ([]evidence.
 		}
 	}
 	var checks []evidence.CheckResult
-	for key := range expected {
+	for key := range expected.Checks {
 		status := evidence.StatusPass
 		detail := ""
 		if !completed[key] {

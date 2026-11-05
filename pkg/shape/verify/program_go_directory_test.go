@@ -67,7 +67,7 @@ func TestProgramGoNestedModuleUsesRealBaselineAccounting(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	files := map[string]string{"README.md": "nested module fixture", "net/server/go.mod": "module nestedfixture\n\ngo 1.20\n", "net/server/main.go": "package main\nfunc main() {}\n", "net/server/main_test.go": "package main\nimport \"testing\"\nfunc TestBaseline(t *testing.T) {}\n"}
+	files := map[string]string{"README.md": "nested module fixture", "net/server/go.mod": "module nestedfixture\n\ngo 1.20\n", "net/server/main.go": "package main\nfunc main() {}\n", "net/server/empty/empty.go": "package empty\n", "net/server/main_test.go": "package main\nimport \"testing\"\nfunc TestBaseline(t *testing.T) {}\n"}
 	for name, body := range files {
 		p := filepath.Join(repoDir, filepath.FromSlash(name))
 		os.MkdirAll(filepath.Dir(p), 0700)
@@ -99,6 +99,10 @@ func TestProgramGoNestedModuleUsesRealBaselineAccounting(t *testing.T) {
 		return e
 	})
 	opts := ProgramOptions{Home: t.TempDir(), App: "nested", Kind: "cli", RepoDir: repoDir, BaseSHA: base, CandidateSHA: base, Principal: "host", Policy: "nested-test-policy", Build: []string{"go", "-C", "net/server", "build", "-o", "{output}", "."}, Test: []string{"go", "-C", "net/server", "test", "-json", "-count=1", "./..."}, Runner: runner}
+	baseline, native, e := programBaselineChecks(context.Background(), opts, runner)
+	if e != nil || !native || len(baseline.Checks) != 1 || !baseline.EmptyPackages["nestedfixture/empty"] {
+		t.Fatalf("actual nested baseline metadata %+v native=%v err=%v", baseline, native, e)
+	}
 	report, e := RunProgram(context.Background(), opts)
 	if e != nil || report.Record.Verdict != evidence.VerdictPass {
 		t.Fatalf("baseline %+v %v", report.Record, e)
