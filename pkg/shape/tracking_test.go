@@ -155,7 +155,7 @@ func TestTrackingAutomaticTodoUsesConfiguredHome(t *testing.T) {
 	if err := NewTracking(home)(context.Background(), &c); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, "todo", todo.SanitizeOwner(c.Actor))
+	want := filepath.Join(home, "todo", todo.OwnerSubdir(c.Actor))
 	if c.TrackingRoot != want {
 		t.Fatalf("auto todo escaped configured home: %s, want %s", c.TrackingRoot, want)
 	}
@@ -199,5 +199,31 @@ func TestTrackingEvidenceLocatorContainsNoPrivatePath(t *testing.T) {
 		if _, err := ResolveShapeEvidence(home, bad); err == nil {
 			t.Fatalf("unsafe locator accepted: %q", bad)
 		}
+	}
+}
+
+func TestTrackingActorLocatorKeepsAuditIdentity(t *testing.T) {
+	const actor = "cloud:alice@example.test"
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "supplied-home", true: "explicit-root"}[explicit], func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("BASHY_TODO_DIR", "")
+			c := Candidate{ID: "1234567890abcdef", App: "hello-world", Actor: actor, RepresentedUser: actor, Request: "Change greeting"}
+			want := filepath.Join(home, "todo", todo.OwnerSubdir(actor))
+			if explicit {
+				want = filepath.Join(home, "explicit")
+				c.TrackingRoot = want
+			}
+			if err := NewTracking(home)(context.Background(), &c); err != nil {
+				t.Fatal(err)
+			}
+			if c.TrackingRoot != want || c.Actor != actor {
+				t.Fatalf("locator/actor changed: %+v want %s", c, want)
+			}
+			items, err := (&issue.Store{Root: want, Sub: "."}).List()
+			if err != nil || len(items) != 1 || len(items[0].Shape) != 1 || items[0].Shape[0].Actor != actor {
+				t.Fatalf("actor audit missing: %+v %v", items, err)
+			}
+		})
 	}
 }

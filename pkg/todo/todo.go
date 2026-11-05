@@ -126,7 +126,7 @@ func UserStore(owner string) (*issue.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &issue.Store{Root: root, Sub: SanitizeOwner(owner)}, nil
+	return &issue.Store{Root: root, Sub: OwnerSubdir(owner)}, nil
 }
 
 // RepoStore returns the committed per-repo store (<repoRoot>/.bashy/todo/).
@@ -156,6 +156,9 @@ func ResolveStore(owner string, forceRepo, forceUser bool, baseDir string) (*iss
 	})
 	if err != nil {
 		return nil, "", err
+	}
+	if sc.Kind == scope.KindUser {
+		sc.Sub = OwnerSubdir(owner)
 	}
 	return &issue.Store{Root: sc.Root, Sub: sc.Sub}, sc.Label(), nil
 }

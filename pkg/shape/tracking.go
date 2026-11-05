@@ -152,7 +152,7 @@ func NewTracking(home string) func(context.Context, *Candidate) error {
 		} else if root, ok := todo.FindGitRoot(); ok && (c.Story != "" || c.Todo != "") {
 			store = todo.RepoStore(root)
 		} else if home != "" && strings.TrimSpace(os.Getenv("BASHY_TODO_DIR")) == "" {
-			store = &issue.Store{Root: filepath.Join(home, "todo"), Sub: todo.SanitizeOwner(c.Actor)}
+			store = &issue.Store{Root: filepath.Join(home, "todo"), Sub: todo.OwnerSubdir(c.Actor)}
 		} else {
 			var err error
 			store, err = todo.UserStore(c.Actor)
