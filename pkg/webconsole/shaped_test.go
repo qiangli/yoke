@@ -13,7 +13,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +36,24 @@ import (
 )
 
 const notesFixture = "testdata/shaped/notes"
+
+// shapedFixtureRunner keeps the POSIX fixture shell on Unix and uses the
+// native product's Bash# interpreter on Windows, where /bin/sh is absent.
+func shapedFixtureRunner(t *testing.T) []string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return []string{"/bin/sh"}
+	}
+	bin := strings.TrimSpace(os.Getenv("BASHY_BIN"))
+	if bin == "" {
+		bin = selfbin.Resolve("")
+	}
+	resolved, err := exec.LookPath(bin)
+	if err != nil {
+		t.Fatalf("Windows shaped fixture needs native bashy (set BASHY_BIN or PATH): %v", err)
+	}
+	return []string{resolved}
+}
 
 // TestShapedAppAddZeroSetup is the live-smoke regression: a plain directory
 // becomes a managed, versioned app without a host git identity or any manual
@@ -102,7 +122,7 @@ func TestShapedAppAddZeroSetup(t *testing.T) {
 	sessions := websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt"))
 	h := newTestHandler(t, Options{
 		RequireLogin: true, Sessions: sessions, Pairing: true, PairStorePath: pairPath,
-		Panels: []Panel{panel}, Shape: ShapeOptions{Home: home, Runner: []string{"/bin/sh"}, Level: contain.LevelProcess},
+		Panels: []Panel{panel}, Shape: ShapeOptions{Home: home, Runner: shapedFixtureRunner(t), Level: contain.LevelProcess},
 	})
 	store := newPairStore(pairPath)
 	_, secret, err := store.issueTicketForPrincipal([]string{"notes"}, time.Hour, time.Minute, "alice")
@@ -268,7 +288,7 @@ func TestShapedNotesRequestPreviewApprove(t *testing.T) {
 
 	shaper, verifier, activator := &fakeShaper{}, &fakeVerifier{}, &fakeActivator{home: home}
 	shapeOpts := ShapeOptions{
-		Home: home, WorkRoot: work, Runner: []string{"/bin/sh"}, Level: contain.LevelProcess,
+		Home: home, WorkRoot: work, Runner: shapedFixtureRunner(t), Level: contain.LevelProcess,
 		Delegate: shaper, Verifier: verifier, Activator: activator,
 	}
 	notes := Panel{Name: "notes", Label: "Notes", Path: "/notes/", ShapedSource: source,
@@ -514,7 +534,7 @@ func TestShapedDelegateUsesResolvedBinary(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-bashy")
 	d := BashyDelegate{Bashy: missing, Agent: "codex:m"}
 	_, err := d.Delegate(context.Background(), DelegateRequest{Dir: t.TempDir(), Task: "x"})
-	if err == nil || !strings.Contains(err.Error(), missing) {
+	if err == nil || !(strings.Contains(err.Error(), missing) || strings.Contains(err.Error(), strconv.Quote(missing))) {
 		t.Fatalf("delegate must launch the configured binary %q, err=%v", missing, err)
 	}
 	so := ShapeOptions{}
