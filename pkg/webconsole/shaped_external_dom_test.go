@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -84,21 +86,79 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 		ActiveUI         string   `json:"active_ui"`
 		ExpectedRevision string   `json:"expected_revision"`
 		Errors           []string `json:"browser_errors"`
+		Failure          string   `json:"failure,omitempty"`
 		Passed           bool     `json:"passed"`
 	}
 	result := observation{ExpectedGreeting: greeting, ExpectedRevision: revision}
 	var mu sync.Mutex
+	failCheckpoint := func(stage string, err error) {
+		message := strings.ReplaceAll(stage+": "+err.Error(), cookie, "[session redacted]")
+		mu.Lock()
+		result.Failure = message
+		mu.Unlock()
+		t.Fatal(message)
+	}
 	defer func() {
 		mu.Lock()
 		defer mu.Unlock()
+		result.Passed = !t.Failed()
 		data, _ := json.MarshalIndent(result, "", "  ")
 		if err := os.WriteFile(filepath.Join(dir, "checkpoint.json"), data, 0600); err != nil {
 			t.Error("cannot write checkpoint observation")
 		}
 	}()
-	alloc, stop := chromedp.NewExecAllocator(context.Background(), browserOpts()...)
+	var alloc context.Context
+	var stop context.CancelFunc
+	var browserOptions []chromedp.ContextOption
+	remoteBrowser := false
+	if endpoint := os.Getenv("BASHY_E2E_BROWSER_WS"); endpoint != "" {
+		remote, err := url.Parse(endpoint)
+		if err != nil || remote.Host == "" || remote.User != nil || remote.RawQuery != "" || remote.Fragment != "" || (remote.Scheme != "ws" && remote.Scheme != "wss") {
+			t.Fatal("browser CDP endpoint must be a loopback ws/wss URL without credentials or query")
+		}
+		address := net.ParseIP(remote.Hostname())
+		if remote.Hostname() != "localhost" && (address == nil || !address.IsLoopback()) {
+			t.Fatal("browser CDP endpoint must use loopback")
+		}
+		if !strings.HasPrefix(remote.Path, "/devtools/browser/") {
+			t.Fatal("browser CDP endpoint must identify the prepared browser")
+		}
+		alloc, stop = chromedp.NewRemoteAllocator(context.Background(), endpoint, chromedp.NoModifyURL)
+		remoteBrowser = true
+	} else {
+		alloc, stop = chromedp.NewExecAllocator(context.Background(), browserOpts()...)
+	}
 	defer stop()
-	browser, closeBrowser := chromedp.NewContext(alloc)
+	if remoteBrowser {
+		// Initialize an ordinary remote tab first. New headless Chrome can
+		// reject an incognito target before its first browser window exists.
+		root, closeRoot := chromedp.NewContext(alloc)
+		defer closeRoot()
+		ready, cancelReady := context.WithTimeout(root, 90*time.Second)
+		defer cancelReady()
+		if err := chromedp.Run(ready); err != nil {
+			failCheckpoint("remote browser initialization failed", err)
+		}
+		executor := cdp.WithExecutor(ready, chromedp.FromContext(root).Browser)
+		isolated, err := target.CreateBrowserContext().WithDisposeOnDetach(true).Do(executor)
+		if err != nil {
+			failCheckpoint("remote private browser context failed", err)
+		}
+		defer func() {
+			if err := target.DisposeBrowserContext(isolated).Do(executor); err != nil {
+				t.Error("remote private browser context cleanup failed")
+			}
+		}()
+		// Explicit newWindow is needed by current headless Chrome for an
+		// incognito target; chromedp's default target creation omits it.
+		pageID, err := target.CreateTarget("about:blank").WithBrowserContextID(isolated).WithNewWindow(true).Do(executor)
+		if err != nil {
+			failCheckpoint("remote private browser tab failed", err)
+		}
+		browserOptions = []chromedp.ContextOption{chromedp.WithTargetID(pageID)}
+		alloc = root
+	}
+	browser, closeBrowser := chromedp.NewContext(alloc, browserOptions...)
 	defer closeBrowser()
 	ctx, cancel := context.WithTimeout(browser, 90*time.Second)
 	defer cancel()
@@ -140,7 +200,7 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 		chromedp.Text("#greeting", &result.Greeting, chromedp.ByQuery),
 		saveScreenshot("page.png"),
 	); err != nil {
-		t.Fatal("external greeting checkpoint failed; inspect private artifacts")
+		failCheckpoint("external greeting checkpoint failed", err)
 	}
 	if result.Greeting != greeting {
 		t.Error("rendered greeting differs from expected")
@@ -153,7 +213,7 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 		chromedp.Text("#shape-active", &result.ActiveUI, chromedp.ByQuery),
 		saveScreenshot("shape.png"),
 	); err != nil {
-		t.Fatal("external active-version UI checkpoint failed; inspect private artifacts")
+		failCheckpoint("external active-version UI checkpoint failed", err)
 	}
 	mu.Lock()
 	errors := len(result.Errors)
@@ -161,5 +221,4 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 	if errors != 0 {
 		t.Error("browser reported errors; inspect private checkpoint observation")
 	}
-	result.Passed = !t.Failed()
 }
