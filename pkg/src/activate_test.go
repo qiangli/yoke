@@ -175,7 +175,7 @@ func s525a7FileAt(t *testing.T, dest, commit, file string) string {
 func TestS525A7PerPrincipalActivation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
-	dest, _, _, a, b, p3 := s525a7Fixture(t, home)
+	dest, base, _, a, b, p3 := s525a7Fixture(t, home)
 	gate := s525a7AllowGate()
 
 	for principal, body := range map[string]string{s525a7Alice: "alice-private\n", s525a7Bob: "bob-private\n"} {
@@ -209,8 +209,8 @@ func TestS525A7PerPrincipalActivation(t *testing.T) {
 		src.ActivateOptions{Gate: gate, PreSwitchHook: func() error { return interrupted }}); !errors.Is(err, interrupted) {
 		t.Fatalf("interrupted activate err = %v, want the simulated crash", err)
 	}
-	if st := s525a7State(t, home, s525a7Alice); st.ActiveRevision != a || st.LastKnownGood != "" {
-		t.Fatalf("interrupted activate left %+v, want active=%s with no last-known-good", st, a)
+	if st := s525a7State(t, home, s525a7Alice); st.ActiveRevision != a || st.LastKnownGood != base {
+		t.Fatalf("interrupted activate left %+v, want active=%s with release last-known-good", st, a)
 	}
 
 	// A refused gate records nothing and switches nothing.
@@ -245,8 +245,8 @@ func TestS525A7PerPrincipalActivation(t *testing.T) {
 	if st := s525a7State(t, home, s525a7Alice); st.ActiveRevision != a {
 		t.Fatalf("alice active = %s, want %s", st.ActiveRevision, a)
 	}
-	if st := s525a7State(t, home, s525a7Bob); st.ActiveRevision != b || st.LastKnownGood != "" {
-		t.Fatalf("bob state = %+v, want active=%s with no last-known-good", st, b)
+	if st := s525a7State(t, home, s525a7Bob); st.ActiveRevision != b || st.LastKnownGood != base {
+		t.Fatalf("bob state = %+v, want active=%s with release last-known-good", st, b)
 	}
 	dataUntouched("after activations")
 

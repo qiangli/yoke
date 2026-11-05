@@ -401,9 +401,15 @@ func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (A
 			return out, fmt.Errorf("src: activate interrupted before the switch: %w", err)
 		}
 	}
-	out = ActivateResult{App: app, Principal: principal, Revision: revSHA, Activation: activation, Previous: st.ActiveRevision}
-	if st.ActiveRevision != "" && st.ActiveRevision != revSHA {
-		st.LastKnownGood = st.ActiveRevision
+	// A virgin principal already runs the release used by the gate. Keep that
+	// actual prior revision so its first accepted change can be undone too.
+	previous := st.ActiveRevision
+	if previous == "" {
+		previous = gateBase
+	}
+	out = ActivateResult{App: app, Principal: principal, Revision: revSHA, Activation: activation, Previous: previous}
+	if previous != "" && previous != revSHA {
+		st.LastKnownGood = previous
 	}
 	st.ActiveRevision = revSHA
 	// A version that declares what it can read leaves the data schema it
