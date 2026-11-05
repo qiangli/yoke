@@ -83,9 +83,9 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 		Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
 		Panels:   []Panel{notes},
 		Shape: ShapeOptions{
-			Home: home, WorkRoot: filepath.Join(t.TempDir(), "shape-work"), Runner: []string{"/bin/sh"},
+			Home: home, WorkRoot: filepath.Join(t.TempDir(), "shape-work"), Runner: shapedFixtureRunner(t),
 			Level: contain.LevelProcess, Delegate: shaper,
-			Verifier: productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}},
+			Verifier: productionVerifier{home: home, runner: shapeverify.TrustedRunner{Bin: shapedFixtureRunner(t)[0], Effects: []string{"read"}}},
 		},
 	})
 	if err != nil {
