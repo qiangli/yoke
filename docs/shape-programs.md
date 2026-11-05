@@ -24,6 +24,14 @@ visibility, actor attribution and tracking remain tied to the requesting caller.
 Remote host mutations require an operator session. A preview runs the verified
 artifact without selecting it as the host version. CLI previews accept arguments
 and default to `--help`; their captured stdout, stderr and exit status are bounded.
+The existing operator-authenticated REST preview route accepts repeated literal
+arguments, for example
+`GET /shape/APP/preview/CANDIDATE/?arg=shape&arg=--help`.
+Omitting `arg` keeps the `--help` default. Arguments are passed directly as argv,
+without shell parsing; the route refuses more than 128 arguments, more than
+32 KiB total argument bytes, or NUL bytes. Service previews use their side-port
+URL and refuse CLI arguments.
+
 
 Both declared commands must succeed. Supported Go checks use direct
 `go test -json` or `bashy go test -json`. The product wrapper

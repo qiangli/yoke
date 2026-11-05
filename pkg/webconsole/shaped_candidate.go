@@ -902,6 +902,23 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.candidateService().Kind() != "web" {
+		args := r.URL.Query()["arg"]
+		total := 0
+		for _, arg := range args {
+			total += len(arg)
+			if strings.IndexByte(arg, 0) >= 0 {
+				http.Error(w, "preview arguments contain NUL", http.StatusBadRequest)
+				return
+			}
+		}
+		if len(args) > 128 || total > 32<<10 {
+			http.Error(w, "preview arguments exceed 128 arguments or 32 KiB", http.StatusBadRequest)
+			return
+		}
+		if a.candidateService().Kind() != "cli" && len(args) > 0 {
+			http.Error(w, "arguments apply only to CLI previews", http.StatusBadRequest)
+			return
+		}
 		preview, e := a.candidateService().PreviewProgram(r.Context(), a.caller(c.Principal), c.ID)
 		if e != nil {
 			http.Error(w, e.Error(), http.StatusConflict)
@@ -911,7 +928,7 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, preview.URL, http.StatusSeeOther)
 			return
 		}
-		out, e := a.candidateService().RunProgramPreview(r.Context(), a.caller(c.Principal), c.ID)
+		out, e := a.candidateService().RunProgramPreview(r.Context(), a.caller(c.Principal), c.ID, args...)
 		if e != nil {
 			http.Error(w, e.Error(), http.StatusConflict)
 			return
