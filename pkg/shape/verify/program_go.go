@@ -18,7 +18,11 @@ import (
 // nativeGoTest recognizes only direct Go test and the frozen product wrapper.
 // Unknown candidate-owned gate executables are not silently treated as trusted.
 func programExecutableName(path string) string {
-	return strings.TrimSuffix(strings.ToLower(filepath.Base(strings.ReplaceAll(path, "\\", "/"))), ".exe")
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.ReplaceAll(path, "\\", "/"))), ".exe")
+	if name == "bashy.real" {
+		return "bashy"
+	}
+	return name
 }
 func nativeGoTest(argv []string) (int, bool, error) {
 	if len(argv) == 0 {
@@ -27,13 +31,23 @@ func nativeGoTest(argv []string) (int, bool, error) {
 	name := programExecutableName(argv[0])
 	index := -1
 	recognized := name == "go"
-	if name == "go" && len(argv) > 1 && argv[1] == "test" {
-		index = 1
-	}
+	offset := 1
 	if name == "bashy" && len(argv) > 1 && argv[1] == "go" {
 		recognized = true
-		if len(argv) > 2 && argv[2] == "test" {
-			index = 2
+		offset = 2
+	}
+	if recognized {
+		cursor := offset
+		if cursor < len(argv) && argv[cursor] == "-C" {
+			cursor += 2
+		} else if cursor < len(argv) && strings.HasPrefix(argv[cursor], "-C=") {
+			cursor++
+		}
+		if cursor < len(argv) && argv[cursor] == "test" {
+			index = cursor
+		}
+		if _, e := nativeGoDirectory(argv); e != nil {
+			return 0, true, e
 		}
 	}
 	for i, a := range argv {
@@ -46,7 +60,7 @@ func nativeGoTest(argv []string) (int, bool, error) {
 	}
 	if index < 0 {
 		if recognized {
-			return 0, true, errors.New("unsupported Go shaping gate layout; use direct go test -json or the frozen product wrapper")
+			return 0, true, errors.New("unsupported Go shaping gate layout; use go [-C relative-directory] test -json")
 		}
 		return 0, false, nil
 	}
@@ -63,6 +77,64 @@ func nativeGoTest(argv []string) (int, bool, error) {
 		return 0, true, errors.New("native Go shaping gate requires -json accounting")
 	}
 	return index, true, nil
+}
+
+// nativeGoDirectory accepts only Go's optional single global -C before test.
+// The same relative directory is confined independently in each exact clone.
+func nativeGoDirectory(argv []string) (string, error) {
+	offset := 1
+	if programExecutableName(argv[0]) == "bashy" {
+		offset = 2
+	}
+	if offset >= len(argv) {
+		return "", errors.New("missing Go test command")
+	}
+	dir := ""
+	if argv[offset] == "-C" {
+		if offset+1 >= len(argv) {
+			return "", errors.New("Go -C needs a relative directory")
+		}
+		dir = argv[offset+1]
+	} else if strings.HasPrefix(argv[offset], "-C=") {
+		dir = strings.TrimPrefix(argv[offset], "-C=")
+	} else {
+		return "", nil
+	}
+	normalized := strings.ReplaceAll(dir, "\\", "/")
+	if normalized == "" || strings.HasPrefix(normalized, "/") || filepath.IsAbs(dir) || filepath.VolumeName(dir) != "" || strings.ContainsAny(normalized, ":\x00") {
+		return "", errors.New("Go -C must be a nonempty relative directory without a volume")
+	}
+	for _, part := range strings.Split(normalized, "/") {
+		if part == ".." {
+			return "", errors.New("Go -C cannot traverse parent directories")
+		}
+	}
+	return dir, nil
+}
+func confineProgramGoDirectory(root, relative string) error {
+	if relative == "" {
+		return nil
+	}
+	resolvedRoot, e := filepath.EvalSymlinks(root)
+	if e != nil {
+		return e
+	}
+	target, e := filepath.EvalSymlinks(filepath.Join(root, relative))
+	if e != nil {
+		return fmt.Errorf("Go -C directory: %w", e)
+	}
+	rel, e := filepath.Rel(resolvedRoot, target)
+	if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return errors.New("Go -C directory escapes the exact source clone")
+	}
+	info, e := os.Stat(target)
+	if e != nil {
+		return e
+	}
+	if !info.IsDir() {
+		return errors.New("Go -C target is not a directory")
+	}
+	return nil
 }
 
 type programGoEvent struct {
@@ -119,6 +191,16 @@ func programBaselineChecks(ctx context.Context, o ProgramOptions, runner Program
 		return nil, true, e
 	}
 	defer os.RemoveAll(baseline)
+	relative, e := nativeGoDirectory(o.Test)
+	if e != nil {
+		return nil, true, e
+	}
+	for _, root := range append([]string{o.RepoDir, baseline}, isolated...) {
+		if e = confineProgramGoDirectory(root, relative); e != nil {
+			return nil, true, e
+		}
+	}
+
 	args := append([]string(nil), o.Test...)
 	selection := "."
 	for i := index + 1; i < len(args); i++ {

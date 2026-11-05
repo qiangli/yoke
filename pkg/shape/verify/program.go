@@ -394,3 +394,6 @@ func ProgramArtifactDigest(kind, path string) (string, error) {
 	}
 	return fileDigest(path)
 }
+
+// IsDependencyManifest reports the manifest names fingerprinted by DependencyDigest.
+func IsDependencyManifest(name string) bool { return dependencyManifests[name] }

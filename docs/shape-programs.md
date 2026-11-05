@@ -33,6 +33,14 @@ without shell parsing; the route refuses more than 128 arguments, more than
 URL and refuse CLI arguments.
 
 
+Nested Go modules may use one relative global directory option, for example
+`[go, -C, net/server, test, -json, ./...]` or the equivalent `bashy go` form.
+The directory must remain inside both exact source clones, including after
+symlink resolution; absolute paths, volumes and parent traversal are refused.
+Baseline listing and candidate accounting use the same declared directory and
+selection. Container build recipes/ignore files and all existing dependency
+manifests are frozen alongside native tests and checker sources.
+
 Both declared commands must succeed. Supported Go checks use direct
 `go test -json` or `bashy go test -json`. The product wrapper
 `scripts/go-product.sh` supports builds only and cannot serve as a test gate. Selected

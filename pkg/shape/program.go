@@ -347,7 +347,7 @@ func (s Service) programGate(ctx context.Context, a ProgramArtifact) state.Activ
 
 func programCriterion(path string) bool {
 	base := filepath.Base(path)
-	if strings.HasSuffix(path, "_test.go") || base == "Makefile" || base == "dag.md" || base == "go.mod" || base == "go.sum" {
+	if strings.HasSuffix(path, "_test.go") || base == "Makefile" || base == "dag.md" || shapeverify.IsDependencyManifest(base) || base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") || base == "Containerfile" || strings.HasPrefix(base, "Containerfile.") || base == ".dockerignore" || base == ".containerignore" {
 		return true
 	}
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {

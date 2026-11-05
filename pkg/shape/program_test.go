@@ -266,3 +266,46 @@ func TestProgramNewCheckerFilesRefused(t *testing.T) {
 		})
 	}
 }
+func TestProgramContainerBuildCriteriaFrozen(t *testing.T) {
+	s, _, _, _, _ := testService(t)
+	s.App.Shaping = &fleet.AppShaping{Kind: "service"}
+	repo, e := gogit.PlainOpen(s.App.SourceDir)
+	if e != nil {
+		t.Fatal(e)
+	}
+	wt, _ := repo.Worktree()
+	names := []string{"Dockerfile", "Dockerfile.build", "Containerfile", ".dockerignore", ".containerignore", "app/package.json", "app/yarn.lock", "app/pnpm-lock.yaml", "go.work"}
+	for _, name := range names {
+		p := filepath.Join(s.App.SourceDir, filepath.FromSlash(name))
+		os.MkdirAll(filepath.Dir(p), 0700)
+		os.WriteFile(p, []byte("trusted criterion"), 0600)
+		wt.Add(name)
+	}
+	base, e := wt.Commit("trusted container build inputs", &gogit.CommitOptions{Author: &object.Signature{Name: "fixture", Email: "fixture@example.invalid", When: time.Now()}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	guards, e := s.programGuard(s.App.SourceDir, base.String())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "work")
+			r, e := CloneAt(context.Background(), s.App.SourceDir, dir, base.String())
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte("candidate replaced criterion"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			rev, e := CommitCandidate(r, Candidate{Request: "tamper", Principal: "alice"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = TouchesProtected(dir, base.String(), rev, guards); e == nil {
+				t.Fatal("candidate changed frozen build criterion")
+			}
+		})
+	}
+}
