@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -196,7 +197,7 @@ func TestRotateKeepsValidJSONLines(t *testing.T) {
 	if fi.Size() >= maxSpoolBytes {
 		t.Errorf("spool not rotated: size=%d, bound=%d", fi.Size(), maxSpoolBytes)
 	}
-	if got := fi.Mode().Perm(); got != 0o600 {
+	if got := fi.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Errorf("rotated spool permissions = %04o, want 0600", got)
 	}
 	b, err := os.ReadFile(path)

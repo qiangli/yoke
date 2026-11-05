@@ -321,6 +321,10 @@ func TestConcurrentProducersDistinctStreams(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
 				ServiceStatus(context.Background(), obs("svc"+string(rune('a'+i)), ":1", StatusHealthy, "", base.Add(time.Duration(j)*time.Second)))
+			}
+			// Repeats within each stream collapse. Alternate healthy/query-error
+			// phases would intentionally emit query recovery transitions.
+			for j := 0; j < 20; j++ {
 				ServiceStatusQueryFailed(context.Background(), StatusQueryFailure{
 					Service: "svc" + string(rune('a'+i)), Target: ":1", Err: "refused", ObservedAt: base.Add(time.Duration(j) * time.Second),
 				})

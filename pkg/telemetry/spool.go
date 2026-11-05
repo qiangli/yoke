@@ -275,7 +275,7 @@ func openPrivateSpool(path string) (*os.File, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, spoolAppendFlags, 0o600)
 	if err != nil {
 		return nil, err
 	}

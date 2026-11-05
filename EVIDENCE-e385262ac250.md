@@ -10,8 +10,8 @@ not a publication, rollout, or acceptance record.
 
 - Canonical integration base: `2c22ccb619d432d4f3b71c57e6a65c80c4e3af64`.
 - Emergency branch base: `89df473c6035d6b07471a0267e41fdb466d939a0`.
-- Frozen emergency source: `dbe9f5c0e8949bb3d928dc4c677ab9b7f48028a0`.
-- Imported patch: only the 20 changed code/test files under `pkg/telemetry` and
+- Frozen emergency source: `9f1851689915e3786567f0524acaf3df509c16ca`.
+- Imported patch: only the 22 changed code/test files under `pkg/telemetry` and
   `pkg/binmgr` between the emergency base and frozen source.
 
 Both affected package trees and `go.mod`/`go.sum` were identical between the two
@@ -52,3 +52,12 @@ Layered retention, protected semantic-memory originals, and calendar rollups are
 tracked separately under follow-up story `88d62fd745c7`. They are not claimed as
 implemented by this emergency patch. The first repair must demonstrate bounded
 live storage before the sprint resumes its primary Bash# tests and examples.
+
+## Windows append-handle follow-up
+
+The frozen source now includes the Windows append handle read-access correction
+and platform-specific open helpers, with accompanying snapshot/platform fixture
+updates. The manager reported the native Windows independent-writer control passed
+on this frozen source; the remaining native gate results are pending. This is a
+scoped control result, not full integration or rollout acceptance. No local Go
+tests or builds were run while updating this candidate.
