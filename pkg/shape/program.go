@@ -225,7 +225,7 @@ type programVerifier struct {
 	retained string
 }
 
-func (p programVerifier) Verify(ctx context.Context, req VerifyRequest) (Verdict, error) {
+func (p programVerifier) Verify(ctx context.Context, req VerifyRequest) (verdict Verdict, verifyErr error) {
 	s := p.service
 	home, e := s.home()
 	if e != nil {
@@ -277,14 +277,44 @@ func (p programVerifier) Verify(ctx context.Context, req VerifyRequest) (Verdict
 	if e != nil {
 		return Verdict{}, e
 	}
-	ref := plumbing.ReferenceName("refs/heads/bashy-shape-program-verify")
-	if e = r.Storer.SetReference(plumbing.NewHashReference(ref, plumbing.NewHash(req.CandidateRev))); e != nil {
+	// Both revisions must be advertised: restoring an ancestor otherwise drops
+	// its descendant baseline when the verifier makes another isolated clone.
+	refs := []struct {
+		name     plumbing.ReferenceName
+		revision string
+	}{
+		{plumbing.NewBranchReferenceName("bashy-shape-program-verify"), req.CandidateRev},
+		{plumbing.NewBranchReferenceName("bashy-shape-program-base"), req.BaseRev},
+	}
+	previous := make(map[plumbing.ReferenceName]*plumbing.Reference)
+	defer func() {
+		var restoreErr error
+		restoreErr = errors.Join(restoreErr, r.Storer.SetReference(old))
+		for name, ref := range previous {
+			if ref != nil {
+				restoreErr = errors.Join(restoreErr, r.Storer.SetReference(ref))
+			} else {
+				restoreErr = errors.Join(restoreErr, r.Storer.RemoveReference(name))
+			}
+		}
+		if restoreErr != nil {
+			verdict = Verdict{}
+			verifyErr = errors.Join(verifyErr, fmt.Errorf("restore verifier references: %w", restoreErr))
+		}
+	}()
+	for _, entry := range refs {
+		prior, err := r.Storer.Reference(entry.name)
+		if err != nil && !errors.Is(err, plumbing.ErrReferenceNotFound) {
+			return Verdict{}, err
+		}
+		previous[entry.name] = prior
+		if e = r.Storer.SetReference(plumbing.NewHashReference(entry.name, plumbing.NewHash(entry.revision))); e != nil {
+			return Verdict{}, e
+		}
+	}
+	if e = r.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, refs[0].name)); e != nil {
 		return Verdict{}, e
 	}
-	if e = r.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, ref)); e != nil {
-		return Verdict{}, e
-	}
-	defer func() { _ = r.Storer.SetReference(old); _ = r.Storer.RemoveReference(ref) }()
 	var checkArtifact func(context.Context, string, string) error
 	if s.Kind() == "service" {
 		checkArtifact = func(ctx context.Context, digest, path string) error {

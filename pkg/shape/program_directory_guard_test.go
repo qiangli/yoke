@@ -12,6 +12,7 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/qiangli/yoke/pkg/fleet"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
@@ -53,6 +54,14 @@ func TestBaseline(t *testing.T){if greeting==""{t.Fatal("missing greeting")}}
 	}
 	base, e := wt.Commit("native nested fixture", &gogit.CommitOptions{Author: &object.Signature{Name: "fixture", Email: "fixture@example.invalid", When: time.Now()}})
 	if e != nil {
+		t.Fatal(e)
+	}
+	s.App.ReleaseRevision = base.String()
+	s.App.ReleasePath = filepath.Join(t.TempDir(), "retained-release")
+	if e = os.WriteFile(s.App.ReleasePath, []byte("retained native release"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e = repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("pristine"), base)); e != nil {
 		t.Fatal(e)
 	}
 	s.App.Shaping = &fleet.AppShaping{Kind: "cli", Build: []string{"go", "-C", "net/server", "build", "-o", "{output}", "."}, Test: []string{"go", "-C", "net/server", "test", "-json", "-count=1", "./..."}}
@@ -108,14 +117,51 @@ func TestBaseline(t *testing.T){if greeting==""{t.Fatal("missing greeting")}}
 	if e != nil {
 		t.Fatal(e)
 	}
+	candidateRepo, e := gogit.PlainOpen(candidate.Workspace)
+	if e != nil {
+		t.Fatal(e)
+	}
+	originalHead, e := candidateRepo.Storer.Reference(plumbing.HEAD)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, name := range []string{"bashy-shape-program-verify", "bashy-shape-program-base"} {
+		if e = candidateRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(name), base)); e != nil {
+			t.Fatal(e)
+		}
+	}
 	verified, e := s.Verify(ctx, caller, candidate.ID)
 	if e != nil || verified.Verdict == nil || !verified.Verdict.Pass {
 		t.Fatalf("ordinary source/runtime data refused: %+v %v", verified.Verdict, e)
+	}
+	if head, err := candidateRepo.Storer.Reference(plumbing.HEAD); err != nil || head.String() != originalHead.String() {
+		t.Fatalf("verifier changed HEAD: %v %v", head, err)
+	}
+	for _, name := range []string{"bashy-shape-program-verify", "bashy-shape-program-base"} {
+		ref, err := candidateRepo.Storer.Reference(plumbing.NewBranchReferenceName(name))
+		if err != nil || ref.Hash() != base {
+			t.Fatalf("verifier clobbered pre-existing branch %s: %v %v", name, ref, err)
+		}
 	}
 	for _, root := range []string{s.App.SourceDir, candidate.Workspace} {
 		if _, e = os.Stat(filepath.Join(root, "net", "server", "testdata", "generated.db")); !os.IsNotExist(e) {
 			t.Fatal("verification runtime output escaped isolated clone", root, e)
 		}
+	}
+	// Exercise actual Go accounting through an ancestor restore. The approved
+	// descendant is the undo baseline, not reachable from the target's HEAD.
+	if _, e = s.Approve(ctx, caller, candidate.ID); e != nil {
+		t.Fatal(e)
+	}
+	restored, e := s.HostUndo(ctx, caller)
+	if e != nil {
+		t.Fatalf("sealed ancestor undo with real nested Go tests: %v", e)
+	}
+	if restored.SourceRevision != base.String() || restored.Slot.Active.Digest != restored.Slot.Release.Digest {
+		t.Fatal(restored)
+	}
+	if b, err := os.ReadFile(restored.Slot.Active.Path); err != nil || string(b) != "retained native release" {
+		t.Fatalf("undo substituted retained release: %q %v", b, err)
 	}
 	t.Run("runtime cannot overwrite tracked fixture", func(t *testing.T) {
 		from := t.TempDir()
