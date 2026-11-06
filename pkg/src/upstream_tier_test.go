@@ -4,6 +4,7 @@ import (
 	"github.com/qiangli/yoke/pkg/src"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,16 @@ func TestUpstreamTierCompatibility(t *testing.T) {
 	u, err := src.ConfiguredTier(home, "yoke", "upstream")
 	if err != nil || u != legacy {
 		t.Fatalf("legacy tier: %q %v", u, err)
+	}
+	if err := src.SetUpstream(home, "yoke", legacy); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(src.SrcDir(home), "upstreams.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"yoke": "`+legacy+`"`) {
+		t.Fatalf("legacy form: %s", raw)
 	}
 	org := filepath.Join(home, "org.git")
 	if err := src.SetTier(home, "yoke", "org", org); err != nil {

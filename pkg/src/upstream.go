@@ -112,7 +112,11 @@ func SetTier(home, repo, tier, origin string) error {
 		}
 	}
 	tiers[tier] = origin
-	m[repo], err = json.Marshal(tiers)
+	if len(tiers) == 1 && tiers["org"] == "" {
+		m[repo], err = json.Marshal(tiers["upstream"])
+	} else {
+		m[repo], err = json.Marshal(tiers)
+	}
 	if err != nil {
 		return err
 	}

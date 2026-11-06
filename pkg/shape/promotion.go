@@ -1,12 +1,16 @@
 package shape
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +32,7 @@ type OutgoingChange struct {
 	Candidate string            `json:"candidate"`
 	Evidence  string            `json:"evidence_path"`
 	Status    map[string]string `json:"status"`
+	Warning   string            `json:"warning,omitempty"`
 }
 
 type PushResult struct {
@@ -36,41 +41,70 @@ type PushResult struct {
 	PR         string `json:"pr,omitempty"`
 }
 
-func promotionRemote(ctx context.Context, repo *gogit.Repository, url, tier string) (plumbing.Hash, error) {
+func promotionAuth(ctx context.Context, raw string) (transport.AuthMethod, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil, err
+	}
+	if u.User != nil {
+		password, _ := u.User.Password()
+		return &http.BasicAuth{Username: u.User.Username(), Password: password}, nil
+	}
+	if token := os.Getenv("GH_TOKEN"); token != "" {
+		return &http.BasicAuth{Username: "x-access-token", Password: token}, nil
+	}
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return &http.BasicAuth{Username: "x-access-token", Password: token}, nil
+	}
+	cmd := exec.CommandContext(ctx, "git", "credential", "fill")
+	cmd.Stdin = strings.NewReader("protocol=" + u.Scheme + "\nhost=" + u.Host + "\npath=" + strings.TrimPrefix(u.Path, "/") + "\n\n")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return nil, nil
+	}
+	credentials := map[string]string{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			credentials[k] = v
+		}
+	}
+	if credentials["username"] == "" || credentials["password"] == "" {
+		return nil, nil
+	}
+	return &http.BasicAuth{Username: credentials["username"], Password: credentials["password"]}, nil
+}
+func promotionRemote(ctx context.Context, repo *gogit.Repository, raw, tier string) (plumbing.Hash, error) {
 	name := "shape-promotion-" + tier
-	remote := gogit.NewRemote(repo.Storer, &config.RemoteConfig{Name: name, URLs: []string{url}})
-	ref := plumbing.ReferenceName("refs/shape-promotion/" + tier)
-	err := remote.FetchContext(ctx, &gogit.FetchOptions{RemoteName: name, RefSpecs: []config.RefSpec{config.RefSpec("+refs/heads/HEAD:" + ref)}})
+	auth, err := promotionAuth(ctx, raw)
 	if err != nil {
-		// Most servers do not advertise HEAD as a branch. Resolve the advertised
-		// default through a temporary clone when needed.
-		tmp, e := os.MkdirTemp("", "shape-remote-*")
-		if e != nil {
-			return plumbing.ZeroHash, e
-		}
-		defer os.RemoveAll(tmp)
-		clone, e := gogit.PlainCloneContext(ctx, tmp, true, &gogit.CloneOptions{URL: url})
-		if e != nil {
-			return plumbing.ZeroHash, e
-		}
-		head, e := clone.Head()
-		if e != nil {
-			return plumbing.ZeroHash, e
-		}
-		branch := head.Target().Short()
-		if branch == "" {
-			branch = "main"
-		}
-		err = remote.FetchContext(ctx, &gogit.FetchOptions{RemoteName: name, RefSpecs: []config.RefSpec{config.RefSpec("+refs/heads/" + branch + ":" + string(ref))}})
-		if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
-			return plumbing.ZeroHash, err
+		return plumbing.ZeroHash, err
+	}
+	remote := gogit.NewRemote(repo.Storer, &config.RemoteConfig{Name: name, URLs: []string{raw}})
+	refs, err := remote.List(&gogit.ListOptions{Auth: auth})
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	var branch string
+	for _, r := range refs {
+		if r.Name() == plumbing.HEAD && r.Type() == plumbing.SymbolicReference {
+			branch = r.Target().String()
+			break
 		}
 	}
-	r, e := repo.Reference(ref, true)
-	if e != nil {
-		return plumbing.ZeroHash, e
+	if branch == "" {
+		return plumbing.ZeroHash, fmt.Errorf("shape: remote %s has no symbolic HEAD", tier)
 	}
-	return r.Hash(), nil
+	ref := plumbing.ReferenceName("refs/shape-promotion/" + tier)
+	err = remote.FetchContext(ctx, &gogit.FetchOptions{RemoteName: name, Auth: auth, RefSpecs: []config.RefSpec{config.RefSpec("+" + branch + ":" + ref.String())}})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return plumbing.ZeroHash, err
+	}
+	fetched, err := repo.Reference(ref, true)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	return fetched.Hash(), nil
 }
 
 func patchID(base, candidate *object.Commit) (string, error) {
@@ -96,13 +130,29 @@ func patchID(base, candidate *object.Commit) (string, error) {
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
 	return hex.EncodeToString(sum[:]), nil
 }
-func promoted(repo *gogit.Repository, head plumbing.Hash, wanted string) (bool, error) {
+func promoted(repo *gogit.Repository, head, base plumbing.Hash, wanted string) (bool, error) {
+	remote, err := repo.CommitObject(head)
+	if err != nil {
+		return false, err
+	}
+	proposalBase, err := repo.CommitObject(base)
+	if err != nil {
+		return false, err
+	}
+	common, err := remote.MergeBase(proposalBase)
+	if err != nil {
+		return false, err
+	}
+	stop := map[plumbing.Hash]bool{}
+	for _, c := range common {
+		stop[c.Hash] = true
+	}
 	seen := map[plumbing.Hash]bool{}
 	queue := []plumbing.Hash{head}
 	for len(queue) > 0 {
 		h := queue[0]
 		queue = queue[1:]
-		if seen[h] {
+		if seen[h] || stop[h] {
 			continue
 		}
 		seen[h] = true
@@ -165,27 +215,32 @@ func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, e
 			return nil, e
 		}
 		if e = json.Unmarshal(b, &v); e != nil {
-			return nil, e
+			out = append(out, OutgoingChange{ID: strings.TrimSuffix(entry.Name(), ".json"), Status: map[string]string{tier: "warning"}, Warning: e.Error()})
+			continue
 		}
 		if v.App != s.App.Name || !v.Complete || v.Evidence == "" || v.ProposalRevision == "" {
 			continue
 		}
 		if _, e = submittedItem(home, v); e != nil {
-			return nil, e
+			out = append(out, OutgoingChange{ID: v.ID, Base: v.BaseRevision, Candidate: v.ProposalRevision, Evidence: v.Evidence, Status: map[string]string{tier: "warning"}, Warning: e.Error()})
+			continue
 		}
 		base, e := repo.CommitObject(plumbing.NewHash(v.BaseRevision))
 		if e != nil {
-			return nil, e
+			out = append(out, OutgoingChange{ID: v.ID, Status: map[string]string{tier: "warning"}, Warning: e.Error()})
+			continue
 		}
 		candidate, e := repo.CommitObject(plumbing.NewHash(v.ProposalRevision))
 		if e != nil {
-			return nil, e
+			out = append(out, OutgoingChange{ID: v.ID, Base: v.BaseRevision, Candidate: v.ProposalRevision, Evidence: v.Evidence, Status: map[string]string{tier: "warning"}, Warning: e.Error()})
+			continue
 		}
 		id, e := patchID(base, candidate)
 		if e != nil {
-			return nil, e
+			out = append(out, OutgoingChange{ID: v.ID, Base: v.BaseRevision, Candidate: v.ProposalRevision, Evidence: v.Evidence, Status: map[string]string{tier: "warning"}, Warning: e.Error()})
+			continue
 		}
-		present, e := promoted(repo, head, id)
+		present, e := promoted(repo, head, base.Hash, id)
 		if e != nil {
 			return nil, e
 		}
@@ -197,14 +252,14 @@ func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, e
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
-func ghArgs(v Submission) (string, []string) {
+func ghArgs(v Submission, repo string) (string, []string) {
 	title := "Submit shaped " + v.App
 	by := v.Actor
 	if v.RepresentedUser != "" && v.RepresentedUser != v.Actor {
 		by += " for " + v.RepresentedUser
 	}
 	body := fmt.Sprintf("Shape: %s@%s\nShaped-By: %s\nEvidence: %s\n", v.App, v.SourceRevision, by, v.Evidence)
-	return title, []string{"pr", "create", "--head", v.Branch, "--title", title, "--body", body}
+	return title, []string{"pr", "create", "--repo", repo, "--head", v.Branch, "--title", title, "--body", body}
 }
 func (s Service) Push(ctx context.Context, tier, id string, createPR bool) (PushResult, error) {
 	home, err := s.home()
@@ -214,6 +269,13 @@ func (s Service) Push(ctx context.Context, tier, id string, createPR bool) (Push
 	url, err := src.ConfiguredTier(home, s.App.Name, tier)
 	if err != nil {
 		return PushResult{}, err
+	}
+	explicit, err := src.ConfiguredUpstream(home, s.App.Name)
+	if err != nil {
+		return PushResult{}, err
+	}
+	if tier == "upstream" && explicit == "" {
+		return PushResult{}, errors.New("shape: configure push destination with shape remote set upstream <url>")
 	}
 	if url == "" {
 		return PushResult{}, fmt.Errorf("shape: tier %s is not configured", tier)
@@ -243,10 +305,14 @@ func (s Service) Push(ctx context.Context, tier, id string, createPR bool) (Push
 	if err != nil {
 		return PushResult{}, err
 	}
-	result := PushResult{Branch: v.Branch, CompareURL: strings.TrimSuffix(strings.TrimSuffix(url, ".git"), "/") + "/compare/" + v.Branch}
+	result := PushResult{Branch: v.Branch, CompareURL: compareURL(url, v.Branch)}
 	if tier == "upstream" && createPR {
 		if gh, e := exec.LookPath("gh"); e == nil {
-			_, args := ghArgs(v)
+			repoName := repositoryName(url)
+			if repoName == "" {
+				return result, errors.New("shape: upstream has no GitHub repository name")
+			}
+			_, args := ghArgs(v, repoName)
 			cmd := exec.CommandContext(ctx, gh, args...)
 			cmd.Dir = s.App.SourceDir
 			output, e := cmd.CombinedOutput()
@@ -260,9 +326,44 @@ func (s Service) Push(ctx context.Context, tier, id string, createPR bool) (Push
 }
 func pushBranch(ctx context.Context, repo *gogit.Repository, url, branch string) error {
 	remote := gogit.NewRemote(repo.Storer, &config.RemoteConfig{Name: "shape-push", URLs: []string{url}})
-	err := remote.PushContext(ctx, &gogit.PushOptions{RemoteName: "shape-push", RefSpecs: []config.RefSpec{config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch)}})
+	auth, err := promotionAuth(ctx, url)
+	if err != nil {
+		return err
+	}
+	err = remote.PushContext(ctx, &gogit.PushOptions{Auth: auth, RemoteName: "shape-push", RefSpecs: []config.RefSpec{config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch)}})
 	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return err
 	}
 	return nil
+}
+
+func repositoryName(raw string) string {
+	if strings.HasPrefix(raw, "git@") {
+		_, path, ok := strings.Cut(raw, ":")
+		if !ok {
+			return ""
+		}
+		return strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
+}
+func compareURL(raw, branch string) string {
+	if strings.HasPrefix(raw, "git@") {
+		host, path, ok := strings.Cut(strings.TrimPrefix(raw, "git@"), ":")
+		if !ok || host == "" {
+			return ""
+		}
+		return "https://" + host + "/" + strings.TrimSuffix(strings.Trim(path, "/"), ".git") + "/compare/" + branch
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	u.User = nil
+	u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git") + "/compare/" + branch
+	return u.String()
 }
