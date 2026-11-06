@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
+	"golang.org/x/mod/semver"
 	"net/url"
 	"os"
 	"os/exec"
@@ -41,6 +42,21 @@ type PushResult struct {
 	PR         string `json:"pr,omitempty"`
 }
 
+type IncomingChange struct {
+	Kind    string `json:"kind"`
+	ID      string `json:"id"`
+	Ref     string `json:"ref"`
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+	Warning string `json:"warning,omitempty"`
+}
+
+type PullResult struct {
+	Kind string `json:"kind"`
+	Path string `json:"path,omitempty"`
+	Tag  string `json:"tag,omitempty"`
+}
+
 func promotionAuth(ctx context.Context, raw string) (transport.AuthMethod, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
@@ -56,7 +72,16 @@ func promotionAuth(ctx context.Context, raw string) (transport.AuthMethod, error
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		return &http.BasicAuth{Username: "x-access-token", Password: token}, nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "credential", "fill")
+	git := "git"
+	if _, err := os.Stat("/usr/bin/git"); err == nil {
+		git = "/usr/bin/git"
+	} else if found, err := exec.LookPath("git"); err == nil {
+		git = found
+	} else {
+		return nil, nil
+	}
+	cmd := exec.CommandContext(ctx, git, "credential", "fill")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
 	cmd.Stdin = strings.NewReader("protocol=" + u.Scheme + "\nhost=" + u.Host + "\npath=" + strings.TrimPrefix(u.Path, "/") + "\n\n")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -150,6 +175,9 @@ func promoted(repo *gogit.Repository, head, base plumbing.Hash, wanted string) (
 	seen := map[plumbing.Hash]bool{}
 	queue := []plumbing.Hash{head}
 	for len(queue) > 0 {
+		if len(seen) >= 512 {
+			return false, fmt.Errorf("shape: patch comparison exceeds 512 commits")
+		}
 		h := queue[0]
 		queue = queue[1:]
 		if seen[h] || stop[h] {
@@ -176,6 +204,215 @@ func promoted(repo *gogit.Repository, head, base plumbing.Hash, wanted string) (
 		queue = append(queue, c.ParentHashes...)
 	}
 	return false, nil
+}
+
+func (s Service) incomingRemote(ctx context.Context, tier string) (*gogit.Repository, *gogit.Remote, []*plumbing.Reference, plumbing.Hash, error) {
+	home, err := s.home()
+	if err != nil {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	raw, err := src.ConfiguredTier(home, s.App.Name, tier)
+	if err != nil {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	if raw == "" {
+		return nil, nil, nil, plumbing.ZeroHash, fmt.Errorf("shape: tier %s is not configured", tier)
+	}
+	repo, err := gogit.PlainOpen(s.App.SourceDir)
+	if err != nil {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	auth, err := promotionAuth(ctx, raw)
+	if err != nil {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	remote := gogit.NewRemote(repo.Storer, &config.RemoteConfig{Name: "shape-incoming", URLs: []string{raw}})
+	refs, err := remote.List(&gogit.ListOptions{Auth: auth})
+	if err != nil {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	var branch plumbing.ReferenceName
+	for _, r := range refs {
+		if r.Name() == plumbing.HEAD && r.Type() == plumbing.SymbolicReference {
+			branch = r.Target()
+			break
+		}
+	}
+	if branch == "" {
+		return nil, nil, nil, plumbing.ZeroHash, fmt.Errorf("shape: remote %s has no symbolic HEAD", tier)
+	}
+	var specs []config.RefSpec
+	for _, r := range refs {
+		if r.Name() == branch || strings.HasPrefix(r.Name().String(), "refs/heads/shape-submit/") || strings.HasPrefix(r.Name().String(), "refs/tags/") {
+			specs = append(specs, config.RefSpec("+"+r.Name().String()+":refs/shape-incoming/"+tier+"/"+strings.TrimPrefix(r.Name().String(), "refs/")))
+		}
+	}
+	err = remote.FetchContext(ctx, &gogit.FetchOptions{RemoteName: "shape-incoming", Auth: auth, RefSpecs: specs, Tags: gogit.NoTags})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	base, err := repo.Head()
+	if err != nil {
+		return nil, nil, nil, plumbing.ZeroHash, err
+	}
+	return repo, remote, refs, base.Hash(), nil
+}
+
+func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, error) {
+	repo, _, refs, base, err := s.incomingRemote(ctx, tier)
+	if err != nil {
+		return nil, err
+	}
+	out := []IncomingChange{}
+	var defaultRef plumbing.ReferenceName
+	for _, r := range refs {
+		if r.Name() == plumbing.HEAD && r.Type() == plumbing.SymbolicReference {
+			defaultRef = r.Target()
+		}
+	}
+	for _, r := range refs {
+		name := r.Name().String()
+		if strings.HasPrefix(name, "refs/heads/shape-submit/") {
+			id := strings.TrimPrefix(name, "refs/heads/shape-submit/")
+			commit, e := repo.CommitObject(r.Hash())
+			if e != nil {
+				return nil, e
+			}
+			if len(commit.ParentHashes) == 0 {
+				continue
+			}
+			parent, e := repo.CommitObject(commit.ParentHashes[0])
+			if e != nil {
+				return nil, e
+			}
+			patch, e := patchID(parent, commit)
+			if e != nil {
+				return nil, e
+			}
+			present, e := promoted(repo, base, parent.Hash, patch)
+			if e != nil {
+				return nil, e
+			}
+			if !present {
+				out = append(out, IncomingChange{Kind: "change", ID: id, Ref: name, Title: strings.Split(commit.Message, "\n")[0], Status: "incoming"})
+			}
+		} else if r.Name() == defaultRef {
+			count, titles := 0, []string{}
+			seen := map[plumbing.Hash]bool{}
+			queue := []plumbing.Hash{r.Hash()}
+			for len(queue) > 0 && count < 512 {
+				h := queue[0]
+				queue = queue[1:]
+				if h == base || seen[h] {
+					continue
+				}
+				seen[h] = true
+				c, e := repo.CommitObject(h)
+				if e != nil {
+					return nil, e
+				}
+				local, e := repo.CommitObject(base)
+				if e != nil {
+					return nil, e
+				}
+				common, e := local.MergeBase(c)
+				if e != nil {
+					return nil, e
+				}
+				shared := false
+				for _, ancestor := range common {
+					if ancestor.Hash == h {
+						shared = true
+						break
+					}
+				}
+				if shared {
+					continue
+				}
+				count++
+				if len(titles) < 3 {
+					titles = append(titles, strings.Split(c.Message, "\n")[0])
+				}
+				queue = append(queue, c.ParentHashes...)
+			}
+			if count > 0 {
+				out = append(out, IncomingChange{Kind: "commits", ID: fmt.Sprint(count), Ref: name, Title: strings.Join(titles, "; "), Status: "incoming"})
+			}
+		} else if strings.HasPrefix(name, "refs/tags/") {
+			tag := strings.TrimPrefix(name, "refs/tags/")
+			if semver.IsValid(tag) && semver.IsValid(s.Options.InstalledVersion) && semver.Compare(tag, s.Options.InstalledVersion) > 0 {
+				out = append(out, IncomingChange{Kind: "release", ID: tag, Ref: name, Title: tag, Status: "incoming"})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind == out[j].Kind {
+			return out[i].Ref < out[j].Ref
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out, nil
+}
+
+func (s Service) Pull(ctx context.Context, tier, ref string) (PullResult, error) {
+	if !strings.HasPrefix(ref, "refs/heads/shape-submit/") && !strings.HasPrefix(ref, "refs/tags/") {
+		return PullResult{}, fmt.Errorf("shape: unsupported incoming ref %q", ref)
+	}
+	_, _, refs, _, err := s.incomingRemote(ctx, tier)
+	if err != nil {
+		return PullResult{}, err
+	}
+	var hash plumbing.Hash
+	for _, r := range refs {
+		if r.Name().String() == ref {
+			hash = r.Hash()
+			break
+		}
+	}
+	if hash == plumbing.ZeroHash {
+		return PullResult{}, fmt.Errorf("shape: unknown incoming ref %q", ref)
+	}
+	if strings.HasPrefix(ref, "refs/tags/") {
+		return PullResult{Kind: "release", Tag: strings.TrimPrefix(ref, "refs/tags/")}, nil
+	}
+	root, err := s.root()
+	if err != nil {
+		return PullResult{}, err
+	}
+	dir, err := os.MkdirTemp(root, "incoming-")
+	if err != nil {
+		if err = os.MkdirAll(root, 0700); err != nil {
+			return PullResult{}, err
+		}
+		dir, err = os.MkdirTemp(root, "incoming-")
+		if err != nil {
+			return PullResult{}, err
+		}
+	}
+	checkout := filepath.Join(dir, "work")
+	{
+		clone, e := gogit.PlainInit(checkout, false)
+		if e != nil {
+			_ = os.RemoveAll(dir)
+			return PullResult{}, e
+		}
+		remote := gogit.NewRemote(clone.Storer, &config.RemoteConfig{Name: "source", URLs: []string{s.App.SourceDir}})
+		private := "refs/shape-incoming/" + tier + "/" + strings.TrimPrefix(ref, "refs/")
+		e = remote.FetchContext(ctx, &gogit.FetchOptions{RemoteName: "source", RefSpecs: []config.RefSpec{config.RefSpec("+" + private + ":refs/heads/incoming")}})
+		if e != nil && !errors.Is(e, gogit.NoErrAlreadyUpToDate) {
+			_ = os.RemoveAll(dir)
+			return PullResult{}, e
+		}
+		wt, e := clone.Worktree()
+		if e == nil {
+			e = wt.Checkout(&gogit.CheckoutOptions{Hash: hash, Force: true})
+		}
+		if e != nil {
+			_ = os.RemoveAll(dir)
+			return PullResult{}, e
+		}
+	}
+	return PullResult{Kind: "change", Path: checkout}, nil
 }
 func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, error) {
 	home, err := s.home()

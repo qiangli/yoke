@@ -45,13 +45,14 @@ type App struct {
 	Seed            func() error
 }
 type Options struct {
-	Home, WorkRoot string
-	Delegate       Delegator
-	Verifier       Verifier
-	Activator      Activator
-	Track          func(context.Context, *Candidate) error
-	ProgramRunner  shapeverify.ProgramRunner
-	ServiceRuntime ServiceRuntime
+	Home, WorkRoot   string
+	InstalledVersion string
+	Delegate         Delegator
+	Verifier         Verifier
+	Activator        Activator
+	Track            func(context.Context, *Candidate) error
+	ProgramRunner    shapeverify.ProgramRunner
+	ServiceRuntime   ServiceRuntime
 }
 
 func ProductionOptions(home string) Options {

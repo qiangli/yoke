@@ -50,6 +50,9 @@ func TestPromotionPatchIDIgnoresCommitIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	two := commit("second", "changed\n")
+	if one == two {
+		t.Fatal("expected distinct commits")
+	}
 	second, _ := repo.CommitObject(two)
 	id2, err := patchID(parent, second)
 	if err != nil || id != id2 {
@@ -101,6 +104,91 @@ func TestCompareURL(t *testing.T) {
 	} {
 		if got := compareURL(tc.remote, "shape-submit/id"); got != tc.want {
 			t.Errorf("%s: got %s want %s", tc.remote, got, tc.want)
+		}
+	}
+}
+
+func TestPromotionIncomingPull(t *testing.T) {
+	t.Setenv("WEAVE_ISSUE", "")
+	s, caller, c, _ := submitFixtureNamed(t, "tester", "yoke")
+	v, err := s.Submit(context.Background(), caller, c.Rev, SubmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := filepath.Join(t.TempDir(), "tier.git")
+	remote, err := gogit.PlainInit(bare, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := gogit.PlainOpen(s.App.SourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := plumbing.NewHash(v.BaseRevision)
+	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("master"), base)); err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("master"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushBranch(context.Background(), local, bare, v.Branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.SetTier(s.Options.Home, s.App.Name, "upstream", bare); err != nil {
+		t.Fatal(err)
+	}
+	s.Options.InstalledVersion = "v1.0.0"
+	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1.1.0"), base)); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.Incoming(context.Background(), "upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, release := false, false
+	for _, item := range items {
+		if item.Kind == "change" && item.ID == v.ID {
+			change = true
+		}
+		if item.Kind == "release" && item.ID == "v1.1.0" {
+			release = true
+		}
+	}
+	if !change || !release {
+		t.Fatalf("incoming: %+v", items)
+	}
+	pulled, err := s.Pull(context.Background(), "upstream", "refs/heads/"+v.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pulled.Kind != "change" || pulled.Path == "" {
+		t.Fatalf("pull: %+v", pulled)
+	}
+	checkout, err := gogit.PlainOpen(pulled.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := checkout.Head()
+	if err != nil || head.Hash().String() != v.ProposalRevision {
+		t.Fatalf("checkout: %v %v", head, err)
+	}
+	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("master"), plumbing.NewHash(v.ProposalRevision))); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := local.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: plumbing.NewHash(v.ProposalRevision), Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	items, err = s.Incoming(context.Background(), "upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Kind == "change" {
+			t.Fatalf("already present: %+v", items)
 		}
 	}
 }
