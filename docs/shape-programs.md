@@ -25,8 +25,12 @@ candidate cannot supply or replace it. Build and test are required argv arrays;
 `{artifact}` is the resulting executable path or immutable image ID, and
 `{revision}` is the exact candidate source revision. Commands have time, process,
 memory and output bounds and run with private working/home directories and a
-scrubbed environment. These are ordinary process guards, not a filesystem or
-network sandbox.
+scrubbed environment. The default verifier shares one owned private home/temp
+and Go cache root outside the source across baseline listing, build and tests,
+and removes it after the run. Windows profile/app-data/temp paths use that same
+owned runtime. A source-contained OS temp root is refused; source dependency
+manifests are still checked without cache-directory exclusions. These are
+ordinary process guards, not a filesystem or network sandbox.
 
 CLI and service source history and activation use one `host` principal. Candidate
 visibility, actor attribution and tracking remain tied to the requesting caller.

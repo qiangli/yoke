@@ -44,7 +44,7 @@ type ProgramRunnerFunc func(context.Context, ProgramRun) error
 
 func (f ProgramRunnerFunc) RunProgram(ctx context.Context, r ProgramRun) error { return f(ctx, r) }
 
-type ContainedProgramRunner struct{}
+type ContainedProgramRunner struct{ runtimeRoot string }
 
 type programCapture struct {
 	bytes.Buffer
@@ -65,9 +65,29 @@ func (b *programCapture) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
-func (ContainedProgramRunner) RunProgram(ctx context.Context, r ProgramRun) error {
+func (runner ContainedProgramRunner) RunProgram(ctx context.Context, r ProgramRun) error {
 	if len(r.Argv) == 0 {
 		return errors.New("empty program argv")
+	}
+	root := runner.runtimeRoot
+	if root == "" {
+		var e error
+		root, e = newProgramRuntimeRoot(r.Dir)
+		if e != nil {
+			return e
+		}
+		defer removeProgramRuntimeRoot(root)
+	}
+	source, e := filepath.EvalSymlinks(r.Dir)
+	if e != nil {
+		return e
+	}
+	if programPathInside(source, root) {
+		return errors.New("program runtime home/temp must be outside source")
+	}
+	env, e := programRuntimeEnvironment(root, runtime.GOOS)
+	if e != nil {
+		return e
 	}
 	outR, outW, e := os.Pipe()
 	if e != nil {
@@ -93,7 +113,8 @@ func (ContainedProgramRunner) RunProgram(ctx context.Context, r ProgramRun) erro
 	} else {
 		selected = r.Argv[0]
 	}
-	env := map[string]string{"GOWORK": "off", "BASHY_SHAPE_ENTRY": selected}
+	env["GOWORK"] = "off"
+	env["BASHY_SHAPE_ENTRY"] = selected
 	if filepath.IsAbs(r.Artifact) {
 		env["BASHY_BIN"] = r.Artifact
 	}
@@ -231,6 +252,18 @@ func RunProgram(ctx context.Context, o ProgramOptions) (ProgramReport, error) {
 	if o.Kind != "cli" && o.Kind != "service" {
 		return ProgramReport{}, errors.New("program kind must be cli or service")
 	}
+	runner := o.Runner
+	if runner == nil {
+		if e := RequireCompleteSource(o.RepoDir); e != nil {
+			return ProgramReport{}, e
+		}
+		root, e := newProgramRuntimeRoot(o.RepoDir)
+		if e != nil {
+			return ProgramReport{}, e
+		}
+		defer removeProgramRuntimeRoot(root)
+		runner = ContainedProgramRunner{runtimeRoot: root}
+	}
 	clone, e := IsolatedClone(o.RepoDir, o.CandidateSHA)
 	if e != nil {
 		return ProgramReport{}, e
@@ -259,10 +292,6 @@ func RunProgram(ctx context.Context, o ProgramOptions) (ProgramReport, error) {
 	output := filepath.Join(scratch, o.App)
 	if o.Kind == "cli" && runtime.GOOS == "windows" {
 		output += ".exe"
-	}
-	runner := o.Runner
-	if runner == nil {
-		runner = ContainedProgramRunner{}
 	}
 	expected, native, e := programBaselineChecks(ctx, o, runner, clone)
 	if e != nil {
