@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -34,10 +36,71 @@ import (
 //	the duration, because "it hung" and "it was throttled" look identical without it
 //	the cwd, because a wrong-directory failure was common enough to build an advisor for
 //	the agent principal, because "which agent did this" was unanswerable across a fleet run
+//
+// isServiceStatusPoll selects candidates for the typed producer handshake,
+// not commands that may unconditionally lose their generic telemetry.
+func isServiceStatusPoll(args []string) bool {
+	if len(args) >= 2 && args[0] == "service" && args[1] == "status" {
+		return true
+	}
+	if len(args) < 3 || args[1] != "service" || args[2] != "status" {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(args[0]))
+	return base == "bashy" || base == "bashy.exe"
+}
+
+// A candidate runs before its fallback exec span is created. The actual typed
+// producer must acknowledge handling via context, including collapsed repeats.
+// External/old commands cannot acknowledge and retain their ordinary result
+// span with the original dispatch timestamps and exit status.
+func execStatusCandidate(ctx context.Context, args []string, next interp.ExecHandlerFunc) error {
+	var reported atomic.Bool
+	started := time.Now()
+	err := next(context.WithValue(ctx, statusCommandMarker{}, &reported), args)
+	ended := time.Now()
+	if reported.Load() {
+		return err
+	}
+	_, span := otel.Tracer(instrumentationName).Start(ctx, "exec "+args[0],
+		trace.WithTimestamp(started), trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("cmd.name", args[0]),
+			attribute.StringSlice("cmd.argv", redactArgv(args)), attribute.Int("cmd.argc", len(args))))
+	defer span.End(trace.WithTimestamp(ended))
+	if !span.IsRecording() {
+		return err
+	}
+	if dir := handlerDir(ctx); dir != "" {
+		span.SetAttributes(attribute.String("cmd.cwd", dir))
+	}
+	if principal := os.Getenv("BASHY_PRINCIPAL"); principal != "" {
+		span.SetAttributes(attribute.String("agent.principal", principal))
+	}
+	span.SetAttributes(attribute.Int64("cmd.duration_ms", ended.Sub(started).Milliseconds()))
+	code := 0
+	if err != nil {
+		var status interp.ExitStatus
+		if asExitStatus(err, &status) {
+			code = int(status)
+		} else {
+			code = -1
+			span.RecordError(err, trace.WithTimestamp(ended))
+		}
+	}
+	span.SetAttributes(attribute.Int("cmd.exit_code", code))
+	if code != 0 {
+		span.SetStatus(codes.Error, "exit "+itoa(code))
+	}
+	return err
+}
+
 func ExecMiddleware(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
 		if len(args) == 0 {
 			return next(ctx, args)
+		}
+		if isServiceStatusPoll(args) {
+			return execStatusCandidate(ctx, args, next)
 		}
 
 		// THE GLOBAL PROVIDER, not one this package owns.
