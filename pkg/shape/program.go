@@ -171,7 +171,9 @@ func (s Service) programGuard(repoDir, base string) ([]string, error) {
 				if p == "" || filepath.IsAbs(p) || strings.HasPrefix(p, "-") || strings.Contains(p, "{") {
 					continue
 				}
-				if _, e := tree.FindEntry(filepath.ToSlash(p)); e == nil {
+				// Working directories/package selectors are not gate files.
+				// Explicit protected directories above remain protected.
+				if entry, e := tree.FindEntry(filepath.ToSlash(p)); e == nil && entry.Mode.IsFile() {
 					guards = append(guards, filepath.ToSlash(p))
 				}
 			}
