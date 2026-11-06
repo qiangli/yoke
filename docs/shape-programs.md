@@ -81,7 +81,8 @@ still run the retained release without making a source-provenance claim.
 
 For `kind: service`, also set `service: UNIT`. The unit must already be a disposable
 container-backed process unit using direct `podman run` or `bashy oci run` argv.
-Its settings provide an immutable `image: sha256:...` and existing absolute
+An explicit `--name` must equal the unit name. Its settings provide an immutable
+`image: sha256:...` and existing absolute
 `data_dir`; the image carries `org.opencontainers.image.revision`. Native units
 are not migrated. A supported run template is:
 
@@ -98,5 +99,10 @@ secrets, dependencies, privileged options and image command overrides are refuse
 A declared HTTP or TCP health probe is required. Verification first checks a
 unique temporary unit on a side port with a private copy of data; it does not
 mutate the original unit. Failed cleanup preserves the unit/data for retry.
+Runtime control first loads current declarations. Stop waits for the unit to
+stop, then reconciles a remaining container through the same declared backend.
+Cleanup requires its exact name, immutable image and sole declared data mount;
+it removes only the inspected full container ID. A mismatch preserves the unit
+and data. Image transitions complete stop before changing the declaration.
 Approval changes only the original unit's image setting, restarts it and requires
 health; failure restores the previous unit. The original data directory is kept.

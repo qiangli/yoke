@@ -38,6 +38,7 @@ type ServiceRuntime interface {
 type BashyServiceRuntime struct {
 	Bashy   string
 	Catalog *fleet.Catalog
+	run     func(context.Context, string, ...string) ([]byte, error)
 }
 
 func (r BashyServiceRuntime) catalog() *fleet.Catalog {
@@ -59,7 +60,13 @@ func (r BashyServiceRuntime) Save(_ context.Context, u fleet.Service) error {
 func (r BashyServiceRuntime) command(ctx context.Context, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	b, e := exec.CommandContext(ctx, selfbin.Resolve(r.Bashy), args...).CombinedOutput()
+	var b []byte
+	var e error
+	if r.run != nil {
+		b, e = r.run(ctx, selfbin.Resolve(r.Bashy), args...)
+	} else {
+		b, e = exec.CommandContext(ctx, selfbin.Resolve(r.Bashy), args...).CombinedOutput()
+	}
 	if e != nil {
 		if len(b) > 2048 {
 			b = b[len(b)-2048:]
@@ -69,12 +76,14 @@ func (r BashyServiceRuntime) command(ctx context.Context, args ...string) ([]byt
 	return b, nil
 }
 func (r BashyServiceRuntime) Restart(ctx context.Context, name string) error {
+	if e := r.Stop(ctx, name); e != nil {
+		return e
+	}
 	_, e := r.command(ctx, "service", "restart", name)
 	return e
 }
 func (r BashyServiceRuntime) Stop(ctx context.Context, name string) error {
-	_, e := r.command(ctx, "service", "stop", name)
-	return e
+	return r.stopContainer(ctx, name)
 }
 func (r BashyServiceRuntime) Remove(_ context.Context, name string) error {
 	return r.catalog().RemoveService(name)
@@ -119,6 +128,9 @@ func (s Service) serviceUnit(ctx context.Context) (fleet.Service, error) {
 	if e != nil {
 		return u, e
 	}
+	return eligibleProgramService(u)
+}
+func eligibleProgramService(u fleet.Service) (fleet.Service, error) {
 	if u.ProviderName() != fleet.ServiceProviderProcess {
 		return u, errors.New("shape: service shaping requires an existing container-backed process unit")
 	}
@@ -138,6 +150,7 @@ func (s Service) serviceUnit(ctx context.Context) (fleet.Service, error) {
 		start = 3
 	}
 	image, data, portMapping := false, false, false
+	containerName := ""
 	for i := start; i < len(u.Exec); i++ {
 		arg := u.Exec[i]
 		if arg == "{settings.image}" {
@@ -150,9 +163,16 @@ func (s Service) serviceUnit(ctx context.Context) (fleet.Service, error) {
 		switch arg {
 		case "--rm", "--init":
 		case "--name", "--hostname":
+			option := arg
 			i++
 			if i >= len(u.Exec) || strings.HasPrefix(u.Exec[i], "-") {
 				return u, errors.New("shape: missing container option value")
+			}
+			if option == "--name" {
+				if containerName != "" {
+					return u, errors.New("shape: duplicate container name")
+				}
+				containerName = u.Exec[i]
 			}
 		case "-p", "--publish":
 			i++
@@ -178,6 +198,9 @@ func (s Service) serviceUnit(ctx context.Context) (fleet.Service, error) {
 		default:
 			return u, fmt.Errorf("shape: unsupported disposable container option %q", arg)
 		}
+	}
+	if containerName != u.Name || containerName == "" || strings.ContainsAny(containerName, "/\\{} \t\n") {
+		return u, errors.New("shape: container needs an explicit name equal to its trusted unit")
 	}
 	if !image || !data || !portMapping {
 		return u, errors.New("shape: service unit requires managed image, data_dir bind and port publish")
@@ -390,6 +413,9 @@ func (s Service) applyProgramTarget(ctx context.Context, t programTransition) er
 		return errors.New("shape: missing service target")
 	}
 	r := s.runtime()
+	if e := r.Stop(ctx, t.TargetUnit.Name); e != nil {
+		return e
+	}
 	if e := r.Save(ctx, *t.TargetUnit); e != nil {
 		return e
 	}
@@ -411,6 +437,9 @@ func (s Service) rollbackProgram(ctx context.Context, t programTransition) error
 		return errors.New("shape: missing retained service unit")
 	}
 	r := s.runtime()
+	if e := r.Stop(ctx, t.PreviousUnit.Name); e != nil {
+		return e
+	}
 	if e := r.Save(ctx, *t.PreviousUnit); e != nil {
 		return e
 	}
