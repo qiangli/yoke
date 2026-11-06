@@ -9,34 +9,34 @@ cli:
   binary: klatch
   managed:
     source: github-release
-    version: 1.2.5-bashy.1
+    version: 1.2.6-bashy.1
     license: Apache-2.0
-    license_url: https://github.com/qiangli/klatch/blob/v1.2.5/LICENSE
+    license_url: https://github.com/qiangli/klatch/blob/v1.2.6/LICENSE
     service: true
     sigstore:
-      identity: https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.5-1
+      identity: https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.6-1
       issuer: https://token.actions.githubusercontent.com
     assets:
       linux/amd64:
-        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.5-1/klatch-v1.2.5-linux-amd64.tar.gz
-        sha256: c0ef0d9dc7596aa256944869faa5a39a291bf2240213074d08d0b2574cbc0347
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.6-1/klatch-v1.2.6-linux-amd64.tar.gz
+        sha256: d1b72f1b2aa689634ba904e33651beba2d21d0eb95fe6afdf40f941cd7ea9bb7
         member: klatch
       linux/arm64:
-        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.5-1/klatch-v1.2.5-linux-arm64.tar.gz
-        sha256: 879e18276c65aca4b208e92443ca2c63d752fe9feb1b1d9d08437834e71cf37b
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.6-1/klatch-v1.2.6-linux-arm64.tar.gz
+        sha256: e202c3b61f3fda8c48b07bf9b3946635c478588d2e1cf6101ac93fecf9304493
         member: klatch
       darwin/amd64:
-        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.5-1/klatch-v1.2.5-darwin-amd64.tar.gz
-        sha256: 7508bf9f24e42be496f602ab47c992de888cc856e6c9264cba4569e19c5dbd3e
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.6-1/klatch-v1.2.6-darwin-amd64.tar.gz
+        sha256: 8d87e4a0917a0cd852d462b7ada387c0814fd4fd4ef6a2a5497358a634305300
         member: klatch
       darwin/arm64:
-        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.5-1/klatch-v1.2.5-darwin-arm64.tar.gz
-        sha256: f3044c53f8ff04fa234b6a51e9c037a10a0d92a7106ce230ce55b55068139219
+        url: https://github.com/qiangli/klatch/releases/download/bashy-v1.2.6-1/klatch-v1.2.6-darwin-arm64.tar.gz
+        sha256: 1a37e4eb5d00749824257f3d99dfe2b474e59480aec0da18548fe4b14ffb157d
         member: klatch
     notes: >-
-      Bashy-signed Klatch v1.2.5 server. Each archive also carries transform
-      helpers. The separately signed klatch-web-v1.2.5.tar.gz asset is deployed
+      Bashy-signed Klatch v1.2.6 server. Each archive also carries transform
+      helpers. The separately signed klatch-web-v1.2.6.tar.gz asset is deployed
       as the web bundle by the service operator. Web asset URL:
-      https://github.com/qiangli/klatch/releases/download/bashy-v1.2.5-1/klatch-web-v1.2.5.tar.gz
-      (sha256 85ceb1358f754ef35a8f7947df64a38c729c8fbaa8fe62b5a5626be9d2eee89b).
+      https://github.com/qiangli/klatch/releases/download/bashy-v1.2.6-1/klatch-web-v1.2.6.tar.gz
+      (sha256 7bb3d68457a4156c0d5b903fc49570e41d124724814d52d40862161a625e495b).
 quirks: Klatch chat server; hidden non-agent service tool
