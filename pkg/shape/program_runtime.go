@@ -805,7 +805,7 @@ func (s Service) PreviewProgram(ctx context.Context, caller Caller, id string) (
 				return preview, e
 			}
 			return *c.ProgramPreview, nil
-		} else if !os.IsNotExist(e) {
+		} else if !errors.Is(e, os.ErrNotExist) {
 			return preview, e
 		}
 	}
@@ -839,7 +839,7 @@ func (s Service) startServicePreview(ctx context.Context, id string, a ProgramAr
 		if e = s.cleanupProgramPreview(ctx, Candidate{ID: id, ProgramPreview: &pending}); e != nil {
 			return preview, fmt.Errorf("shape: preview cleanup pending for %s: %w", name, e)
 		}
-	} else if !os.IsNotExist(le) {
+	} else if !errors.Is(le, os.ErrNotExist) {
 		return preview, le
 	}
 
@@ -881,7 +881,7 @@ func (s Service) startServicePreview(ctx context.Context, id string, a ProgramAr
 	r := s.runtime()
 	if existing, le := r.Load(ctx, target.Name); le == nil {
 		return preview, fmt.Errorf("shape: preview unit name already exists: %s", existing.Name)
-	} else if !os.IsNotExist(le) {
+	} else if !errors.Is(le, os.ErrNotExist) {
 		return preview, le
 	}
 	if e = r.Save(ctx, target); e != nil {
@@ -947,7 +947,7 @@ func (s Service) cleanupProgramPreview(ctx context.Context, c Candidate) error {
 	}
 	r := s.runtime()
 	unit, loadErr := r.Load(ctx, expected)
-	if loadErr != nil && !os.IsNotExist(loadErr) {
+	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
 		return loadErr
 	}
 	if loadErr == nil {

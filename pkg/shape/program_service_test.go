@@ -182,3 +182,86 @@ func TestProgramServiceCleanupFailureRetainsOwnedData(t *testing.T) {
 		t.Fatalf("retry failed %+v %v units=%d", verified.Verdict, e, len(r.units))
 	}
 }
+
+// Real fleet load/save/remove semantics with only process supervision stubbed.
+// In particular, missing units retain BashyServiceRuntime's wrapped sentinel.
+type catalogPreviewRuntime struct {
+	BashyServiceRuntime
+	started, stopped []string
+}
+
+func (r *catalogPreviewRuntime) Restart(_ context.Context, name string) error {
+	r.started = append(r.started, name)
+	return nil
+}
+func (r *catalogPreviewRuntime) Healthy(context.Context, fleet.Service) error { return nil }
+func (r *catalogPreviewRuntime) Stop(_ context.Context, name string) error {
+	r.stopped = append(r.stopped, name)
+	return nil
+}
+func TestProgramServicePreviewUsesWrappedMissingRealCatalog(t *testing.T) {
+	s, caller, input, originalRuntime := serviceFixture(t)
+	catalog := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithoutCloudOverlay())
+	runtime := &catalogPreviewRuntime{BashyServiceRuntime: BashyServiceRuntime{Catalog: catalog}}
+	ctx := context.Background()
+	_, missing := runtime.Load(ctx, "shape-preview-missing-native-catalog")
+	if missing == nil || !errors.Is(missing, os.ErrNotExist) {
+		t.Fatalf("real missing unit sentinel: %v", missing)
+	}
+	if os.IsNotExist(missing) {
+		t.Fatal("fixture must exercise the real wrapped-not-exist case")
+	}
+	if e := runtime.Save(ctx, originalRuntime.units["disposable"]); e != nil {
+		t.Fatal(e)
+	}
+	s.Options.ServiceRuntime = runtime
+	candidate, e := s.Import(ctx, caller, Wish{Request: "actual-catalog preview"}, input)
+	if e != nil {
+		t.Fatal(e)
+	}
+	verified, e := s.Verify(ctx, caller, candidate.ID)
+	if e != nil || verified.Verdict == nil || !verified.Verdict.Pass {
+		t.Fatalf("wrapped missing unit refused before disposable health: %+v %v", verified.Verdict, e)
+	}
+	preview, e := s.PreviewProgram(ctx, caller, candidate.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	unit, e := runtime.Load(ctx, preview.Unit)
+	if e != nil || unit.Settings["data_dir"] != preview.DataDir {
+		t.Fatalf("preview not stored in real catalog: %+v %v", unit, e)
+	}
+	if e = runtime.Remove(ctx, preview.Unit); e != nil {
+		t.Fatal(e)
+	}
+	// Recovery from a disappeared preview re-enters both absence checks.
+	preview, e = s.PreviewProgram(ctx, caller, candidate.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Reject(ctx, caller, candidate.ID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = runtime.Load(ctx, preview.Unit); !errors.Is(e, os.ErrNotExist) {
+		t.Fatalf("preview not removed: %v", e)
+	}
+	// Cleanup of an already missing, owned preview must remove only owned data.
+	home, _ := s.home()
+	id := "0123456789abcdef"
+	data := filepath.Join(home, "shape-host", s.App.Name, "previews", id, "data")
+	if e = os.MkdirAll(data, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.cleanupProgramPreview(ctx, Candidate{ID: id, ProgramPreview: &ProgramPreview{Unit: "shape-preview-" + s.App.Name + "-" + id, DataDir: data}}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = os.Stat(data); !os.IsNotExist(e) {
+		t.Fatal("missing preview cleanup left private data", e)
+	}
+	if _, e = runtime.Load(ctx, "disposable"); e != nil {
+		t.Fatal("original unit removed", e)
+	}
+	if len(runtime.started) < 3 || len(runtime.stopped) < 2 {
+		t.Fatalf("disposable lifecycle not exercised: %+v", runtime)
+	}
+}
