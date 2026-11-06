@@ -3,6 +3,7 @@ package shape
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,7 +31,20 @@ func submitFixture(t *testing.T) (Service, Caller, Candidate, *submitVerifier) {
 }
 func submitFixtureActor(t *testing.T, actor string) (Service, Caller, Candidate, *submitVerifier) {
 	t.Helper()
+	return submitFixtureNamed(t, actor, "hello")
+}
+func submitFixtureNamed(t *testing.T, actor, name string) (Service, Caller, Candidate, *submitVerifier) {
+	t.Helper()
 	s, caller, from, _, _ := testService(t)
+	s.App.Name = name
+	if name == "yoke" {
+		if err := os.MkdirAll(src.SrcDir(s.Options.Home), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(s.App.SourceDir, filepath.Join(src.SrcDir(s.Options.Home), "yoke")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	caller.Actor = actor
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("BASHY_HOME", s.Options.Home)

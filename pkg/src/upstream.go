@@ -11,8 +11,8 @@ import (
 )
 
 func upstreamPath(home string) string { return filepath.Join(SrcDir(home), "upstreams.json") }
-func configuredUpstreams(home string) (map[string]string, error) {
-	m := map[string]string{}
+func configuredUpstreams(home string) (map[string]json.RawMessage, error) {
+	m := map[string]json.RawMessage{}
 	b, err := os.ReadFile(upstreamPath(home))
 	if os.IsNotExist(err) {
 		return m, nil
@@ -33,11 +33,56 @@ func ConfiguredUpstream(home, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return m[repo], nil
+	var tiers map[string]string
+	if len(m[repo]) == 0 {
+		return "", nil
+	}
+	if m[repo][0] == '"' {
+		var u string
+		err = json.Unmarshal(m[repo], &u)
+		return u, err
+	}
+	err = json.Unmarshal(m[repo], &tiers)
+	return tiers["upstream"], err
 }
-func SetUpstream(home, repo, origin string) error {
+
+// ConfiguredTier returns a named promotion destination. The upstream tier
+// falls back to the installation seed or canonical origin.
+func ConfiguredTier(home, repo, tier string) (string, error) {
+	if tier != "org" && tier != "upstream" {
+		return "", fmt.Errorf("src: unknown tier %q", tier)
+	}
+	if tier == "upstream" {
+		u, err := ConfiguredUpstream(home, repo)
+		if err != nil || u != "" {
+			return u, err
+		}
+		if u = seedOrigin(home, repo); u != "" {
+			return u, nil
+		}
+		return remoteFor(repo)
+	}
+	if _, err := remoteFor(repo); err != nil {
+		return "", err
+	}
+	m, err := configuredUpstreams(home)
+	if err != nil {
+		return "", err
+	}
+	var tiers map[string]string
+	if len(m[repo]) == 0 || m[repo][0] == '"' {
+		return "", nil
+	}
+	err = json.Unmarshal(m[repo], &tiers)
+	return tiers[tier], err
+}
+func SetUpstream(home, repo, origin string) error { return SetTier(home, repo, "upstream", origin) }
+func SetTier(home, repo, tier, origin string) error {
 	if _, err := remoteFor(repo); err != nil {
 		return err
+	}
+	if tier != "org" && tier != "upstream" {
+		return fmt.Errorf("src: unknown tier %q", tier)
 	}
 	origin = strings.TrimSpace(origin)
 	if origin == "" {
@@ -54,7 +99,27 @@ func SetUpstream(home, repo, origin string) error {
 	if err != nil {
 		return err
 	}
-	m[repo] = origin
+	tiers := map[string]string{}
+	var originLegacy string
+	if len(m[repo]) > 0 {
+		if m[repo][0] == '"' {
+			if err = json.Unmarshal(m[repo], &originLegacy); err != nil {
+				return err
+			}
+			tiers["upstream"] = originLegacy
+		} else if err = json.Unmarshal(m[repo], &tiers); err != nil {
+			return err
+		}
+	}
+	tiers[tier] = origin
+	if len(tiers) == 1 && tiers["org"] == "" {
+		m[repo], err = json.Marshal(tiers["upstream"])
+	} else {
+		m[repo], err = json.Marshal(tiers)
+	}
+	if err != nil {
+		return err
+	}
 	if err = os.MkdirAll(SrcDir(home), 0755); err != nil {
 		return err
 	}
