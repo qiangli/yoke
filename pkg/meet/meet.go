@@ -17,6 +17,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/capability"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/kb"
 	"github.com/qiangli/yoke/pkg/lens/provider"
 	"github.com/qiangli/yoke/pkg/lens/stream"
@@ -217,12 +218,39 @@ type sessionFlags struct {
 	rosterNotes  []string // what --min-band seated, and what it could not
 }
 
+// meetSecretaryFallback is the last-resort secretary, used only when the
+// catalog has no `roles` roster entry for the secretary (seeds off and
+// nothing mounted). The default itself is data: the seeded fleet.RosterRoles
+// record, which an operator reshapes with a same-named shared, org or local
+// roster. The flag default stays this literal so the command tree builds
+// without loading the catalog; the roster is read at use time.
+const meetSecretaryFallback = "claude"
+
+// meetCatalog builds the fleet catalog the secretary default is read from.
+// A variable so tests can pin it to an isolated store.
+var meetCatalog = func() *fleet.Catalog { return fleet.New() }
+
+// meetSecretaryDefault resolves the secretary default from the catalog's
+// `roles` roster, read at use time (never while building the command tree).
+func meetSecretaryDefault() string {
+	return meetCatalog().RosterRole(fleet.RosterRoles, "meet-secretary", meetSecretaryFallback)
+}
+
+// resolveSecretaryDefault applies the roster default when the caller left
+// --secretary at its flag default. An explicitly spelled secretary — even one
+// that happens to equal the fallback — is the caller's choice and is kept.
+func (sf *sessionFlags) resolveSecretaryDefault(cmd *cobra.Command) {
+	if cmd != nil && !cmd.Flags().Changed("secretary") && sf.secretary == meetSecretaryFallback {
+		sf.secretary = meetSecretaryDefault()
+	}
+}
+
 func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&sf.topic, "topic", "", "meeting topic (required)")
 	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent — decides content (repeatable)")
 	f.IntVar(&sf.minBand, "min-band", 0, "seat every operable agent at this capability band or above (1-5), instead of naming them")
-	f.StringVar(&sf.secretary, "secretary", "claude",
+	f.StringVar(&sf.secretary, "secretary", meetSecretaryFallback,
 		"secretary agent — records, decides nothing; never a participant or the facilitator. "+
 			"Pass --secretary \"\" for a room that keeps no minutes: a conversation rather than a meeting")
 	// ONE FLAG, DOMAIN TITLES. A meeting's owner is its FACILITATOR: the seat
@@ -410,6 +438,7 @@ func newOpenCmd() *cobra.Command {
 			if shared && !sf.board {
 				return fmt.Errorf("meet: --shared rooms are boards (nothing schedules a turn across hosts); pass --board")
 			}
+			sf.resolveSecretaryDefault(cmd)
 			st, err := sf.newState()
 			if err != nil {
 				return err
@@ -654,6 +683,7 @@ func newConsultCmd() *cobra.Command {
 			if q := strings.TrimSpace(question); q != "" && len(sf.agenda) == 0 {
 				sf.agenda = []string{q}
 			}
+			sf.resolveSecretaryDefault(cmd)
 			st, err := sf.newState()
 			if err != nil {
 				return err

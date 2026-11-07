@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -154,6 +155,62 @@ func normalizeToolName(tool string) string {
 	return filepath.Base(strings.ToLower(strings.TrimSpace(tool)))
 }
 
+// weaveKnownFallback is the last-resort tool-name table, used only when the
+// catalog lists no tools (seeds off after the Mechanism→seed move, or nothing
+// mounted). The names themselves are data: the fleet tool registry, which an
+// operator reshapes with a same-named shared, org or local record.
+var weaveKnownFallback = []string{"claude-code", "opencode", "claude", "codex", "aider", "gemini", "agy"}
+
+// weaveKnownTool is one recognizable spelling and the canonical tool it keys.
+type weaveKnownTool struct {
+	spelling  string // lowercased name or alias as it appears in a log
+	canonical string // the catalog tool name the cooldown is keyed under
+}
+
+// weaveKnownToolSpellings lists every catalog tool name and alias,
+// longest-first so "muse-code" wins over "muse" (and "opencode" over "code")
+// when both appear. Spellings canonicalize: a log mentioning an alias keys
+// the same cooldown as the tool itself. fleetCatalog is the weave-wide
+// catalog variable, so tests pin it to the baseline.
+func weaveKnownToolSpellings() []weaveKnownTool {
+	// CLI harnesses only: cooldowns key runnable tools, not function kits.
+	tools, _ := fleetCatalog().Tools(false)
+	seen := map[string]weaveKnownTool{}
+	for _, t := range tools {
+		if strings.TrimSpace(t.Name) == "" {
+			continue
+		}
+		for _, n := range t.Names() {
+			sp := strings.ToLower(strings.TrimSpace(n))
+			if sp == "" {
+				continue
+			}
+			if _, ok := seen[sp]; !ok {
+				seen[sp] = weaveKnownTool{spelling: sp, canonical: t.Name}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		out := make([]weaveKnownTool, 0, len(weaveKnownFallback))
+		for _, sp := range weaveKnownFallback {
+			out = append(out, weaveKnownTool{spelling: sp, canonical: sp})
+		}
+		return out
+	}
+	out := make([]weaveKnownTool, 0, len(seen))
+	for _, k := range seen {
+		out = append(out, k)
+	}
+	// Longest-first, then lexical for determinism when lengths tie.
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].spelling) != len(out[j].spelling) {
+			return len(out[i].spelling) > len(out[j].spelling)
+		}
+		return out[i].spelling < out[j].spelling
+	})
+	return out
+}
+
 // weaveThrottleToolFromSignal best-effort extracts the underlying tool name
 // when the recorded `it.Tool` is the `bash` wrapper (weave invokes a fleet
 // CLI as `bash -c '<tool> ...'`, so the basename is often "bash"). It scans
@@ -170,11 +227,9 @@ func weaveThrottleToolFromSignal(tool, logTail string) string {
 		return norm
 	}
 	hay := strings.ToLower(logTail)
-	// Longest-first so "claude-code" wins over "claude" when both appear.
-	known := []string{"claude-code", "opencode", "claude", "codex", "aider", "gemini", "agy"}
-	for _, k := range known {
-		if strings.Contains(hay, k) {
-			return k
+	for _, k := range weaveKnownToolSpellings() {
+		if strings.Contains(hay, k.spelling) {
+			return k.canonical
 		}
 	}
 	if norm == "" {
