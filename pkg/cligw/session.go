@@ -253,7 +253,7 @@ func (s *StickySession) Turn(ctx context.Context, input CompletionPrompt, onEven
 			isTextDelta := claudeTextDelta(ev.Raw)
 			if isTextDelta {
 				sawTextDelta = true
-			} else if sawTextDelta && s.tool.Name == "claude" && ev.Type == "assistant" {
+			} else if sawTextDelta && s.tool.CLI.Launch.Decoder.Kind == "claude-stream-json" && ev.Type == "assistant" {
 				// Claude follows partial stream events with a full assistant
 				// snapshot. Keep it for terminal metadata, but do not
 				// duplicate it into the turn text (one-shot workers do the
@@ -413,7 +413,7 @@ func (s *StickySession) removeDir() {
 }
 
 func (s *StickySession) nativeSystemPrompt() bool {
-	return s.tool.Name == "claude" || s.tool.Name == "codex"
+	return s.tool.CLI.Launch.NativeSystemPrompt
 }
 
 func (s *StickySession) promptBody(prompt string) ([]byte, error) {

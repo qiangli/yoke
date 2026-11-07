@@ -151,7 +151,7 @@ func resolveWorkerSeat(ctx context.Context, agent string) (string, agentlaunch.L
 	// A declared effort the tool cannot be told is refused here, loudly:
 	// silently dropping it would serve a different setting than the binding
 	// (and its sticky identity) says.
-	if _, err := effortArgs(tool.Name, launch.Effort); err != nil {
+	if _, err := effortArgs(tool.CLI.Launch, tool.Name, launch.Effort); err != nil {
 		return "", launch, tool, "", err
 	}
 
@@ -340,7 +340,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 			isTextDelta := claudeTextDelta(ev.Raw)
 			if isTextDelta {
 				sawTextDelta = true
-			} else if sawTextDelta && w.tool.Name == "claude" && ev.Type == "assistant" {
+			} else if sawTextDelta && w.tool.CLI.Launch.Decoder.Kind == "claude-stream-json" && ev.Type == "assistant" {
 				// Claude follows partial stream events with a full assistant
 				// snapshot. Keep it for terminal metadata, but do not duplicate it.
 				ev.Text = ""
@@ -475,57 +475,70 @@ func scanWorkerLines(r io.Reader, out chan<- workerLine) {
 
 func (w *Worker) argv(prompt, requestSystem string) []string {
 	args := append([]string(nil), w.launch.Args...)
+	spec := w.tool.CLI.Launch
 	events := w.tool.EventsStdoutArgv()
-	switch w.tool.Name {
-	case "claude":
-		if w.mode == WarmStdinStreamJSON {
-			args = moveArgFirst(args, "-p")
+	effort := w.effortArgs()
+	expand := func(tokens []string) []string {
+		var out []string
+		for _, token := range tokens {
+			switch token {
+			case "{events}":
+				out = append(out, events...)
+				continue
+			case "{effort_args}":
+				out = append(out, effort...)
+				continue
+			case "{no_track}":
+				out = append(out, codexNoTrackConfig()...)
+				continue
+			case "{tools_off}":
+				out = append(out, codexToolsOffConfig()...)
+				continue
+			case "{cwd}":
+				token = w.cwd
+			case "{dev_null}":
+				token = os.DevNull
+			case "{system}":
+				token = systemPrompt(requestSystem)
+			}
+			token = strings.ReplaceAll(token, "{instructions_json}", strconv.Quote(w.codexInstructionsPath()))
+			token = strings.ReplaceAll(token, "{catalog_json}", strconv.Quote(w.codexCatalog))
+			out = append(out, token)
 		}
-		extra := append([]string{}, events...)
-		extra = append(extra, "--include-partial-messages", "--system-prompt", systemPrompt(requestSystem))
-		extra = append(extra, "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "")
-		extra = append(extra, w.effortArgs()...)
-		if w.mode == WarmStdinStreamJSON {
-			extra = append([]string{"--input-format", "stream-json"}, extra...)
-			args = append(args, extra...)
-		} else {
+		return out
+	}
+	if len(spec.GatewayArgs) == 0 {
+		args = insertBeforePromptFlag(args, events)
+	}
+	for _, step := range spec.GatewayArgs {
+		if step.When == "stream" && w.mode != WarmStdinStreamJSON || step.When == "cold" && w.mode == WarmStdinStreamJSON || step.When == "catalog" && w.codexCatalog == "" || step.When == "effort" && len(effort) == 0 {
+			continue
+		}
+		extra := expand(step.Args)
+		switch step.Action {
+		case "move-first":
+			if len(extra) > 0 {
+				args = moveArgFirst(args, extra[0])
+			}
+		case "before-prompt":
 			args = insertBeforePromptFlag(args, extra)
+		case "after-exec":
+			args = insertAfter(args, "exec", extra)
+		case "append":
+			args = append(args, extra...)
+		case "append-missing":
+			args = appendMissingSequence(args, extra)
+		case "remove":
+			if len(extra) > 0 {
+				args = removeArg(args, extra[0])
+			}
+		case "remove-pair":
+			if len(extra) > 0 {
+				args = removePair(args, extra[0])
+			}
+		case "short-sandbox":
+			args = shortSandbox(args)
 		}
-	case "agy":
-		// cwd alone does not select an Agy project; otherwise it can reuse
-		// the operator's remembered conversation/workspace.
-		args = insertBeforePromptFlag(args, []string{"--new-project", "--add-dir", w.cwd, "--log-file", os.DevNull})
-		if w.mode == WarmStdinStreamJSON {
-			args = removeArg(args, "-p")
-			args = removePair(args, "--print-timeout")
-			args = append(args, "--input-format", "stream-json")
-			args = appendMissingSequence(args, events)
-			args = append(args, "-p=")
-		} else {
-			args = insertBeforePromptFlag(args, events)
-		}
-	case "muse":
-		args = insertAfter(args, "exec", []string{"-c", "telemetry.enabled=false"})
-		args = insertBeforePromptFlag(args, events)
-		args = append(args, "--no-session-log", "--no-foreign-personal-context", "--disable-web-tools", "--disable-shell", "--disable-write")
-	case "codex":
-		args = shortSandbox(args)
-		args = insertAfter(args, "exec", events)
-		// The bare model, as claude's --tools "": no shell, no apps, browser
-		// or computer use, no web search, no user config (MCP servers), no
-		// saved session.
-		args = insertAfter(args, "exec", append([]string{"--ephemeral", "--ignore-user-config",
-			"--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
-			"-c", `web_search="disabled"`}, append(codexNoTrackConfig(), codexToolsOffConfig()...)...))
-		args = insertAfter(args, "exec", []string{"-c", "model_instructions_file=" + strconv.Quote(w.codexInstructionsPath())})
-		if w.codexCatalog != "" {
-			args = insertAfter(args, "exec", []string{"-c", "model_catalog_json=" + strconv.Quote(w.codexCatalog)})
-		}
-		if effort := w.effortArgs(); len(effort) > 0 {
-			args = insertAfter(args, "exec", effort)
-		}
-	default:
-		args = insertBeforePromptFlag(args, events)
 	}
 	argv := append([]string{w.launch.Tool}, args...)
 	if w.mode == WarmCold || w.mode == WarmACP {
@@ -534,29 +547,25 @@ func (w *Worker) argv(prompt, requestSystem string) []string {
 	return argv
 }
 
-// effortArgs is the argv that tells tool to run at a reasoning effort. Unset
-// effort = no argv at all (the tool's default, byte-for-byte the argv an
-// undeclared binding always had). genie (ycode) takes its effort in the
-// environment (agentlaunch.EffortEnv), so it needs no argv. A tool with no
-// known effort mechanism is an error, never a silent no-op. agy is
-// deliberately absent: its bindings carry effort in the model id, and passing
-// both fails (see baseline agy.yaml).
-func effortArgs(tool, effort string) ([]string, error) {
+func effortArgs(spec fleet.ToolLaunch, tool, effort string) ([]string, error) {
 	if effort == "" {
 		return nil, nil
 	}
 	if err := fleet.ValidEffort(effort); err != nil {
 		return nil, fmt.Errorf("cligw: %w", err)
 	}
-	switch tool {
-	case "claude":
-		return []string{"--effort", effort}, nil
-	case "codex":
-		return []string{"-c", "model_reasoning_effort=" + strconv.Quote(effort)}, nil
-	case agentlaunch.YcodeToolName, "genie":
-		return nil, nil
+	if len(spec.EffortArgs) == 0 {
+		if tool == agentlaunch.YcodeToolName || tool == "genie" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cligw: reasoning effort %q cannot be applied: tool %q has no known effort flag; unset the effort or encode it in the model id", effort, tool)
 	}
-	return nil, fmt.Errorf("cligw: reasoning effort %q cannot be applied: tool %q has no known effort flag (supported: claude, codex, ycode/genie); unset the effort or encode it in the model id", effort, tool)
+	args := make([]string, len(spec.EffortArgs))
+	for i, token := range spec.EffortArgs {
+		token = strings.ReplaceAll(token, "{effort_json}", strconv.Quote(effort))
+		args[i] = strings.ReplaceAll(token, "{effort}", effort)
+	}
+	return args, nil
 }
 
 // EffortError is a request-side effort the worker cannot serve: the door
@@ -592,14 +601,14 @@ func (w *Worker) checkEffortLocked(requested string) (string, error) {
 	if declared := w.launch.Effort; declared != "" && declared != requested {
 		return "", &EffortError{Msg: fmt.Sprintf("cligw: the request asks for reasoning effort %q but the binding declares %q and its sticky identity is frozen; ask for %q or use a binding declared at %q", requested, declared, declared, requested)}
 	}
-	if _, err := effortArgs(w.tool.Name, requested); err != nil {
+	if _, err := effortArgs(w.tool.CLI.Launch, w.tool.Name, requested); err != nil {
 		return "", &EffortError{Msg: err.Error()}
 	}
 	return requested, nil
 }
 
 func (w *Worker) effortArgs() []string {
-	args, _ := effortArgs(w.tool.Name, w.effectiveEffort()) // validated in checkEffortLocked / NewWorker
+	args, _ := effortArgs(w.tool.CLI.Launch, w.tool.Name, w.effectiveEffort()) // validated in checkEffortLocked / NewWorker
 	return args
 }
 
@@ -611,7 +620,7 @@ func systemPrompt(request string) string {
 }
 
 func (w *Worker) nativeSystemPrompt() bool {
-	return w.tool.Name == "claude" || w.tool.Name == "codex"
+	return w.tool.CLI.Launch.NativeSystemPrompt
 }
 
 func (w *Worker) codexInstructionsPath() string {
@@ -688,7 +697,7 @@ func writeCodexCatalog(dir string) (string, error) {
 }
 
 func (w *Worker) prepareSystemPrompt(request string) error {
-	if w.tool.Name != "codex" {
+	if !w.tool.CLI.Launch.InstructionsFile {
 		return nil
 	}
 	if err := os.WriteFile(w.codexInstructionsPath(), []byte(systemPrompt(request)+"\n"), 0o600); err != nil {
@@ -790,22 +799,22 @@ func eventText(obj map[string]any, decoder ...fleet.ToolDecoder) string {
 
 func selectedText(obj map[string]any, d fleet.ToolDecoder) string {
 	switch d.Kind {
-	case "agy":
+	case "agy-steps":
 		if stringValue(obj["event"]) != "step_update" || stringValue(nested(obj, "step_update", "step_type")) != "agent_response" {
 			return ""
 		}
-	case "muse":
+	case "muse-run":
 		if stringValue(obj["payload_type"]) != "run.output.delta" {
 			return ""
 		}
-	case "claude":
+	case "claude-stream-json":
 		if stringValue(obj["type"]) == "assistant" {
 			return eventText(obj)
 		}
 		if !claudeTextDeltaJSON(obj) {
 			return ""
 		}
-	case "codex":
+	case "codex-jsonl":
 		if stringValue(obj["type"]) != "item.completed" || stringValue(nested(obj, "item", "type")) != "agent_message" {
 			return ""
 		}
@@ -817,15 +826,15 @@ func selectedText(obj map[string]any, d fleet.ToolDecoder) string {
 
 func selectedFinal(obj map[string]any, d fleet.ToolDecoder) string {
 	switch d.Kind {
-	case "agy":
+	case "agy-steps":
 		if stringValue(obj["event"]) != "result" {
 			return ""
 		}
-	case "muse":
+	case "muse-run":
 		if !strings.HasPrefix(stringValue(obj["payload_type"]), "run.terminal.") {
 			return ""
 		}
-	case "claude":
+	case "claude-stream-json":
 		if stringValue(obj["type"]) != "result" {
 			return ""
 		}

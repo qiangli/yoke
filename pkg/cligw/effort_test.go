@@ -22,11 +22,11 @@ import (
 func TestEffortArgv(t *testing.T) {
 	claude := func(effort string) *Worker {
 		return &Worker{mode: WarmStdinStreamJSON, launch: agentlaunch.Launch{Tool: "claude", Effort: effort, Args: []string{"--model", "M", "-p"}},
-			tool: fleet.Tool{Name: "claude", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--output-format stream-json --verbose"}}}}
+			tool: fleet.Tool{Name: "claude", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "claude")}}}
 	}
 	codex := func(effort string) *Worker {
 		return &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, launch: agentlaunch.Launch{Tool: "codex", Effort: effort, Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "read-only"}},
-			tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}}
+			tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "codex")}}}
 	}
 	claudeBase := claude("").argv("", "")
 	wantClaude := append(append([]string{}, claudeBase...), "--effort", "high")
@@ -51,6 +51,10 @@ func installEffortCatalog(t *testing.T, toolName, effort string) {
 	t.Setenv("BASHY_SELF", filepath.Join(t.TempDir(), "no-such-bashy"))
 	cat := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithBaselineFS(fstest.MapFS{}))
 	launch := fleet.ToolLaunch{Exec: "/nonexistent/" + toolName + " -p {prompt}", Warm: string(WarmCold), EventsStdout: "--json"}
+	if toolName == "claude" || toolName == "codex" {
+		seed := seededGatewayLaunch(t, toolName)
+		launch.GatewayArgs, launch.EffortArgs = seed.GatewayArgs, seed.EffortArgs
+	}
 	if err := cat.SaveTool(fleet.Tool{Name: toolName, Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "/nonexistent/" + toolName, Launch: launch}}); err != nil {
 		t.Fatal(err)
 	}

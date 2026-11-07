@@ -21,6 +21,16 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 )
 
+func seededGatewayLaunch(t *testing.T, name string) fleet.ToolLaunch {
+	t.Helper()
+	c := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithoutLocalStore())
+	tool, ok := c.Tool(name)
+	if !ok {
+		t.Fatalf("missing seeded tool %q", name)
+	}
+	return tool.CLI.Launch
+}
+
 func TestCLIHelper(t *testing.T) {
 	if os.Getenv("CLIGW_TEST_HELPER") != "1" {
 		return
@@ -79,7 +89,7 @@ func TestCLIHelper(t *testing.T) {
 			fmt.Println(`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`)
 			fmt.Println(`{"type":"result","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}`)
 		case "agy":
-			fmt.Println(`{"event":"delta","delta":{"text":"ok"}}`)
+			fmt.Println(`{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"ok"}}`)
 			fmt.Println(`{"event":"result","result":{"status":"SUCCESS"},"usage":{"input_tokens":1,"output_tokens":1}}`)
 		case "codex", "ycode":
 			fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}`)
@@ -277,17 +287,17 @@ func TestMeasuredWarmArgv(t *testing.T) {
 	}{
 		{
 			name: "claude",
-			w:    &Worker{mode: WarmStdinStreamJSON, launch: agentlaunch.Launch{Tool: "claude", Args: []string{"--model", "M", "-p"}}, tool: fleet.Tool{Name: "claude", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--output-format stream-json --verbose"}}}},
+			w:    &Worker{mode: WarmStdinStreamJSON, launch: agentlaunch.Launch{Tool: "claude", Args: []string{"--model", "M", "-p"}}, tool: fleet.Tool{Name: "claude", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "claude")}}},
 			want: []string{"claude", "-p", "--model", "M", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--system-prompt", neutralSystemPrompt, "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--setting-sources", ""},
 		},
 		{
 			name: "agy",
-			w:    &Worker{mode: WarmStdinStreamJSON, launch: agentlaunch.Launch{Tool: "agy", Args: []string{"--print-timeout", "40m", "--model", "M", "-p"}}, tool: fleet.Tool{Name: "agy", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--output-format stream-json"}}}},
+			w:    &Worker{mode: WarmStdinStreamJSON, launch: agentlaunch.Launch{Tool: "agy", Args: []string{"--print-timeout", "40m", "--model", "M", "-p"}}, tool: fleet.Tool{Name: "agy", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "agy")}}},
 			want: []string{"agy", "--model", "M", "--new-project", "--add-dir", "", "--log-file", os.DevNull, "--input-format", "stream-json", "--output-format", "stream-json", "-p="},
 		},
 		{
 			name: "codex",
-			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}},
+			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "codex")}}},
 			// the bare model: codex's own tools off (Sprint 290 W1), every one
 			// of them (Sprint 317): a tool call is another sampling request,
 			// and turn.completed sums them all.
@@ -298,7 +308,7 @@ func TestMeasuredWarmArgv(t *testing.T) {
 		},
 		{
 			name: "codex with a catalog",
-			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, codexCatalog: "/tmp/cligw-test/models.json", launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{EventsStdout: "--json"}}}},
+			w:    &Worker{cwd: "/tmp/cligw-test", mode: WarmStdin, codexCatalog: "/tmp/cligw-test/models.json", launch: agentlaunch.Launch{Tool: "codex", Args: []string{"exec", "--sandbox", "read-only"}}, tool: fleet.Tool{Name: "codex", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "codex")}}},
 			want: append([]string{"codex", "exec", "-c", `model_catalog_json="/tmp/cligw-test/models.json"`, "-c", `model_instructions_file="/tmp/cligw-test/instructions.md"`,
 				"--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
 				"-c", `web_search="disabled"`}, append(append(codexNoTrackConfig(), codexToolsOffConfig()...),
@@ -400,16 +410,25 @@ func installFakeCatalogEffort(t *testing.T, toolName string, warm WarmMode, mode
 		EventsDone:   fleet.EventsDone{Field: "type", Values: []string{"result", "turn.completed"}},
 	}
 	if toolName == "claude" {
-		launch.StdinFormat = "claude-user"
+		seed := seededGatewayLaunch(t, toolName)
+		launch.GatewayArgs, launch.EffortArgs, launch.NativeSystemPrompt, launch.Decoder = seed.GatewayArgs, seed.EffortArgs, seed.NativeSystemPrompt, seed.Decoder
+		launch.StdinFormat = "claude-stream-json"
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "is_error", OK: []string{"false"}}
 	} else if toolName == "muse" || strings.HasPrefix(mode, "muse-") {
+		launch.GatewayArgs = seededGatewayLaunch(t, "muse").GatewayArgs
 		// As the baseline muse.yaml declares them (Muse Code 1.3.0).
 		launch.EventsDone = fleet.EventsDone{Field: "payload_type", Values: []string{"run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled"}}
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "payload.terminal", OK: []string{"completed"}}
 	} else if toolName == "agy" {
-		launch.StdinFormat = "agy-user"
+		seed := seededGatewayLaunch(t, toolName)
+		launch.GatewayArgs, launch.Decoder = seed.GatewayArgs, seed.Decoder
+		launch.StdinFormat = "agy-steps"
 		launch.EventsDone = fleet.EventsDone{Field: "event", Values: []string{"result"}}
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "result.status", OK: []string{"SUCCESS"}}
+	}
+	if toolName == "codex" {
+		seed := seededGatewayLaunch(t, toolName)
+		launch.GatewayArgs, launch.EffortArgs, launch.NativeSystemPrompt, launch.InstructionsFile, launch.Decoder = seed.GatewayArgs, seed.EffortArgs, seed.NativeSystemPrompt, seed.InstructionsFile, seed.Decoder
 	}
 	modelName := ""
 	if strings.HasPrefix(mode, "quota-") {
