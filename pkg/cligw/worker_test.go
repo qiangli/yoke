@@ -400,12 +400,14 @@ func installFakeCatalogEffort(t *testing.T, toolName string, warm WarmMode, mode
 		EventsDone:   fleet.EventsDone{Field: "type", Values: []string{"result", "turn.completed"}},
 	}
 	if toolName == "claude" {
+		launch.StdinFormat = "claude-user"
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "is_error", OK: []string{"false"}}
 	} else if toolName == "muse" || strings.HasPrefix(mode, "muse-") {
 		// As the baseline muse.yaml declares them (Muse Code 1.3.0).
 		launch.EventsDone = fleet.EventsDone{Field: "payload_type", Values: []string{"run.terminal.completed", "run.terminal.failed", "run.terminal.cancelled"}}
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "payload.terminal", OK: []string{"completed"}}
 	} else if toolName == "agy" {
+		launch.StdinFormat = "agy-user"
 		launch.EventsDone = fleet.EventsDone{Field: "event", Values: []string{"result"}}
 		launch.EventsOutcome = fleet.EventsOutcome{Path: "result.status", OK: []string{"SUCCESS"}}
 	}

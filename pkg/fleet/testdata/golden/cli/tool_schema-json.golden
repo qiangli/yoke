@@ -155,6 +155,26 @@
     "description": "map value"
   },
   {
+    "path": "cli.launch.decoder",
+    "type": "object",
+    "description": "stdout event text selection"
+  },
+  {
+    "path": "cli.launch.decoder.final_path",
+    "type": "string",
+    "description": "dotted path to terminal answer snapshot"
+  },
+  {
+    "path": "cli.launch.decoder.kind",
+    "type": "string",
+    "description": "event envelope kind and text filter"
+  },
+  {
+    "path": "cli.launch.decoder.text_path",
+    "type": "string",
+    "description": "dotted path to answer text"
+  },
+  {
     "path": "cli.launch.env",
     "type": "[]string",
     "description": "KEY=VALUE pairs set on every launch ({model}, {base_url}, {base_url_origin}, {base_url_path}, {state_dir})"
@@ -293,6 +313,11 @@
     "path": "cli.launch.setup",
     "type": "string",
     "description": "shell snippet run before every launch ({model}, {base_url}, ... shell-quoted)"
+  },
+  {
+    "path": "cli.launch.stdin_format",
+    "type": "string",
+    "description": "stdin JSON user message shape"
   },
   {
     "path": "cli.launch.steer_exec",

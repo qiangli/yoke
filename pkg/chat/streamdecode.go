@@ -12,6 +12,8 @@ import (
 // shapes (eventText/terminalText) but cannot be imported here — it drags the whole
 // LLM gateway in — so the field names below mirror it. Update both together.
 //
+// TODO(S584): Coach receives raw lines without a fleet Tool record. Pass the
+// selected decoder through Coach before moving this fingerprint selection to YAML.
 // Recognition is fingerprint-bound and fail-closed in the same way meet's
 // normalizer is: a foreign JSON answer that merely resembles an envelope is
 // StreamPlain, never eaten.

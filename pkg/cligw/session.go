@@ -241,7 +241,7 @@ func (s *StickySession) Turn(ctx context.Context, input CompletionPrompt, onEven
 				scanErr = line.err
 				continue
 			}
-			ev, parsed := parseEvent(line.data, s.tool.CLI.Launch.EventsDone)
+			ev, parsed := parseEvent(line.data, s.tool.CLI.Launch.EventsDone, s.tool.CLI.Launch.Decoder)
 			if !parsed {
 				if str := strings.TrimSpace(string(line.data)); str != "" {
 					ev = Event{Type: "output", Raw: append(json.RawMessage(nil), line.data...)}
@@ -266,7 +266,7 @@ func (s *StickySession) Turn(ctx context.Context, input CompletionPrompt, onEven
 			if ev.Done {
 				sawTerminal = true
 				if text.Len() == 0 {
-					if final := terminalText(ev.Raw); final != "" {
+					if final := terminalText(ev.Raw, s.tool.CLI.Launch.Decoder); final != "" {
 						text.WriteString(final)
 						ev.Text = final
 					}
@@ -417,18 +417,7 @@ func (s *StickySession) nativeSystemPrompt() bool {
 }
 
 func (s *StickySession) promptBody(prompt string) ([]byte, error) {
-	switch s.tool.Name {
-	case "claude":
-		v := map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": prompt}}
-		body, err := json.Marshal(v)
-		return append(body, '\n'), err
-	case "agy":
-		v := map[string]any{"event": "user", "message": map[string]any{"content": prompt}}
-		body, err := json.Marshal(v)
-		return append(body, '\n'), err
-	default:
-		return nil, fmt.Errorf("cligw: tool %q declares stdin-stream-json without a measured message shape", s.tool.Name)
-	}
+	return stdinMessage(s.tool.CLI.Launch.StdinFormat, prompt)
 }
 
 func (s *StickySession) argv(prompt, requestSystem string) []string {
