@@ -992,16 +992,51 @@ local filesystem.`,
 func newWeaveResetCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var yes bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "reset",
-		Short: "Tear down every weave and remove all weave state for this project",
+		Short: "IRREVERSIBLY tear down EVERY weave for this project and delete all weave state",
+		Long: `reset is a WHOLE-QUEUE, IRREVERSIBLE operation. It stops every
+recorded wrapper, removes every workspace clone, deletes every agent
+branch, retires every run's conversation, and then deletes the project's
+entire weave state directory (queue, logs, locks, agent data) — terminal
+history included. Nothing is recoverable afterwards.
+
+It takes NO run number. Every neighbouring verb (pull, abandon, say,
+start --run N) is per-run, which makes it easy to type ` + "`reset 3`" + ` meaning
+"restart run 3" and clear the umbrella queue instead. To act on ONE run:
+
+  weave abandon 3                  tear down just that run
+  weave start --resume --run 3     retry it, keeping its context
+
+reset REFUSES when any item — including terminal history — still holds
+commits its workspace branch has that the source checkout cannot reach
+from the base branch. Pass --force to proceed anyway; --yes only skips
+the confirm prompt and never overrides that refusal.`,
+		Args: weaveResetArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveReset(cmd, yes, &flags)
+			return runWeaveReset(cmd, yes, force, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirm prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "Proceed even when items hold unmerged commits (destroys that work)")
 	return cmd
+}
+
+// weaveResetArgs is cobra.NoArgs with the message the slip actually needs.
+//
+// reset declared no Args rule at all, so `weave reset 3 --yes` silently
+// discarded the "3" and wiped the whole queue — observed live, clearing an
+// umbrella queue (two older terminal items and their workspaces with it) for a
+// manager who meant to restart one failed run. cobra.NoArgs' own wording
+// ("unknown command \"3\" for ...") does not say what reset's blast radius is,
+// and does not name the per-run verbs that were meant, so it is replaced.
+func weaveResetArgs(cmd *cobra.Command, args []string) error {
+	if err := cobra.NoArgs(cmd, args); err != nil {
+		return fmt.Errorf("weave reset takes no run number: it clears the WHOLE queue for this project; for one run use 'weave abandon N' or 'weave start --resume --run N'")
+	}
+	return nil
 }
 
 func newWeaveWaitCmd() *cobra.Command {

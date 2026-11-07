@@ -6883,7 +6883,17 @@ func runWeaveShell(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error 
 // removes each worktree, deletes each branch, and clears the queue
 // file. Refuses without --yes unless stdin is a TTY and the user
 // confirms at the prompt.
-func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error {
+//
+// It also refuses outright — --yes or not — when any item still holds commits
+// the source checkout cannot reach from base, unless --force. reset is the
+// widest destructive verb in the tree (prune and abandon already measure held
+// work before deleting a workspace), and an agent branch lives ONLY inside its
+// workspace clone until `weave pull` fetches it: delete the workspace and those
+// commits are not "unmerged", they are gone. The measurement goes through
+// weaveUnmergedAhead — the same one behind `weave list`'s UNMERGED column,
+// pull's refusal, and prune's guard — and covers EVERY state including terminal
+// history, because the labels are the wrapper's and the branch is git's.
+func runWeaveReset(cmd *cobra.Command, yes, force bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -6892,6 +6902,12 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
+	if !force {
+		if held := weaveResetHeldWork(root, dir); len(held) > 0 {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
+				weavecli.ExitPrecondFail, weaveResetHeldWorkError(held)))
+		}
+	}
 	if err := weaveConfirmBatch(cmd, mode, "reset",
 		"weave reset: this removes every workspace + branch for this repo and clears the queue.", yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
@@ -6964,6 +6980,57 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "weave reset: tore down %d weaves; queue cleared\n", len(teardowns))
 	return nil
+}
+
+// weaveResetHeldItem is one run that reset would destroy work for.
+type weaveResetHeldItem struct {
+	Issue    int64  `json:"issue"`
+	Title    string `json:"title,omitempty"`
+	State    string `json:"state,omitempty"`
+	Unmerged int    `json:"unmerged_commits"`
+}
+
+// weaveResetHeldWork lists, in queue order, every item whose workspace branch
+// holds commits the source checkout cannot reach from base. It reads the queue
+// WITHOUT the lock and mutates nothing — it runs before the confirm prompt so a
+// refusal never asks the operator a question it is going to ignore the answer
+// to.
+func weaveResetHeldWork(root, dir string) []weaveResetHeldItem {
+	q, err := loadWeaveQueue(dir)
+	if err != nil || q == nil {
+		return nil
+	}
+	base := weaveBaseBranch(root)
+	var held []weaveResetHeldItem
+	for _, it := range q.Items {
+		// No state gate on purpose: a run recorded `no-op` or `done` whose branch
+		// still carries commits is exactly the case that cost two terminal items.
+		if ahead, _ := weaveUnmergedAhead(root, base, it); ahead > 0 {
+			held = append(held, weaveResetHeldItem{Issue: it.ID, Title: it.Title, State: it.State, Unmerged: ahead})
+		}
+	}
+	return held
+}
+
+// weaveResetHeldWorkError renders the refusal: every held run named with its
+// count, then the verbs that recover the work and the flag that overrides.
+func weaveResetHeldWorkError(held []weaveResetHeldItem) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "refusing to reset: %d run(s) still hold commits that are not merged into the base branch, and reset would destroy them:", len(held))
+	for _, h := range held {
+		title := h.Title
+		if strings.TrimSpace(title) == "" {
+			title = "(no title)"
+		}
+		fmt.Fprintf(&b, "\n  #%d %s (%d unmerged commit%s", h.Issue, title, h.Unmerged,
+			map[bool]string{true: "", false: "s"}[h.Unmerged == 1])
+		if h.State != "" {
+			fmt.Fprintf(&b, ", state %s", h.State)
+		}
+		b.WriteString(")")
+	}
+	b.WriteString("\nRecover the work first (`weave pull N`, or `weave salvage N` for a non-pullable run), or pass --force to destroy it anyway. --yes only skips the confirm prompt.")
+	return errors.New(b.String())
 }
 
 // runWeaveOpen surfaces an issue's workspace worktree as a file:// URL so

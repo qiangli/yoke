@@ -444,6 +444,12 @@ bashy weave reset
 # Confirm: remove 3 leases, 3 branches, 0 workspaces (all reaped), preserve labels and issues? [y/N]
 ```
 
+`reset` takes NO run number and is irreversible — it clears the WHOLE queue,
+terminal history included. For one run use `weave abandon N` or `weave start
+--resume --run N`. It refuses while any item still holds commits the source
+checkout cannot reach from base; recover them (`weave pull N` / `weave salvage
+N`) or pass `--force` to destroy them. `--yes` only skips the prompt.
+
 ## Common situations cheat sheet
 
 ### A merge is running and you need the board
