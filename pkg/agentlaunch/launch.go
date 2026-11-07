@@ -641,6 +641,36 @@ var UnsafeLaunchFlags = map[string]string{
 	"--danger-skip-permissions": "disables the agent's approval gate",
 }
 
+// UnsafeLaunchValues are flags that are unsafe only with a particular VALUE,
+// given either as two tokens (`--mode yolo`) or one (`--mode=yolo`). A single-
+// token table cannot see them: zcode's `--mode yolo` passed the guard and
+// ReadOnly untouched because neither token alone is a kill-switch.
+var UnsafeLaunchValues = map[string]map[string]string{
+	"--sandbox": {"danger-full-access": "disables the agent's sandbox"},
+	"--mode":    {"yolo": "disables the agent's approval gate"},
+}
+
+// unsafeAt reports whether args[i] begins an unsafe flag: its display spelling,
+// the reason, and how many tokens it spans (1 or 2).
+func unsafeAt(args []string, i int) (string, string, int, bool) {
+	a := args[i]
+	if why, ok := UnsafeLaunchFlags[a]; ok {
+		return a, why, 1, true
+	}
+	if flag, val, ok := strings.Cut(a, "="); ok {
+		if why, bad := UnsafeLaunchValues[flag][val]; bad {
+			return a, why, 1, true
+		}
+		return "", "", 0, false
+	}
+	if vals, ok := UnsafeLaunchValues[a]; ok && i+1 < len(args) {
+		if why, bad := vals[args[i+1]]; bad {
+			return a + " " + args[i+1], why, 2, true
+		}
+	}
+	return "", "", 0, false
+}
+
 func GuardUnsafeArgs(tool string, args []string) error {
 	return GuardUnsafeArgsFor(tool, args, Options{})
 }
@@ -651,12 +681,8 @@ func GuardUnsafeArgsFor(tool string, args []string, opt Options) error {
 	if ok, _ := UnsafeLaunchAllowedFor(opt); ok {
 		return nil
 	}
-	for i, a := range args {
-		why, bad := UnsafeLaunchFlags[a]
-		if !bad && a == "--sandbox" && i+1 < len(args) && args[i+1] == "danger-full-access" {
-			why, bad = "disables the agent's sandbox", true
-			a = "--sandbox danger-full-access"
-		}
+	for i := range args {
+		a, why, _, bad := unsafeAt(args, i)
 		if !bad {
 			continue
 		}
@@ -741,11 +767,8 @@ func applyWritableRoots(tool string, args, roots []string) []string {
 func StripKillSwitches(tool string, args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
-		if _, unsafe := UnsafeLaunchFlags[args[i]]; unsafe {
-			continue
-		}
-		if args[i] == "--sandbox" && i+1 < len(args) && args[i+1] == "danger-full-access" {
-			i++ // drop the value too; the tool falls back to its default sandbox
+		if _, _, span, unsafe := unsafeAt(args, i); unsafe {
+			i += span - 1 // drop a value too; the tool falls back to its default
 			continue
 		}
 		out = append(out, args[i])
@@ -756,8 +779,11 @@ func StripKillSwitches(tool string, args []string) []string {
 func ReadOnlyArgs(tool string, args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
-		if _, unsafe := UnsafeLaunchFlags[args[i]]; unsafe {
-			continue
+		if args[i] != "--sandbox" {
+			if _, _, span, unsafe := unsafeAt(args, i); unsafe {
+				i += span - 1
+				continue
+			}
 		}
 		if args[i] == "--sandbox" && i+1 < len(args) {
 			out = append(out, "--sandbox", "read-only")
@@ -1057,6 +1083,7 @@ var canonicalUnsafeFlag = map[string]string{
 	"agy":      "--dangerously-skip-permissions",
 	"opencode": "--auto",
 	"aider":    "--yes-always",
+	"muse":     "--yolo",
 }
 
 // normalizeUnsafeFlags makes a fleet template's dangerous-permission request
@@ -1067,9 +1094,12 @@ func normalizeUnsafeFlags(tool string, args []string) []string {
 	canonical := canonicalUnsafeFlag[tool]
 	seen := make(map[string]bool)
 	out := make([]string, 0, len(args))
-	for _, arg := range args {
-		if _, unsafe := UnsafeLaunchFlags[arg]; !unsafe {
-			out = append(out, arg)
+	for i := 0; i < len(args); i++ {
+		arg, _, span, unsafe := unsafeAt(args, i)
+		if !unsafe || span != 1 || arg != args[i] || strings.Contains(arg, "=") {
+			// Value-qualified flags (`--mode yolo`, `--sandbox ...`) are a tool's
+			// own spelling, not an interchangeable kill-switch: keep them as is.
+			out = append(out, args[i])
 			continue
 		}
 		if canonical != "" && arg != canonical {
