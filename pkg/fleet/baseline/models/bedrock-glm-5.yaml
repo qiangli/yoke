@@ -1,0 +1,38 @@
+name: bedrock-glm-5
+display: GLM-5 (AWS Bedrock, opt-in)
+band: 3
+band_source: seeded
+band_season: 1
+# S584 B1: AWS Bedrock as an OPT-IN provider route, data only, for the two
+# harnesses that reach Bedrock's OpenAI-compatible surface directly: opencode
+# (its own amazon-bedrock provider) and zcode (a personal provider config
+# written from {base_url}/{model}). Neither tool's native default is touched.
+#
+# The peg is a conservative prior between the recorded GLM neighbors — glm-5.2
+# (L2, does not converge) and glm-5.3 (L4) — because AWS serves "zai.glm-5"
+# without a point-release stamp and no gated run on this host has gone through
+# Bedrock. Re-peg from evidence when one does.
+#
+# No family (the door-model rule): a Bedrock-served GLM must not capture the
+# `glm` floating alias, which belongs to the native line.
+provider: aws-bedrock
+kind: api          # AUTH: a Bedrock bearer key (api_key_ref aws-bedrock)
+api_key_ref: aws-bedrock
+# Bedrock's OpenAI-compatible surface in us-east-1 (the story's pinned region).
+base_url: https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+# Conservative: z.ai's own endpoint serves GLM 5.x with 1M tokens
+# (models/glm-5.3.yaml), but the window the Bedrock route serves is
+# undeclared here; 200K is the declared-not-verified floor until measured.
+context_length: 200000
+model: zai.glm-5
+# THE ID IS A PROPERTY OF THE TOOL: opencode takes its own
+# provider-prefixed spelling, zcode the bare Bedrock id (its setup writes
+# provider_config.json from {base_url}/{model} and needs the bare form).
+ids:
+  opencode: amazon-bedrock/zai.glm-5
+  zcode: zai.glm-5
+# No cost_micro: the native glm-5.3 row prices the CODING PLAN seat (flat at
+# the margin), and inheriting it onto this metered route would understate the
+# spend. Metered Bedrock pricing is recorded when the binding is verified
+# live; until then no price is better than a wrong one.
+quality: 0.85

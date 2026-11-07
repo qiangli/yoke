@@ -1,0 +1,13 @@
+agents:
+  - name: claude-bedrock-opus4.8
+    tool: claude
+    model: bedrock-opus4.8
+    display: "claude · bedrock-opus4.8"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        OPT-IN Bedrock route (S584 B1), data only, not verified live. Claude
+        Code takes the route through the model's env (CLAUDE_CODE_USE_BEDROCK,
+        AWS_REGION) plus the AWS_BEARER_TOKEN_BEDROCK credential projection;
+        the id is the us.anthropic.claude-opus-4-8 inference profile. The
+        native claude agents are untouched by this binding.

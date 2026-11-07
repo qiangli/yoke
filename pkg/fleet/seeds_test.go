@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/assetring"
@@ -19,8 +20,8 @@ func TestEmbeddedSeedsResolve(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("seed models parse: %v", errs)
 	}
-	if len(models) < 45 {
-		t.Fatalf("seed models = %d, want >= 45", len(models))
+	if len(models) < 48 {
+		t.Fatalf("seed models = %d, want >= 48", len(models))
 	}
 	for _, m := range models {
 		if m.Ring != assetring.RingEmbedded {
@@ -35,8 +36,8 @@ func TestEmbeddedSeedsResolve(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("seed agents parse: %v", errs)
 	}
-	if len(agents) < 62 {
-		t.Fatalf("seed agents = %d, want >= 62", len(agents))
+	if len(agents) < 66 {
+		t.Fatalf("seed agents = %d, want >= 66", len(agents))
 	}
 	for _, a := range agents {
 		if _, _, _, err := c.Binding(a.Name); err != nil {
@@ -148,6 +149,99 @@ func TestEmbeddedSeedsCurrentRoster(t *testing.T) {
 			if got := m.TargetFor(tool.Name); got != tc.target {
 				t.Errorf("agent %q: %s is handed %q, want %q", tc.agent, tool.Name, got, tc.target)
 			}
+		}
+	}
+}
+
+// S584 B1: AWS Bedrock as an OPT-IN provider, data only. The seeds carry the
+// route's provider/key/endpoint spelling and the per-tool model ids; native
+// subscription models and agents are untouched by them (the native-launch
+// byte-identity is pinned in pkg/agentlaunch). A bedrock model is a ROUTE,
+// not a family member — none may capture a floating family alias.
+func TestEmbeddedSeedsBedrockProvider(t *testing.T) {
+	c := New(WithRoot(t.TempDir()), WithoutCloudOverlay())
+
+	const bedrockURL = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"
+	for name, wantIDs := range map[string]map[string]string{
+		"bedrock-opus4.8":  {"claude": "us.anthropic.claude-opus-4-8"},
+		"bedrock-gpt6-sol": {"codex": "openai.gpt-6-sol"},
+		"bedrock-glm-5":    {"opencode": "amazon-bedrock/zai.glm-5", "zcode": "zai.glm-5"},
+	} {
+		m, ok := c.Model(name)
+		if !ok {
+			t.Errorf("bedrock model %q is not seeded", name)
+			continue
+		}
+		if m.Provider != "aws-bedrock" || m.Kind != ModelKindAPI || m.APIKeyRef != "aws-bedrock" {
+			t.Errorf("model %q = provider %q kind %q api_key_ref %q, want aws-bedrock/api/aws-bedrock",
+				name, m.Provider, m.Kind, m.APIKeyRef)
+		}
+		if m.BaseURL != bedrockURL {
+			t.Errorf("model %q base_url = %q, want %q", name, m.BaseURL, bedrockURL)
+		}
+		if m.Family != "" {
+			t.Errorf("model %q family = %q — a provider route must not capture a floating family alias", name, m.Family)
+		}
+		if m.Plan != "" {
+			t.Errorf("model %q is metered but names plan %q", name, m.Plan)
+		}
+		for tool, id := range wantIDs {
+			if got := m.TargetFor(tool); got != id {
+				t.Errorf("model %q: %s is handed %q, want %q", name, tool, got, id)
+			}
+		}
+	}
+
+	// The claude route's two env switches live on the model, so they ride the
+	// binding and never the tool: a native claude launch never sees them.
+	if m, _ := c.Model("bedrock-opus4.8"); !slices.Equal(m.Env, []string{"CLAUDE_CODE_USE_BEDROCK=1", "AWS_REGION=us-east-1"}) {
+		t.Errorf("bedrock-opus4.8 env = %q, want the Claude Code Bedrock switches", m.Env)
+	}
+	for _, name := range []string{"bedrock-gpt6-sol", "bedrock-glm-5"} {
+		if m, _ := c.Model(name); len(m.Env) != 0 {
+			t.Errorf("model %q env = %q, want none", name, m.Env)
+		}
+	}
+
+	// Every bedrock agent resolves against the embedded ring alone.
+	for _, name := range []string{
+		"claude-bedrock-opus4.8", "codex-bedrock-gpt6-sol",
+		"opencode-bedrock-glm-5", "zcode-bedrock-glm-5",
+	} {
+		if _, _, _, err := c.Binding(name); err != nil {
+			t.Errorf("bedrock agent %q does not resolve: %v", name, err)
+		}
+	}
+
+	// The bearer projection is spelled per tool: claude/codex/opencode take
+	// AWS_BEARER_TOKEN_BEDROCK; zcode projects through its ZCODE_API_KEY
+	// key_env; muse serves only Meta's endpoint and declares no bedrock name.
+	for tool, target := range map[string]string{
+		"claude":   "AWS_BEARER_TOKEN_BEDROCK",
+		"codex":    "AWS_BEARER_TOKEN_BEDROCK",
+		"opencode": "AWS_BEARER_TOKEN_BEDROCK",
+	} {
+		tl, ok := c.Tool(tool)
+		if !ok {
+			t.Fatalf("tool %q missing", tool)
+		}
+		if got := tl.CLI.Launch.CredentialEnv["aws-bedrock"]; got != target {
+			t.Errorf("tool %q credential_env[aws-bedrock] = %q, want %q", tool, got, target)
+		}
+	}
+	zcode, ok := c.Tool("zcode")
+	if !ok {
+		t.Fatal("tool zcode missing")
+	}
+	if _, declared := zcode.CLI.Launch.CredentialEnv["aws-bedrock"]; declared {
+		t.Error("zcode must keep projecting through key_env ZCODE_API_KEY, not credential_env")
+	}
+	if !slices.Contains(zcode.CLI.Launch.KeyEnv, "ZCODE_API_KEY") {
+		t.Error("zcode key_env lost ZCODE_API_KEY")
+	}
+	if muse, ok := c.Tool("muse"); ok {
+		if _, declared := muse.CLI.Launch.CredentialEnv["aws-bedrock"]; declared {
+			t.Error("muse serves only Meta's endpoint and must declare no bedrock credential")
 		}
 	}
 }
