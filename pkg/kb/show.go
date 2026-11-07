@@ -332,6 +332,15 @@ func runShowSlug(c *cobra.Command, slug, dir, ring, form string, jsonOut bool) e
 	}
 	store := openRing(dir, ring)
 	p, err := store.LoadByHandle(slug)
+	readOnly := false
+	if err != nil {
+		// Not in the writable ring: fall back to the read-only default pages.
+		if d := OpenDefaults(); d != nil {
+			if dp, derr := d.LoadByHandle(slug); derr == nil {
+				store, p, err, readOnly = d, dp, nil, true
+			}
+		}
+	}
 	if err != nil {
 		return showFailure(c, jsonOut, showResult{
 			Outcome: OutcomeNotFound, Ref: slug, Kind: "kb", ID: slug,
@@ -352,8 +361,11 @@ func runShowSlug(c *cobra.Command, slug, dir, ring, form string, jsonOut bool) e
 		})
 	}
 	// An OPEN is the use signal — the reader's judgement, not the
-	// ranker's own output. See pkg/kb/activation.go.
-	store.RecordOpen(p.Slug)
+	// ranker's own output. See pkg/kb/activation.go. Default pages are
+	// read-only, so nothing is recorded for them.
+	if !readOnly {
+		store.RecordOpen(p.Slug)
+	}
 	life := pageLifecycle(c, store, p)
 	prop := pageProposal(c, store, p)
 	if jsonOut {

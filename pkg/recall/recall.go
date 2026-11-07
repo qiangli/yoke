@@ -53,12 +53,15 @@ const (
 	RingAgent      = "agent"      // owner-only <agent-data>/kb pages
 	RingRepo       = "repo"       // the current repository's committed docs/kb pages
 	RingHost       = "host"       // ~/.bashy/kb pages
+	RingDefaults   = "defaults"   // read-only default pages from the bashy release source pin
 	RingCapability = "capability" // craft folds — what generally holds at a coordinate
 )
 
 // Rings returns the rings this build can read, in presentation precedence.
 // Readers rank only inside their own ring; this order never fuses their scores.
-func Rings() []string { return []string{RingAgent, RingRepo, RingHost, RingCapability} }
+func Rings() []string {
+	return []string{RingAgent, RingRepo, RingHost, RingDefaults, RingCapability}
+}
 
 // Query is a recall request. The zero value is usable except for Text.
 type Query struct {
@@ -293,6 +296,61 @@ func (HostRing) Forms() []string { return []string{kb.FormNote, kb.FormPage} }
 
 func (r HostRing) Recall(q Query) ([]Hit, error) {
 	return recallPages(RingHost, r.Store, r.Path, q)
+}
+
+// DefaultsRing reads the read-only default pages shipped in the bashy source
+// tree (kb.DefaultsDir, fetched by `bashy src fetch bashy`). A slug that a
+// writable ring already has is Shadowed: the local page wins, so the default
+// copy is never returned beside it.
+type DefaultsRing struct {
+	Store    *kb.Store
+	Path     string
+	Shadowed map[string]bool
+}
+
+func (DefaultsRing) Ring() string    { return RingDefaults }
+func (DefaultsRing) Forms() []string { return []string{kb.FormNote, kb.FormPage} }
+
+func (r DefaultsRing) Recall(q Query) ([]Hit, error) {
+	hits, err := recallPages(RingDefaults, r.Store, r.Path, q)
+	if err != nil {
+		return nil, err
+	}
+	return dropShadowed(hits, r.Shadowed), nil
+}
+
+func dropShadowed(hits []Hit, shadowed map[string]bool) []Hit {
+	if len(shadowed) == 0 {
+		return hits
+	}
+	out := hits[:0]
+	for _, h := range hits {
+		if !shadowed[strings.TrimPrefix(h.ID, "kb:")] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// defaultsReader opens the defaults ring when its store exists, shadowing
+// every slug the given writable stores hold; ok is false when there is none.
+func defaultsReader(writable ...*kb.Store) (DefaultsRing, bool) {
+	store := kb.OpenDefaults()
+	if store == nil {
+		return DefaultsRing{}, false
+	}
+	shadowed := map[string]bool{}
+	for _, w := range writable {
+		if w == nil {
+			continue
+		}
+		if pages, err := w.List(); err == nil {
+			for _, p := range pages {
+				shadowed[p.Slug] = true
+			}
+		}
+	}
+	return DefaultsRing{Store: store, Path: kb.DefaultsDir(), Shadowed: shadowed}, true
 }
 
 // CapabilityRing reads craft FOLDS — generalisable knowledge keyed on a

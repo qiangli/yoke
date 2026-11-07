@@ -58,7 +58,7 @@ func expandMemory(memory string) (memoryFacets, error) {
 		return memoryFacets{foreignRefs: true}, nil
 	case MemorySemantic:
 		return memoryFacets{
-			rings: []string{RingAgent, RingRepo, RingHost},
+			rings: []string{RingAgent, RingRepo, RingHost, RingDefaults},
 			forms: []string{kb.FormPage, kb.FormNote, kb.FormRelation},
 			types: []string{kb.TypeFact, kb.TypeDecision},
 		}, nil
@@ -67,13 +67,13 @@ func expandMemory(memory string) (memoryFacets, error) {
 		// (facts are never exported). Folds carry no OKF page type, so the
 		// type filter below applies to kb pages only.
 		return memoryFacets{
-			rings: []string{RingAgent, RingRepo, RingHost, RingCapability},
+			rings: []string{RingAgent, RingRepo, RingHost, RingDefaults, RingCapability},
 			forms: []string{kb.FormPage, kb.FormNote},
 			types: []string{kb.TypeRunbook},
 		}, nil
 	case MemoryReflective:
 		return memoryFacets{
-			rings: []string{RingAgent, RingRepo, RingHost},
+			rings: []string{RingAgent, RingRepo, RingHost, RingDefaults},
 			forms: []string{kb.FormPage, kb.FormNote},
 			types: []string{kb.TypeLesson, kb.TypeGotcha},
 		}, nil

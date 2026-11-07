@@ -15,6 +15,10 @@ import (
 type Page struct {
 	Slug string `yaml:"-"` // filename stem under pages/
 
+	// Default marks a read-only page from the default store (defaults.go):
+	// never written back, never persisted.
+	Default bool `yaml:"-" json:"default,omitempty"`
+
 	// ID and Seq are the page's other two handles beside the slug (ref.Shape):
 	// ID is a UUIDv7 — the identity, universal across hosts and rings — and Seq
 	// the running number unique within THIS ring, the one a human types

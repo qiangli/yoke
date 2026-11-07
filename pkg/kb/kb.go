@@ -217,6 +217,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			if err != nil {
 				return err
 			}
+			pages = WithDefaults(pages)
 			pages = filterType(filterForm(pages, form), typ)
 			// A forgotten page is hidden from search, --all included.
 			tombs, err := store.Tombstones()
@@ -834,6 +835,7 @@ func newListCmd(dir, ring *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			pages = WithDefaults(pages)
 			pages = filterType(filterForm(pages, form), typ)
 			if jsonOut {
 				// list has no query, so there is nothing to explain (no why).

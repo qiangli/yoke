@@ -66,10 +66,15 @@ func ContextReaders() []Reader { return openContextRings() }
 func ContextPageReaders(repoRoot string) []Reader {
 	repoDir := filepath.Join(repoRoot, kb.RepoSub)
 	hostDir := kb.DefaultDir()
-	return []Reader{
-		RepoRing{Store: kb.Open(repoDir), Path: repoDir},
-		HostRing{Store: kb.Open(hostDir), Path: hostDir},
+	repoStore, hostStore := kb.Open(repoDir), kb.Open(hostDir)
+	readers := []Reader{
+		RepoRing{Store: repoStore, Path: repoDir},
+		HostRing{Store: hostStore, Path: hostDir},
 	}
+	if d, ok := defaultsReader(repoStore, hostStore); ok {
+		readers = append(readers, d)
+	}
+	return readers
 }
 
 // RenderContext renders the blocks selected by Context. Keeping this beside the

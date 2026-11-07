@@ -280,3 +280,44 @@ func foldsWith(t *testing.T, dir string, folds ...craft.Fold) *craft.FoldStore {
 	}
 	return s
 }
+
+// The defaults ring returns default pages but never one whose slug a
+// writable ring already has.
+func TestDefaultsRingShadowsLocalSlugs(t *testing.T) {
+	defDir := t.TempDir()
+	t.Setenv(kb.DefaultsDirEnv, defDir)
+	defs := kb.OpenRepo(defDir)
+	for _, slug := range []string{"outpost-setup", "podman-machine"} {
+		if err := defs.Write(&kb.Page{Slug: slug, Form: kb.FormPage, Type: kb.TypeRunbook, Status: kb.StatusValidated,
+			Title: "outpost " + slug, Description: "outpost runbook " + slug, Body: "outpost"}, "add"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := kb.Open(t.TempDir())
+	if err := host.Write(&kb.Page{Slug: "outpost-setup", Form: kb.FormPage, Type: kb.TypeRunbook,
+		Title: "local outpost", Description: "local", Body: "outpost"}, "add"); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := defaultsReader(host)
+	if !ok {
+		t.Fatal("defaults reader not opened")
+	}
+	hits, err := r.Recall(Query{Text: "outpost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, h := range hits {
+		ids = append(ids, h.ID)
+		if h.Ring != RingDefaults {
+			t.Errorf("hit %s ring = %q, want %q", h.ID, h.Ring, RingDefaults)
+		}
+	}
+	if len(ids) != 1 || ids[0] != "kb:podman-machine" {
+		t.Fatalf("defaults ring hits = %v, want only kb:podman-machine", ids)
+	}
+	t.Setenv(kb.DefaultsDirEnv, t.TempDir()+"/absent")
+	if _, ok := defaultsReader(host); ok {
+		t.Fatal("absent defaults store must not open a ring")
+	}
+}

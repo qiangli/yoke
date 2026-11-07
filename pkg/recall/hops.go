@@ -339,6 +339,11 @@ func (r HostRing) VisibleNodes(q Query) ([]Hit, []LabeledEdge, error) {
 	return pageGraphNodes(RingHost, r.Store, r.Path, q)
 }
 
+func (r DefaultsRing) VisibleNodes(q Query) ([]Hit, []LabeledEdge, error) {
+	nodes, edges, err := pageGraphNodes(RingDefaults, r.Store, r.Path, q)
+	return dropShadowed(nodes, r.Shadowed), edges, err
+}
+
 func (r AgentRing) VisibleNodes(q Query) ([]Hit, []LabeledEdge, error) {
 	return pageGraphNodes(RingAgent, r.Store, r.Path, q)
 }

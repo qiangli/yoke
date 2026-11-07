@@ -360,15 +360,19 @@ func openContextRings() []Reader {
 		agentDir = agentScope.Dir()
 	}
 	skillsDir := skills.DefaultStoreDir()
-	return []Reader{
-		AgentRing{Store: kb.OpenAgentRing(agentDir, kb.ToolID()), Path: agentDir, Required: true},
+	agentStore, repoStore, hostStore := kb.OpenAgentRing(agentDir, kb.ToolID()), kb.Open(repoDir), kb.Open(hostDir)
+	readers := []Reader{
+		AgentRing{Store: agentStore, Path: agentDir, Required: true},
 		RelationRing{RingName: RingAgent, Path: agentDir, Owner: kb.ToolID()},
-		RepoRing{Store: kb.Open(repoDir), Path: repoDir},
+		RepoRing{Store: repoStore, Path: repoDir},
 		RelationRing{RingName: RingRepo, Path: repoDir},
-		HostRing{Store: kb.Open(hostDir), Path: hostDir},
+		HostRing{Store: hostStore, Path: hostDir},
 		RelationRing{RingName: RingHost, Path: hostDir},
-		CapabilityRing{Folds: craft.OpenFolds(skillsDir, redact.New()), Path: skillsDir},
 	}
+	if d, ok := defaultsReader(agentStore, repoStore, hostStore); ok {
+		readers = append(readers, d)
+	}
+	return append(readers, CapabilityRing{Folds: craft.OpenFolds(skillsDir, redact.New()), Path: skillsDir})
 }
 
 func validateContextSelection(rings, forms []string, readers []Reader) error {

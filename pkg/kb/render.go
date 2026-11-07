@@ -77,8 +77,12 @@ func (rd Renderer) Page(p *Page) string {
 	case ResCue:
 		fmt.Fprintf(&b, "%s%s%s%s\n", rd.Bullet, rd.addr(p), sep, p.Title)
 	default:
+		status := p.Status
+		if p.Default {
+			status = "default " + status
+		}
 		fmt.Fprintf(&b, "%s%s%s[%s/%s] %s — %s\n",
-			rd.Bullet, rd.addr(p), sep, p.Status, p.Type, p.Title, p.Description)
+			rd.Bullet, rd.addr(p), sep, status, p.Type, p.Title, p.Description)
 		if rd.Resolution == ResFull {
 			if body := strings.TrimSpace(p.Body); body != "" {
 				cap := rd.BodyCap
