@@ -1,0 +1,44 @@
+name: bedrock-opus4.8
+display: Claude Opus 4.8 (AWS Bedrock, opt-in)
+band: 3
+band_source: seeded
+band_season: 1
+# S584 B1: AWS Bedrock as an OPT-IN provider route, data only. This is NOT the
+# native claude path — claude's supported default stays the Anthropic
+# subscription login (claude-opus5.5 and friends), which these seeds never
+# touch. An operator who deliberately binds claude to this model gets the
+# Bedrock route; nothing routes here by default.
+#
+# The peg is carried from the Anthropic-served opus4.8 prior
+# (models/opus4.8.yaml): the route changes the endpoint, not the weights. No
+# gated run on this host has gone through Bedrock; re-peg from evidence when
+# one does.
+#
+# No family: a provider ROUTE is not a family member (the door-model rule,
+# models/door-agy-gemini3.8-flash.yaml) — a Bedrock-served Opus must not
+# capture the floating `opus` alias, which belongs to the native line.
+provider: aws-bedrock
+kind: api          # AUTH: a Bedrock bearer key (api_key_ref aws-bedrock)
+api_key_ref: aws-bedrock
+# Bedrock's OpenAI-compatible surface in us-east-1 (the story's pinned region;
+# an operator overlays a cross-region profile by rewriting this URL).
+base_url: https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+# Claude 4.8's standard 200K window; not re-measured through Bedrock.
+context_length: 200000
+# The id claude answers to on Bedrock: a US cross-region INFERENCE PROFILE id,
+# not the bare model name. The dated suffix an account actually carries is set
+# when the binding is verified live with a short-term key; this is the story's
+# seeded spelling.
+model: us.anthropic.claude-opus-4-8
+ids:
+  claude: us.anthropic.claude-opus-4-8
+# Model-scoped launch env (fleet Model.Env, applied only when THIS model is
+# bound): the two switches Claude Code needs to take the Bedrock route. They
+# ride the model, never the tool, so a native claude launch never sees them.
+env:
+  - CLAUDE_CODE_USE_BEDROCK=1
+  - AWS_REGION=us-east-1
+# Carried from the Anthropic-served opus prior; not re-priced for the metered
+# Bedrock route.
+quality: 0.92
+cost_micro: 15000

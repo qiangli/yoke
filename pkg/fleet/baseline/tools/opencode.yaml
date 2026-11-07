@@ -79,9 +79,12 @@ cli:
   launch:
     # OpenCode names z.ai's coding-plan key after the upstream provider. The
     # launcher resolves the model's api_key_ref (`zai`) from the host, then
-    # projects that one value under this CLI-specific name.
+    # projects that one value under this CLI-specific name. The aws-bedrock
+    # line is the OPT-IN Bedrock route (S584 B1): the bearer key is projected
+    # under the name opencode's amazon-bedrock provider reads.
     credential_env:
       zai: ZHIPU_API_KEY
+      aws-bedrock: AWS_BEARER_TOKEN_BEDROCK
     # RUNG 2 via stdout. Measured against OpenCode 1.18.0 on 2026-08-05:
     # `opencode run --format json ...` emits incremental step_start, tool_use,
     # text, and step_finish NDJSON records. A step_finish with reason=tool-calls

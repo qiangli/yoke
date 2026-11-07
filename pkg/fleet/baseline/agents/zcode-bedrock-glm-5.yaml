@@ -1,0 +1,14 @@
+agents:
+  - name: zcode-bedrock-glm-5
+    tool: zcode
+    model: bedrock-glm-5
+    display: "zcode · bedrock-glm-5"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        OPT-IN Bedrock route (S584 B1), data only, not verified live. zcode's
+        existing setup writes provider_config.json from the binding's
+        {base_url}/{model} (the Bedrock OpenAI-compatible URL and the bare
+        zai.glm-5 id), and its ZCODE_API_KEY key_env projects the
+        aws-bedrock credential. The native zcode agents are untouched by
+        this binding.

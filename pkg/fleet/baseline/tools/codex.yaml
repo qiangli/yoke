@@ -94,6 +94,12 @@ cli:
       - {action: after-exec, args: ['{effort_args}'], when: effort}
     decoder: {kind: codex-jsonl, text_path: item.text}
     warm: stdin
+    # OPT-IN PROVIDER ROUTE (S584 B1): a model with api_key_ref aws-bedrock
+    # (models/bedrock-*.yaml) projects its bearer key under the name codex's
+    # amazon-bedrock provider reads. The native ChatGPT-login launch declares
+    # no ref and is untouched by this line.
+    credential_env:
+      aws-bedrock: AWS_BEARER_TOKEN_BEDROCK
     # ACP rung (Sprint 418 S10): codex speaks its own JSON events, not ACP; the
     # ACP agent process is the registry's `codex-acp` bridge (it moved from
     # zed-industries to agentclientprotocol and from Rust release binaries to

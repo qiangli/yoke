@@ -375,6 +375,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	var boundBaseURL string // the bound model's endpoint, for the tool's launch env
 	var boundContext int64  // the bound model's declared context window (0 = undeclared)
 	var boundLocal bool     // the bound model is local-engine inference (door-served)
+	var boundModelEnv []string
 	if modelName != "" {
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
@@ -385,6 +386,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			}
 			boundBaseURL, boundContext = m.BaseURL, m.ContextLength
 			boundLocal = m.Kind == fleet.ModelKindLocal
+			boundModelEnv = m.Env
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
 			// genie -m accepts a registry key, then resolves provider IDs itself.
 			// The ycode alias invokes genie too, so do not pass ycode's
@@ -452,6 +454,10 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			vars.StateDir = dir
 		}
 		lnch.Env = append(lnch.Env, tool.LaunchEnv(vars)...)
+		// Model-scoped env last: an opt-in provider route's own switches,
+		// appended ONLY when the bound model declares them, so a native
+		// launch (no model, or a native model with no env) is untouched.
+		lnch.Env = append(lnch.Env, boundModelEnv...)
 		lnch.FailEvents = tool.CLI.Launch.EventsFail
 		// A BOUND MODEL REFUSES ACP, and the caller falls to the rung below —
 		// which delivers the model the way it always has.

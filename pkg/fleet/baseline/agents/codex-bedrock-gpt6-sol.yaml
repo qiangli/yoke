@@ -1,0 +1,14 @@
+agents:
+  - name: codex-bedrock-gpt6-sol
+    tool: codex
+    model: bedrock-gpt6-sol
+    display: "codex · bedrock-gpt6-sol"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        OPT-IN Bedrock route (S584 B1), data only, not verified live. The
+        binding delivers the openai.gpt-6-sol model id and the
+        AWS_BEARER_TOKEN_BEDROCK credential projection; codex still needs its
+        config to select the amazon-bedrock model_provider — a known gap
+        recorded on the model (models/bedrock-gpt6-sol.yaml), not half-done
+        here. The native codex agents are untouched by this binding.

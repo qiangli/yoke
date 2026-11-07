@@ -1,0 +1,13 @@
+agents:
+  - name: opencode-bedrock-glm-5
+    tool: opencode
+    model: bedrock-glm-5
+    display: "opencode · bedrock-glm-5"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        OPT-IN Bedrock route (S584 B1), data only, not verified live. The
+        binding hands opencode its own provider-prefixed id
+        (amazon-bedrock/zai.glm-5) and the AWS_BEARER_TOKEN_BEDROCK
+        credential projection. The native opencode agents are untouched by
+        this binding.

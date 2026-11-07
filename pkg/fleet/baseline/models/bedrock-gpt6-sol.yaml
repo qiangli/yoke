@@ -1,0 +1,46 @@
+name: bedrock-gpt6-sol
+display: GPT-6 Sol (AWS Bedrock, opt-in)
+band: 4
+band_source: seeded
+band_season: 1
+# S584 B1: AWS Bedrock as an OPT-IN provider route, data only. codex's
+# supported default stays the ChatGPT login (codex-gpt6-sol and friends);
+# these seeds never touch it.
+#
+# The peg is carried from the native gpt6-sol prior (models/gpt6-sol.yaml):
+# the route changes the endpoint, not the weights. No gated run on this host
+# has gone through Bedrock; re-peg from evidence when one does.
+#
+# No family (the door-model rule): a Bedrock-served GPT must not capture the
+# `gpt-sol` floating alias, which belongs to the native line.
+#
+# WHY GPT-6 AND NOT gpt-oss-120b (the story allowed either): Bedrock's
+# gpt-oss weights carry a band-1 prior here (models/gpt-oss-120b.yaml), and
+# the seed lint requires a non-retired agent seed to serve at L3+. A gpt-oss
+# seed would either lie about its band or retire at birth; an OpenAI gpt id
+# whose prior already clears the lint is the honest pick.
+provider: aws-bedrock
+kind: api          # AUTH: a Bedrock bearer key (api_key_ref aws-bedrock)
+api_key_ref: aws-bedrock
+# Bedrock's OpenAI-compatible surface in us-east-1 (the story's pinned region).
+base_url: https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+# Carried from the GPT-6 family's served window; adjust when AWS's model page
+# is checked against this binding.
+context_length: 400000
+# The id codex answers to on Bedrock: Bedrock's third-party OpenAI spelling.
+model: openai.gpt-6-sol
+ids:
+  codex: openai.gpt-6-sol
+# KNOWN GAP (S584 B1, deliberately not half-done): codex selects its provider
+# through config (`-c model_provider=amazon-bedrock` or a config.toml
+# [model_providers] table), and the fleet's launch data can express neither a
+# per-model argv fragment nor a codex config override — Model.Env carries env
+# pairs only, and env cannot reach a config.toml key. So this seed delivers
+# the model id and the credential projection, and the operator's codex config
+# selects the provider until a per-model argv mechanism exists (A3's gateway
+# args, or an adapter setup hook). Rendering a wrong -c from here would pin a
+# broken argv; the gap stays loud instead.
+# Carried from the native gpt6-sol prior; not re-priced for the metered
+# Bedrock route.
+quality: 0.94
+cost_micro: 18000

@@ -75,6 +75,16 @@
     "description": "list element"
   },
   {
+    "path": "env",
+    "type": "[]string",
+    "description": "KEY=VALUE pairs appended to the launch env only when this model is bound (provider route switches; literal values only)"
+  },
+  {
+    "path": "env.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
     "path": "family",
     "type": "string",
     "description": "version-independent product family"

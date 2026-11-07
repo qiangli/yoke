@@ -990,6 +990,15 @@ type Model struct {
 	// Keyed by TOOL name. Absent → UpstreamID.
 	ToolIDs map[string]string `yaml:"ids,omitempty" json:"ids,omitempty" doc:"tool-specific provider-side model ids"`
 
+	// Env is KEY=VALUE pairs this MODEL needs in its launch environment —
+	// an opt-in provider route's own switches, not the tool's. The launcher
+	// appends them (after the tool's cli.launch.env) only when this model is
+	// the bound one, so a native launch — no model bound, or a native model
+	// with no env — renders byte-identical with none of these present.
+	// Literal pairs only: no placeholders, no credentials (a credential
+	// travels through api_key_ref + credential_env/key_env, never here).
+	Env []string `yaml:"env,omitempty" json:"env,omitempty" doc:"KEY=VALUE pairs appended to the launch env only when this model is bound (provider route switches; literal values only)"`
+
 	// Family and Version make the canonical name version-explicit. The
 	// catalog derives the floating family alias from them: `opus` names
 	// whichever member of family `opus` has the highest Version. A record
