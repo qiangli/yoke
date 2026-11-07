@@ -16,9 +16,27 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/search"
 	"github.com/qiangli/yoke/pkg/telemetry"
 )
+
+// sotaAgentFallback is the last-resort synthesis agent, used only when the
+// catalog has no `roles` roster entry for the conductor (seeds off and
+// nothing mounted). The default itself is data: the seeded
+// fleet.RosterRoles record, which an operator reshapes with a same-named
+// shared, org or local roster.
+const sotaAgentFallback = "claude"
+
+// sotaCatalog builds the fleet catalog the synthesis default is read from.
+// A variable so tests can pin it to an isolated store.
+var sotaCatalog = func() *fleet.Catalog { return fleet.New() }
+
+// sotaDefaultAgent resolves the synthesis agent from the catalog's `roles`
+// roster, read at use time (never while building the command tree).
+func sotaDefaultAgent() string {
+	return sotaCatalog().RosterRole(fleet.RosterRoles, "conductor", sotaAgentFallback)
+}
 
 // NewSotaCmd returns `bashy sota QUESTION` — research the current state of the
 // art and return a cited, date-grounded report.
@@ -82,7 +100,7 @@ func NewSotaCmd() *cobra.Command {
 				}
 			}
 			if agent == "" {
-				agent = "claude" // capable synthesizer, and has a web_search tool for hitchhike
+				agent = sotaDefaultAgent() // capable synthesizer, and has a web_search tool for hitchhike
 			}
 
 			prompt := buildPrompt(q, sources, hitchhike, time.Now().UTC())

@@ -18,6 +18,7 @@ import (
 	yokegit "github.com/qiangli/yoke/git"
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -1795,6 +1796,23 @@ func DefaultConfigYAML() string {
 	return string(b)
 }
 
+// sdlcConductorFallback is the last-resort conductor, used only when the
+// catalog has no `roles` roster entry for the fallback (seeds off and nothing
+// mounted). The default itself is data: the seeded fleet.RosterRoles record,
+// which an operator reshapes with a same-named shared, org or local roster.
+const sdlcConductorFallback = "codex"
+
+// sdlcCatalog builds the fleet catalog the conductor default and name
+// normalization read from. A variable so tests can pin it to an isolated
+// store.
+var sdlcCatalog = func() *fleet.Catalog { return fleet.New() }
+
+// sdlcConductorDefault resolves the fallback conductor from the catalog's
+// `roles` roster, read at use time (never while building the command tree).
+func sdlcConductorDefault() string {
+	return sdlcCatalog().RosterRole(fleet.RosterRoles, "sdlc-conductor-fallback", sdlcConductorFallback)
+}
+
 // DefaultConductorAgent resolves the operator agent for local interactive SDLC.
 // A child process cannot reliably infer its parent chat client, so explicit
 // BASHY_* signals win; the rest are best-effort environment fingerprints.
@@ -1824,11 +1842,36 @@ func DefaultConductorAgent() string {
 	case hasAnyEnv(env, "CODEX_SANDBOX", "CODEX_HOME", "CODEX_SESSION_ID", "CODEX_CLI"):
 		return "codex"
 	default:
-		return "codex"
+		return sdlcConductorDefault()
 	}
 }
 
+// compactToolName lowercases a tool spelling and drops its separators, so
+// "claude-code", "claude_code" and "claudecode" compare equal. Catalog names
+// and aliases provide the spellings; the folding keeps the dash/underscore
+// variants the old hard-coded table accepted.
+func compactToolName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, "_", "")
+	return strings.ReplaceAll(s, " ", "")
+}
+
 func normalizeAgentName(s string) string {
+	if s = strings.TrimSpace(s); s != "" {
+		if tools, _ := sdlcCatalog().Tools(true); len(tools) > 0 {
+			want := compactToolName(s)
+			for _, t := range tools {
+				for _, name := range t.Names() {
+					if compactToolName(name) == want {
+						return t.Name
+					}
+				}
+			}
+		}
+	}
+	// Seeds-off fallback: the catalog is empty, so the historical spellings
+	// apply. Kept frozen — new tools are recognized through the catalog.
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "claude", "claude-code", "claude_code", "claudecode":
 		return "claude"
