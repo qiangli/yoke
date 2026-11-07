@@ -6,6 +6,7 @@
     "binary": "gt-tool",
     "linux": {},
     "launch": {
+      "decoder": {},
       "exec": "gt-tool --yolo -m {model} {prompt}",
       "key_env": [
         "OPENAI_API_KEY"

@@ -328,7 +328,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 				continue
 			}
 			w.observeLimit(ctx, line.data)
-			ev, parsed := parseEvent(line.data, w.tool.CLI.Launch.EventsDone)
+			ev, parsed := parseEvent(line.data, w.tool.CLI.Launch.EventsDone, w.tool.CLI.Launch.Decoder)
 			if !parsed {
 				if s := strings.TrimSpace(string(line.data)); s != "" {
 					ev = Event{Type: "output", Raw: append(json.RawMessage(nil), line.data...)}
@@ -350,7 +350,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 			}
 			if ev.Done {
 				if text.Len() == 0 {
-					if final := terminalText(ev.Raw); final != "" {
+					if final := terminalText(ev.Raw, w.tool.CLI.Launch.Decoder); final != "" {
 						text.WriteString(final)
 						ev.Text = final
 					}
@@ -709,23 +709,13 @@ func (w *Worker) promptBody(prompt string) ([]byte, error) {
 	case WarmStdin:
 		return []byte(prompt), nil
 	case WarmStdinStreamJSON:
-		var v any
-		switch w.tool.Name {
-		case "claude":
-			v = map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": prompt}}
-		case "agy":
-			v = map[string]any{"event": "user", "message": map[string]any{"content": prompt}}
-		default:
-			return nil, fmt.Errorf("cligw: tool %q declares stdin-stream-json without a measured message shape", w.tool.Name)
-		}
-		body, err := json.Marshal(v)
-		return append(body, '\n'), err
+		return stdinMessage(w.tool.CLI.Launch.StdinFormat, prompt)
 	default:
 		return nil, nil
 	}
 }
 
-func parseEvent(line []byte, done fleet.EventsDone) (Event, bool) {
+func parseEvent(line []byte, done fleet.EventsDone, decoder ...fleet.ToolDecoder) (Event, bool) {
 	var obj map[string]any
 	if err := json.Unmarshal(line, &obj); err != nil {
 		return Event{}, false
@@ -738,11 +728,14 @@ func parseEvent(line []byte, done fleet.EventsDone) (Event, bool) {
 		typ, _ = obj["payload_type"].(string)
 	}
 	ev := Event{Type: typ, Raw: append(json.RawMessage(nil), line...), Done: done.Match(line)}
-	ev.Text = eventText(obj)
+	ev.Text = eventText(obj, decoder...)
 	return ev, true
 }
 
-func eventText(obj map[string]any) string {
+func eventText(obj map[string]any, decoder ...fleet.ToolDecoder) string {
+	if len(decoder) > 0 && decoder[0].Kind != "" {
+		return selectedText(obj, decoder[0])
+	}
 	// Agy emits text deltas inside step_update, including the final DONE
 	// update. Tool info and thinking steps are deliberately not answer text.
 	if stringValue(obj["event"]) == "step_update" && stringValue(nested(obj, "step_update", "step_type")) == "agent_response" {
@@ -795,12 +788,78 @@ func eventText(obj map[string]any) string {
 	return ""
 }
 
+func selectedText(obj map[string]any, d fleet.ToolDecoder) string {
+	switch d.Kind {
+	case "agy":
+		if stringValue(obj["event"]) != "step_update" || stringValue(nested(obj, "step_update", "step_type")) != "agent_response" {
+			return ""
+		}
+	case "muse":
+		if stringValue(obj["payload_type"]) != "run.output.delta" {
+			return ""
+		}
+	case "claude":
+		if stringValue(obj["type"]) == "assistant" {
+			return eventText(obj)
+		}
+		if !claudeTextDeltaJSON(obj) {
+			return ""
+		}
+	case "codex":
+		if stringValue(obj["type"]) != "item.completed" || stringValue(nested(obj, "item", "type")) != "agent_message" {
+			return ""
+		}
+	default:
+		return ""
+	}
+	return jsonStringPath(obj, d.TextPath)
+}
+
+func selectedFinal(obj map[string]any, d fleet.ToolDecoder) string {
+	switch d.Kind {
+	case "agy":
+		if stringValue(obj["event"]) != "result" {
+			return ""
+		}
+	case "muse":
+		if !strings.HasPrefix(stringValue(obj["payload_type"]), "run.terminal.") {
+			return ""
+		}
+	case "claude":
+		if stringValue(obj["type"]) != "result" {
+			return ""
+		}
+	default:
+		return ""
+	}
+	return jsonStringPath(obj, d.FinalPath)
+}
+
+func jsonStringPath(obj map[string]any, path string) string {
+	var v any = obj
+	for _, key := range strings.Split(path, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return ""
+		}
+		v = m[key]
+	}
+	return stringValue(v)
+}
+
+func claudeTextDeltaJSON(obj map[string]any) bool {
+	return stringValue(obj["type"]) == "stream_event" && stringValue(nested(obj, "event", "type")) == "content_block_delta" && stringValue(nested(obj, "event", "delta", "type")) == "text_delta"
+}
+
 // terminalText supplies a complete answer only when no text was streamed.
 // Terminal snapshots must never be appended to an already streamed answer.
-func terminalText(raw []byte) string {
+func terminalText(raw []byte, decoder ...fleet.ToolDecoder) string {
 	var obj map[string]any
 	if json.Unmarshal(raw, &obj) != nil {
 		return ""
+	}
+	if len(decoder) > 0 && decoder[0].Kind != "" {
+		return selectedFinal(obj, decoder[0])
 	}
 	switch {
 	case stringValue(obj["type"]) == "result":

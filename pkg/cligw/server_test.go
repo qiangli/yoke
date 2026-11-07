@@ -43,6 +43,7 @@ func installServerFleet(t *testing.T) *FleetCatalog {
 			// rejected before the helper ever runs.
 			Exec:         fmt.Sprintf("%s -test.run=TestCLIHelper -- %s {model} {prompt}", os.Args[0], mode),
 			Warm:         string(warm),
+			StdinFormat:  "claude-user",
 			EventsStdout: "--events-json",
 			EventsDone:   fleet.EventsDone{Field: "type", Values: []string{"result", "turn.completed"}},
 		}

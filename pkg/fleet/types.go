@@ -311,6 +311,8 @@ type ToolVersion struct {
 
 // ToolLaunch is how the orchestrator invokes a tool headlessly.
 type ToolLaunch struct {
+	Decoder     ToolDecoder `yaml:"decoder,omitempty" json:"decoder,omitempty" doc:"stdout event text selection"`
+	StdinFormat string      `yaml:"stdin_format,omitempty" json:"stdin_format,omitempty" doc:"stdin JSON user message shape"`
 	// Exec is the argv template. {prompt} is replaced by the task text and
 	// {model} by the bound model's upstream id. When no model is bound,
 	// {model} and the flag token immediately preceding it are dropped, so
@@ -537,6 +539,13 @@ type ToolLaunch struct {
 	// values) to the core's guard. Declarations only ever ADD to what the core
 	// refuses; they can never make a flag safe.
 	Unsafe ToolUnsafe `yaml:"unsafe,omitempty" json:"unsafe,omitzero" doc:"tool kill-switch spelling: canonical flag and value-qualified unsafe flags"`
+}
+
+// ToolDecoder selects answer text from a structured stdout event.
+type ToolDecoder struct {
+	Kind      string `yaml:"kind,omitempty" json:"kind,omitempty" doc:"event envelope kind and text filter"`
+	TextPath  string `yaml:"text_path,omitempty" json:"text_path,omitempty" doc:"dotted path to answer text"`
+	FinalPath string `yaml:"final_path,omitempty" json:"final_path,omitempty" doc:"dotted path to terminal answer snapshot"`
 }
 
 type ToolWatchdog struct {

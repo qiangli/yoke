@@ -58,6 +58,8 @@ cli:
         url: https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.2-5813501495738368/windows-x64/cli_windows_x64.exe
         sha512: 088f449e742a72444539088df261db30010c8dee16dc32920eede24c8ab497ce3da410dd42fe4d673a36eb0c5084411399ba44f77f96389130a36027696f2120
   launch:
+    decoder: {kind: agy, text_path: step_update.text_delta, final_path: result.response}
+    stdin_format: agy-user
     warm: stdin-stream-json
     # RUNG 2 via stdout. Measured on the wire 2026-07-31:
     #

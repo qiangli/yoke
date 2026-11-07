@@ -82,6 +82,7 @@ cli:
     requires: [nodejs, npm]
     binary: codex
   launch:
+    decoder: {kind: codex, text_path: item.text}
     warm: stdin
     # ACP rung (Sprint 418 S10): codex speaks its own JSON events, not ACP; the
     # ACP agent process is the registry's `codex-acp` bridge (it moved from
