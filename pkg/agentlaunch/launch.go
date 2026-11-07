@@ -99,12 +99,15 @@ func (opt Options) containerized() bool {
 
 // Launch is a fully resolved agent invocation. Args excludes the prompt.
 type Launch struct {
-	Nick      string
-	Tool      string
-	ToolName  string
-	Model     string
-	ModelName string
-	Args      []string
+	Nick string
+	Tool string
+	// SetupWrapped is the tool's own executable when Tool is the setup shell
+	// that runs the tool's declared setup before exec'ing it; empty otherwise.
+	SetupWrapped string
+	ToolName     string
+	Model        string
+	ModelName    string
+	Args         []string
 	// WorkspacePreflight is a fully resolved, read-only command (including its
 	// reporting prompt) whose {workspace} token is bound immediately before exec.
 	// Empty means the tool does not declare a workspace preflight.
@@ -272,6 +275,7 @@ func applySetup(l *Launch, tool fleet.Tool, vars fleet.LaunchVars) error {
 	}
 	args := []string{"--bashsharp", "-c", script + "\nexec \"$@\"", tool.Name + "-setup", l.Tool}
 	l.Args = append(args, l.Args...)
+	l.SetupWrapped = l.Tool
 	l.Tool = shell
 	return nil
 }

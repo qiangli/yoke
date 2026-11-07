@@ -76,6 +76,9 @@ func TestFleetReportsQuotaExhaustedNotAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bindir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// codex is a managed (pinned) tool: fleet checks the binary a launch would
+	// run, so point the documented override at the shim.
+	t.Setenv(fleet.ToolBinaryOverrideEnv("codex"), exe)
 
 	dir := t.TempDir()
 	now := time.Date(2026, 7, 21, 10, 0, 0, 0, time.Local)

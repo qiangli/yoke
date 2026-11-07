@@ -3,5 +3,5 @@ display: weave default fleet
 # Tools weave fleet / interview / heartbeat use when --fleet is not given.
 # Each tool runs its native default model and subscription; bind another
 # provider per agent. Reshape with a same-named shared, org or local record.
-members: [claude, codex, opencode, agy]
-notes: Seeded from the former Go literal weaveDefaultFleet (Sprint 584 A1).
+members: [genie, claude, codex, opencode, agy, muse, zcode]
+notes: Operator-favored tools, genie built in (Sprint 584). An unavailable member is reported and skipped, never launched.

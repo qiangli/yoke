@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/fleet"
 )
 
@@ -20,7 +21,7 @@ import (
 // no `weave` roster (seeds off and nothing mounted). The default itself is
 // data: the seeded fleet.RosterWeave record, which an operator reshapes with a
 // same-named shared, org or local roster.
-var weaveDefaultFleet = []string{"claude", "codex", "opencode", "agy"}
+var weaveDefaultFleet = []string{"genie", "claude", "codex", "opencode", "agy", "muse", "zcode"}
 
 // weaveDefaultRoster resolves the default fleet from the catalog's `weave`
 // roster, read at use time (never while building the command tree).
@@ -456,7 +457,25 @@ func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[str
 // row and whether the probe cache was updated (so the caller can persist it).
 // A tool is Available only if its binary resolves AND it is not cooling down.
 func fleetRowFor(dir, tool string, now time.Time, probe bool, cache map[string]fleetProbeEntry) (fleetRow, bool) {
-	return fleetRowForBinary(dir, tool, tool, now, probe, cache)
+	// A catalog tool is checked at the binary its launch would actually run:
+	// the pinned managed copy (or an explicit override), not whatever happens
+	// to be on PATH under the tool's name — genie runs as bashy, and a pinned
+	// muse/zcode need not be on PATH at all.
+	l, err := agentlaunch.ResolveWithCatalog(tool, agentlaunch.Options{
+		DryRun: true, Workspace: fleet.WorkspaceToken,
+	}, fleetCatalog)
+	if err != nil || strings.TrimSpace(l.Tool) == "" {
+		return fleetRowForBinary(dir, tool, tool, now, probe, cache)
+	}
+	bin := l.Tool
+	if l.SetupWrapped != "" {
+		bin = l.SetupWrapped // the setup shell is bashy; availability is the tool's
+	}
+	row, dirty := fleetRowForBinary(dir, tool, bin, now, probe, cache)
+	if l.ManagedTool != nil && !row.Found && row.Reason == "" {
+		row.Reason = "managed install " + l.ManagedTool.Version + " not cached yet; weave start downloads and verifies it"
+	}
+	return row, dirty
 }
 
 // fleetRowForBinary is fleetRowFor with the executable named separately. A
