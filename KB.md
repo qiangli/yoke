@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Real-engine probe tests need a test-only sibling package — WHEN testing yoke usage-probe seeds end to end (YAML -> fleet -> llmbudget.Quota through the REAL Bash# runner): llmbudget's internal tests snippet.SetRunner(nil) in cleanup and pkg/dag imports llmbudget, so neither pkg/llmbudget nor pkg/fleet tests can import  (kb:real-engine-probe-tests-need-a-test-only-sibling-package)
+- [repo/page] Bare Bash# decorator without parens parses as a plain command, not a decorator — WHEN reading Bash# isolation requests with sh/syntax LangBashPP: a bare @sandbox line (no parens) does not attach to the function declaration and parses as a CallExpr with literal @sandbox, so a decorator-only walk silently reports  (kb:bare-bash-decorator-without-parens-parses-as-a-plain-command-not)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
