@@ -1,7 +1,34 @@
 # Agent-CLI adapters: shaped Bash# adapters over a thin core
 
-Status: D0 design (Sprint 584, story `852bea9fa54b`). Operator review gates A1-A4.
+Status: Sprint 584 delivered the MVP cut below (operator direction: KISS/MVP).
 Plan and research: `docs/sprint-agent-cli-adapters-plan.md`.
+
+## What shipped (MVP)
+
+- Seeded **rosters** (`pkg/fleet/roster.go`, `baseline/rosters/`): `weave` default
+  fleet = genie, claude, codex, opencode, agy, muse, zcode; `roles` = conductor,
+  reviewer, qa, release, meet-secretary, sdlc-conductor-fallback. Read by weave,
+  chat, meet, sota, sdlc; Go literals remain only as seeds-off fallbacks.
+- `cli.launch.unsafe` (canonical kill-switch + value-qualified flags) seeded per
+  tool; the core guard also matches value flags (`--mode yolo`).
+- cligw decoder / stdin format / gateway and effort argv declared in tool YAML; a
+  ratchet test keeps tool-name branches out of `pkg/cligw`.
+- `builtin: true` (ycode/genie); `BASHY_FLEET_SEEDS=off` now drops third-party
+  tool contracts (`roster` keeps them for fixture rings).
+- `weave fleet` checks the binary a launch actually runs (managed pin, override,
+  or the tool behind a setup shell).
+- AWS Bedrock as opt-in seeds (`models/bedrock-*`, `agents/*-bedrock-*`) with
+  model-scoped `env` (provider switches only; credential and BASHY_/WEAVE_ names
+  are dropped) and `credential_env aws-bedrock: AWS_BEARER_TOKEN_BEDROCK`. Not
+  verified live; needs a short-term Bedrock key on a test host.
+
+Deferred (follow-ups, not MVP): the per-tool `.bsh` hook runner below — the
+existing code-outer `.bsh` records (`pkg/fleet/bsh.go`, a script whose stdout is
+the record) plus `cli.launch.setup` already let an operator shape a tool without
+a release; `env_markers` wiring (waits for S575 S1, `detect.go` is in the core
+build); auth-check/config-dir fields; native Bedrock client (B2).
+
+The rest of this document is the original D0 design, kept as the target.
 
 ## Problem
 
