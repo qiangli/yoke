@@ -3,7 +3,7 @@ id: 95e3bab30cf9
 kind: feature
 title: 'S584.A1 fleet schema + loader: unsafe/effort/stdin_format/decoder/auth/config_dir_env/builtin; wire env_markers; seeded defaults record'
 seq: 3056
-status: assigned
+status: done
 priority: p2
 labels:
     - agent-cli
@@ -12,6 +12,8 @@ assignee: claude-opus5.5-s584
 sprint: 584
 sprint_id: d1c8cf7b-5ef0-566c-9a2e-8a9ea94bc833
 sprint_title: External agent CLIs as shaped Bash# adapters + AWS Bedrock
+closed: 2026-11-07T09:23:37.031035Z
+closed_by: claude-opus5.5-s584
 ---
 
 Depends D0. Add fields to pkg/fleet/types.go; read existing cli.launch.env_markers (declared, never read); seeded defaults record (weave default fleet genie,claude,codex,opencode,agy,muse,zcode; role defaults; meet secretary; sdlc fallback conductor).
