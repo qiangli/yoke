@@ -3,11 +3,12 @@ id: 852bea9fa54b
 kind: doc
 title: 'S584.D0 design: agent-CLI adapter hook contract, schema additions, trust model, Mechanism->seed decision'
 seq: 3055
-status: todo
+status: assigned
 priority: p1
 labels:
     - agent-cli
 created: 2026-11-07T03:48:25.358659Z
+assignee: claude-opus5.5-s584
 sprint: 584
 sprint_id: d1c8cf7b-5ef0-566c-9a2e-8a9ea94bc833
 sprint_title: External agent CLIs as shaped Bash# adapters + AWS Bedrock
