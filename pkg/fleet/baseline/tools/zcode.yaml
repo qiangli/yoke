@@ -10,11 +10,11 @@ cli:
     env:
       - ZCODE_DATA_BASE_DIR={state_dir}/data
       - ZCODE_PERSONAL_PROVIDER_CONFIG_FILE={state_dir}/provider_config.json
+    # Tokens are substituted already shell-quoted: use them as bare words,
+    # never inside "..." or a heredoc, or the quotes land in the path/JSON.
     setup: |
-      mkdir -p "{state_dir}"
-      cat > "{state_dir}/provider_config.json" <<EOF
-      {"providers":[{"id":"bashy","name":"bashy","apiType":"openai-chat-completions","baseUrl":"{base_url}","access":{"type":"api-key","apiKey":"$ZCODE_API_KEY"},"personalModelIds":["{model}"]}]}
-      EOF
+      mkdir -p {state_dir}
+      printf '{"providers":[{"id":"bashy","name":"bashy","apiType":"openai-chat-completions","baseUrl":"%s","access":{"type":"api-key","apiKey":"%s"},"personalModelIds":["%s"]}]}\n' {base_url} "$ZCODE_API_KEY" {model} > {state_dir}/provider_config.json
     notes: Official Z.ai CLI; source-built installation is intentionally a follow-up.
     watchdog:
       max_runtime: 45m
