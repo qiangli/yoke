@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Bare Bash# decorator without parens parses as a plain command, not a decorator — WHEN reading Bash# isolation requests with sh/syntax LangBashPP: a bare @sandbox line (no parens) does not attach to the function declaration and parses as a CallExpr with literal @sandbox, so a decorator-only walk silently reports  (kb:bare-bash-decorator-without-parens-parses-as-a-plain-command-not)
+- [repo/page] Seed effects must cover the atlas effects of every command they run — A usage-probe seed's Effects: line becomes advice.WithCap in the snippet runner, and every command the body dispatches is classified by atlas.Lookup — fetch is read+net, so a [net]-only balance seed died 126 (effect cap denied). WHEN authori  (kb:seed-effects-must-cover-the-atlas-effects-of-every-command-they)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
