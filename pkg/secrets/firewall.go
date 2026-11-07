@@ -141,6 +141,13 @@ var credentialSuffixes = []string{
 	"_SESSION_TOKEN",
 }
 
+// credentialInfixes are shapes a secret's NAME takes anywhere in it, for providers that
+// put the qualifier AFTER the secret word — AWS_BEARER_TOKEN_BEDROCK is a Bedrock API
+// key, and no suffix rule sees it.
+var credentialInfixes = []string{
+	"BEARER_TOKEN",
+}
+
 // credentialNames are exact names that carry a secret without a tell-tale suffix.
 var credentialNames = map[string]struct{}{
 	"AWS_SECRET_ACCESS_KEY": {},
@@ -162,6 +169,11 @@ func looksLikeCredential(name string) bool {
 	upper := strings.ToUpper(name)
 	for _, suf := range credentialSuffixes {
 		if strings.HasSuffix(upper, suf) {
+			return true
+		}
+	}
+	for _, in := range credentialInfixes {
+		if strings.Contains(upper, in) {
 			return true
 		}
 	}

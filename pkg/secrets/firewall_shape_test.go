@@ -68,6 +68,7 @@ func TestLooksLikeCredentialIsShapeBased(t *testing.T) {
 		"ANTHROPIC_API_KEY", "ZAI_API_KEY", "DHNT_API_KEY", "GITHUB_TOKEN",
 		"OPENAI_APIKEY", "FOO_SECRET", "DB_PASSWORD", "AWS_SECRET_ACCESS_KEY",
 		"GH_TOKEN", "NPM_TOKEN", "SERVICE_PRIVATE_KEY", "X_SESSION_TOKEN",
+		"AWS_BEARER_TOKEN_BEDROCK",
 	}
 	for _, n := range credential {
 		if !looksLikeCredential(n) {
@@ -75,7 +76,7 @@ func TestLooksLikeCredentialIsShapeBased(t *testing.T) {
 		}
 	}
 
-	ordinary := []string{"PATH", "HOME", "TERM", "LANG", "EDITOR", "GOPATH", "SHELL", "KEYBOARD_LAYOUT"}
+	ordinary := []string{"PATH", "HOME", "TERM", "LANG", "EDITOR", "GOPATH", "SHELL", "KEYBOARD_LAYOUT", "AWS_REGION", "AWS_PROFILE"}
 	for _, n := range ordinary {
 		if looksLikeCredential(n) {
 			t.Errorf("%s is an ordinary variable and was treated as a credential", n)
