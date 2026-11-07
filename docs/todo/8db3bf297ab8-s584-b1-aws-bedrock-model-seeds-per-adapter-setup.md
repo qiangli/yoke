@@ -3,11 +3,12 @@ id: 8db3bf297ab8
 kind: feature
 title: 'S584.B1 AWS Bedrock: model seeds + per-adapter setup (claude/codex/opencode native, zcode OpenAI-compat, agy gateway, muse unsupported)'
 seq: 3060
-status: todo
+status: assigned
 priority: p2
 labels:
     - agent-cli
 created: 2026-11-07T03:48:26.067892Z
+assignee: opencode-glm-5.3
 sprint: 584
 sprint_id: d1c8cf7b-5ef0-566c-9a2e-8a9ea94bc833
 sprint_title: External agent CLIs as shaped Bash# adapters + AWS Bedrock
