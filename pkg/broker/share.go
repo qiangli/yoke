@@ -218,6 +218,65 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 	return cloudbox + "/matrix/h/" + url.PathEscape(host) + "/app/" + doorServiceName, nil
 }
 
+// satelliteAppURL is the door's app URL on a satellite served by an extra
+// outpost instance (`outpost-profile up NAME --app llm`): the main outpost's
+// status names only its own satellite. It reads the profile outpost-profile
+// writes under ${XDG_CONFIG_HOME:-$HOME/.config}/matrix/profiles/NAME — the
+// running instance's config first, else the registered profile.
+func satelliteAppURL(name string) (string, error) {
+	if !ValidPeerName(name) {
+		return "", fmt.Errorf("invalid satellite profile name %q", name)
+	}
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".config")
+	}
+	dir := filepath.Join(base, "matrix", "profiles", name)
+	for _, p := range []string{filepath.Join(dir, "instance", "cfg", "matrix", "agent.json"), filepath.Join(dir, "agent.json")} {
+		data, err := os.ReadFile(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		var prof struct {
+			AgentName  string `json:"agent_name"`
+			ServerAddr string `json:"server_addr"`
+			ServerPort int    `json:"server_port"`
+			Protocol   string `json:"protocol"`
+		}
+		if err := json.Unmarshal(data, &prof); err != nil {
+			return "", fmt.Errorf("satellite profile %s: %w", p, err)
+		}
+		if prof.AgentName == "" || prof.ServerAddr == "" {
+			return "", fmt.Errorf("satellite profile %s names no host or server (is it registered? `outpost-profile add`)", p)
+		}
+		return satelliteHTTPBase(prof.Protocol, prof.ServerAddr, prof.ServerPort) + "/matrix/h/" + url.PathEscape(prof.AgentName) + "/app/" + doorServiceName, nil
+	}
+	return "", fmt.Errorf("no satellite profile %q under %s (see `outpost-profile list`)", name, filepath.Join(base, "matrix", "profiles"))
+}
+
+// satelliteHTTPBase is the satellite's HTTP(S) base from its pairing fields,
+// as outpost derives it (cloudboxHTTPBase): wss pairs with https, ws /
+// websocket / tcp with plain http on the same port (local dev satellites),
+// and the scheme's default port is left out.
+func satelliteHTTPBase(protocol, addr string, port int) string {
+	scheme := "https"
+	switch strings.ToLower(protocol) {
+	case "ws", "websocket", "tcp", "":
+		scheme = "http"
+	}
+	if port != 0 && !(scheme == "https" && port == 443) && !(scheme == "http" && port == 80) {
+		return fmt.Sprintf("%s://%s:%d", scheme, addr, port)
+	}
+	return scheme + "://" + addr
+}
+
 // olderPeerBashy reports whether err is the peer's bashy refusing the
 // `llm door import` subcommand — cobra's unknown-command text carried back
 // over outpost ssh. That is version skew, not an unreachable host, so share
@@ -257,7 +316,7 @@ func bareLoopbackHost(host string) bool {
 }
 
 func newShareCmd() *cobra.Command {
-	var via, sshTarget string
+	var via, sshTarget, satellite string
 	var printGrant bool
 	cmd := &cobra.Command{
 		Use:   "share PEER",
@@ -275,6 +334,10 @@ credential is never printed or logged here). On PEER, then:
   eval "$(bashy llm env --from THIS-HOST)"
 
 Rerunning share is safe: it reuses the exposure and rotates the credential.
+--satellite NAME points the grant at a satellite served by an extra outpost
+instance (outpost-profile up NAME --app llm) instead of the main outpost's;
+the instance keeps its copy of the llm app, so rerun up NAME --app llm after
+the main app changes.
 --ssh names the outpost ssh target when it is not PEER (user@host). --print
 writes the grant to stdout instead of pushing it — only for a peer this host
 cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it secret.`,
@@ -290,6 +353,10 @@ cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it sec
 			if via != "mesh" && via != "cloudbox" && via != "both" {
 				return fmt.Errorf("llm share: unknown route %q (want mesh, cloudbox or both)", via)
 			}
+			satellite = strings.TrimSpace(satellite)
+			if satellite != "" && via == "mesh" {
+				return errors.New("llm share: --satellite needs --via cloudbox or both")
+			}
 			ctx := c.Context()
 			host, cloudbox, err := outpostSelf(ctx)
 			if err != nil {
@@ -302,8 +369,15 @@ cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it sec
 				}
 			}
 			if via != "mesh" {
+				// The main outpost's app is also what `outpost-profile up
+				// NAME --app llm` copies into the satellite's instance.
 				if g.CloudboxURL, err = ensureCloudboxApp(ctx, host, cloudbox, door.Port()); err != nil {
 					return fmt.Errorf("llm share: cloudbox: %w", err)
+				}
+				if satellite != "" {
+					if g.CloudboxURL, err = satelliteAppURL(satellite); err != nil {
+						return fmt.Errorf("llm share: %w", err)
+					}
 				}
 			}
 			path, err := peersPath()
@@ -334,6 +408,7 @@ cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it sec
 		},
 	}
 	cmd.Flags().StringVar(&via, "via", "mesh", "expose the door over mesh|cloudbox|both")
+	cmd.Flags().StringVar(&satellite, "satellite", "", "satellite profile served by an extra outpost instance (outpost-profile up NAME --app llm)")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "outpost ssh target when it is not PEER (e.g. user@host)")
 	cmd.Flags().BoolVar(&printGrant, "print", false, "print the grant (it holds the credential) instead of pushing it to PEER")
 	return cmd

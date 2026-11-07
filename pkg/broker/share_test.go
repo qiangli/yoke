@@ -567,3 +567,66 @@ func TestMeshForwardNeverReusesPortZero(t *testing.T) {
 		t.Fatalf("second call %q (%v), want reuse of %q: %v", a2, err, a1, win.calls)
 	}
 }
+
+// --satellite points the grant at a satellite served by an extra outpost
+// instance: the running instance's profile wins over the registered one,
+// and the main outpost's app (what `outpost-profile up --app llm` copies)
+// is still ensured.
+func TestShareSatelliteNamesTheInstanceSatellite(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	prof := filepath.Join(cfg, "matrix", "profiles", "zoo-aws")
+	for path, body := range map[string]string{
+		filepath.Join(prof, "agent.json"):                              `{"agent_name":"old","server_addr":"stale.example"}`,
+		filepath.Join(prof, "instance", "cfg", "matrix", "agent.json"): `{"agent_name":"dragon","server_addr":"sat.example","server_port":443,"protocol":"wss"}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := useFakeOutpost(t)
+	out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox", "--satellite", "zoo-aws", "--print")
+	if err != nil {
+		t.Fatalf("share: %v\n%s", err, out)
+	}
+	var g DoorGrant
+	if err := json.Unmarshal([]byte(out), &g); err != nil {
+		t.Fatalf("grant: %v\n%s", err, out)
+	}
+	if g.CloudboxURL != "https://sat.example/matrix/h/dragon/app/llm" {
+		t.Fatalf("cloudbox url = %q", g.CloudboxURL)
+	}
+	if f.count("apps add llm") != 1 {
+		t.Fatalf("main outpost app not ensured: %v", f.calls)
+	}
+
+	if out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox", "--satellite", "missing", "--print"); err == nil || !strings.Contains(err.Error(), "no satellite profile") {
+		t.Fatalf("missing profile: %v\n%s", err, out)
+	}
+	if out, err := runShareLLM(t, "", "share", "peer", "--satellite", "zoo-aws"); err == nil || !strings.Contains(err.Error(), "--via cloudbox") {
+		t.Fatalf("mesh with --satellite: %v\n%s", err, out)
+	}
+}
+
+func TestSatelliteHTTPBaseMatchesOutpost(t *testing.T) {
+	for _, c := range []struct {
+		proto, addr string
+		port        int
+		want        string
+	}{
+		{"wss", "sat.example", 443, "https://sat.example"},
+		{"wss", "sat.example", 8443, "https://sat.example:8443"},
+		{"websocket", "127.0.0.1", 18080, "http://127.0.0.1:18080"},
+		{"tcp", "dev.local", 80, "http://dev.local"},
+		{"", "dev.local", 0, "http://dev.local"},
+	} {
+		if got := satelliteHTTPBase(c.proto, c.addr, c.port); got != c.want {
+			t.Errorf("satelliteHTTPBase(%q,%q,%d) = %q, want %q", c.proto, c.addr, c.port, got, c.want)
+		}
+	}
+}
