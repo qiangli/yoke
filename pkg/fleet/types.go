@@ -311,8 +311,12 @@ type ToolVersion struct {
 
 // ToolLaunch is how the orchestrator invokes a tool headlessly.
 type ToolLaunch struct {
-	Decoder     ToolDecoder `yaml:"decoder,omitempty" json:"decoder,omitempty" doc:"stdout event text selection"`
-	StdinFormat string      `yaml:"stdin_format,omitempty" json:"stdin_format,omitempty" doc:"stdin JSON user message shape"`
+	Decoder            ToolDecoder      `yaml:"decoder,omitempty" json:"decoder,omitempty" doc:"stdout event text selection"`
+	StdinFormat        string           `yaml:"stdin_format,omitempty" json:"stdin_format,omitempty" doc:"stdin JSON user message shape"`
+	GatewayArgs        []GatewayArgStep `yaml:"gateway_args,omitempty" json:"gateway_args,omitempty" doc:"ordered gateway argv edits"`
+	EffortArgs         []string         `yaml:"effort_args,omitempty" json:"effort_args,omitempty" doc:"argv template for declared reasoning effort"`
+	NativeSystemPrompt bool             `yaml:"native_system_prompt,omitempty" json:"native_system_prompt,omitempty" doc:"gateway supplies system instructions natively"`
+	InstructionsFile   bool             `yaml:"instructions_file,omitempty" json:"instructions_file,omitempty" doc:"gateway writes instructions and optional model catalog"`
 	// Exec is the argv template. {prompt} is replaced by the task text and
 	// {model} by the bound model's upstream id. When no model is bound,
 	// {model} and the flag token immediately preceding it are dropped, so
@@ -539,6 +543,13 @@ type ToolLaunch struct {
 	// values) to the core's guard. Declarations only ever ADD to what the core
 	// refuses; they can never make a flag safe.
 	Unsafe ToolUnsafe `yaml:"unsafe,omitempty" json:"unsafe,omitzero" doc:"tool kill-switch spelling: canonical flag and value-qualified unsafe flags"`
+}
+
+// GatewayArgStep applies one declared edit to the gateway's launch argv.
+type GatewayArgStep struct {
+	Action string   `yaml:"action" json:"action" doc:"argv edit operation"`
+	Args   []string `yaml:"args,omitempty" json:"args,omitempty" doc:"argv tokens or placeholders for this edit"`
+	When   string   `yaml:"when,omitempty" json:"when,omitempty" doc:"condition for applying this edit"`
 }
 
 // ToolDecoder selects answer text from a structured stdout event.

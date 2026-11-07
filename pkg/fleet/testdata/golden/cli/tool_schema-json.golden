@@ -175,6 +175,16 @@
     "description": "dotted path to answer text"
   },
   {
+    "path": "cli.launch.effort_args",
+    "type": "[]string",
+    "description": "argv template for declared reasoning effort"
+  },
+  {
+    "path": "cli.launch.effort_args.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
     "path": "cli.launch.env",
     "type": "[]string",
     "description": "KEY=VALUE pairs set on every launch ({model}, {base_url}, {base_url_origin}, {base_url_path}, {state_dir})"
@@ -275,6 +285,41 @@
     "description": "context-inheriting fork argv template"
   },
   {
+    "path": "cli.launch.gateway_args",
+    "type": "[]object",
+    "description": "ordered gateway argv edits"
+  },
+  {
+    "path": "cli.launch.gateway_args.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.gateway_args.\u003cindex\u003e.action",
+    "type": "string",
+    "description": "argv edit operation"
+  },
+  {
+    "path": "cli.launch.gateway_args.\u003cindex\u003e.args",
+    "type": "[]string",
+    "description": "argv tokens or placeholders for this edit"
+  },
+  {
+    "path": "cli.launch.gateway_args.\u003cindex\u003e.args.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.gateway_args.\u003cindex\u003e.when",
+    "type": "string",
+    "description": "condition for applying this edit"
+  },
+  {
+    "path": "cli.launch.instructions_file",
+    "type": "bool",
+    "description": "gateway writes instructions and optional model catalog"
+  },
+  {
     "path": "cli.launch.key_env",
     "type": "[]string",
     "description": "environment variables that receive the bound model's credential"
@@ -288,6 +333,11 @@
     "path": "cli.launch.min_context",
     "type": "int",
     "description": "smallest model context window (tokens) the CLI accepts"
+  },
+  {
+    "path": "cli.launch.native_system_prompt",
+    "type": "bool",
+    "description": "gateway supplies system instructions natively"
   },
   {
     "path": "cli.launch.notes",

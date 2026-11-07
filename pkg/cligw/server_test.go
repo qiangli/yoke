@@ -43,13 +43,17 @@ func installServerFleet(t *testing.T) *FleetCatalog {
 			// rejected before the helper ever runs.
 			Exec:         fmt.Sprintf("%s -test.run=TestCLIHelper -- %s {model} {prompt}", os.Args[0], mode),
 			Warm:         string(warm),
-			StdinFormat:  "claude-user",
+			StdinFormat:  "claude-stream-json",
 			EventsStdout: "--events-json",
 			EventsDone:   fleet.EventsDone{Field: "type", Values: []string{"result", "turn.completed"}},
 		}
 	}
 	tools := []fleet.Tool{
-		{Name: "claude", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: os.Args[0], Launch: launch("warm", WarmStdinStreamJSON)}},
+		{Name: "claude", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: os.Args[0], Launch: func() fleet.ToolLaunch {
+			l := launch("warm", WarmStdinStreamJSON)
+			l.EffortArgs = seededGatewayLaunch(t, "claude").EffortArgs
+			return l
+		}()}},
 		{Name: "fakecold", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: os.Args[0], Launch: launch("cold", WarmCold)}},
 	}
 	for _, tool := range tools {

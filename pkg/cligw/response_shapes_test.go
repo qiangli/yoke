@@ -79,7 +79,7 @@ func TestWorkerErrorDoesNotExposeStderr(t *testing.T) {
 
 func TestDoorIsolationArgv(t *testing.T) {
 	for _, mode := range []WarmMode{WarmCold, WarmStdinStreamJSON} {
-		w := &Worker{mode: mode, cwd: "/isolated", tool: fleet.Tool{Name: "agy"}, launch: agentlaunch.Launch{Tool: "agy", Args: []string{"--model", "fixture", "-p"}}}
+		w := &Worker{mode: mode, cwd: "/isolated", tool: fleet.Tool{Name: "agy", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "agy")}}, launch: agentlaunch.Launch{Tool: "agy", Args: []string{"--model", "fixture", "-p"}}}
 		args := w.argv("fixture prompt", "")
 		if !containsSequence(args, []string{"--new-project", "--add-dir", "/isolated", "--log-file", os.DevNull}) {
 			t.Fatal("Agy isolation missing")
@@ -88,7 +88,7 @@ func TestDoorIsolationArgv(t *testing.T) {
 			t.Fatal("Agy flags swallowed by prompt")
 		}
 	}
-	w := &Worker{mode: WarmCold, tool: fleet.Tool{Name: "muse"}, launch: agentlaunch.Launch{Tool: "muse", Args: []string{"exec"}}}
+	w := &Worker{mode: WarmCold, tool: fleet.Tool{Name: "muse", CLI: fleet.ToolCLI{Launch: seededGatewayLaunch(t, "muse")}}, launch: agentlaunch.Launch{Tool: "muse", Args: []string{"exec"}}}
 	args := w.argv("fixture prompt", "")
 	for _, flag := range []string{"--no-session-log", "--no-foreign-personal-context", "--disable-web-tools", "--disable-shell", "--disable-write"} {
 		if !containsSequence(args, []string{flag}) {
