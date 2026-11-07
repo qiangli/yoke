@@ -181,13 +181,17 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 	if base == nil {
 		base = baselineFS
 	}
-	// The seeded roster (models + agents) can be switched off; the tool
-	// launch contracts cannot — see SeedsEnv. Which kinds carry an embedded
-	// ring at all is declared in the kind table.
+	// The seeded roster (models + agents) and third-party tool contracts can
+	// be switched off; builtin tools (ycode/genie) and other mechanism kinds
+	// survive — see SeedsEnv.
 	spec, _ := kindByDir(noun)
-	seeded := spec.Seeded && (spec.Mechanism || !seedsOff())
+	seeded := spec.Seeded && (spec.Mechanism || !seedsOff() || noun == dirTools)
 	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil && seeded {
-		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
+		src := assetring.FileFS(sub, assetring.RingEmbedded, ext)
+		if noun == dirTools && toolSeedsOff() {
+			src = builtinToolSource(src)
+		}
+		out = append(out, src)
 	}
 	for _, dir := range sharedDirs(noun) {
 		out = append(out, withBshRecords(assetring.FileDir(dir, assetring.RingShared, ext), dir))
@@ -208,6 +212,62 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 		out = append(out, local)
 	}
 	return out
+}
+
+type builtinOnlySource struct {
+	assetring.Source
+	names []string
+	set   map[string]bool
+}
+
+func builtinToolSource(src assetring.Source) assetring.Source {
+	names, err := src.Names()
+	if err != nil {
+		return src
+	}
+	var builtinNames []string
+	builtinSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		body, ok := src.Body(n)
+		if !ok {
+			continue
+		}
+		t, err := ParseTool(n, body, src)
+		if err == nil && t.Builtin {
+			builtinNames = append(builtinNames, n)
+			builtinSet[n] = true
+		}
+	}
+	return &builtinOnlySource{
+		Source: src,
+		names:  builtinNames,
+		set:    builtinSet,
+	}
+}
+
+func (s *builtinOnlySource) Names() ([]string, error) {
+	return append([]string(nil), s.names...), nil
+}
+
+func (s *builtinOnlySource) Body(name string) ([]byte, bool) {
+	if !s.set[name] {
+		return nil, false
+	}
+	return s.Source.Body(name)
+}
+
+func (s *builtinOnlySource) File(name, rel string) ([]byte, bool) {
+	if !s.set[name] {
+		return nil, false
+	}
+	return s.Source.File(name, rel)
+}
+
+func (s *builtinOnlySource) Files(name string) ([]string, error) {
+	if !s.set[name] {
+		return nil, nil
+	}
+	return s.Source.Files(name)
 }
 
 // parseErr records an entry that could not be read. A catalog reports

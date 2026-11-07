@@ -40,14 +40,14 @@ func ringDir(t testing.TB) string {
 // per-noun $BASHY_*_DIR redirects so ambient environment can never route a
 // test's writes into the operator's real store.
 //
-// It also switches the seeded roster off ($BASHY_FLEET_SEEDS=off), so the
+// It also switches the seeded roster off ($BASHY_FLEET_SEEDS=roster), so the
 // fixture roster is the WHOLE roster: a family alias like `fable` resolves to
 // the fixture's fable5 no matter what the shipped seeds add above it. The tool
 // launch contracts stay embedded — the switch never drops those.
 func Ring(t testing.TB) string {
 	t.Helper()
 	dir := ringDir(t)
-	t.Setenv("BASHY_FLEET_SEEDS", "off")
+	t.Setenv("BASHY_FLEET_SEEDS", "roster")
 	t.Setenv("BASHY_MODELS_PATH", filepath.Join(dir, "models"))
 	t.Setenv("BASHY_AGENTS_PATH", filepath.Join(dir, "agents"))
 	root := t.TempDir()

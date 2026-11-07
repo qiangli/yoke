@@ -157,6 +157,9 @@ type Tool struct {
 	Kind            string   `yaml:"kind" json:"kind" doc:"tool kind: cli, func, web, or system"` // cli | func | web | system
 	Aliases         []string `yaml:"aliases,omitempty" json:"aliases,omitempty" doc:"alternate accepted names"`
 	Display         string   `yaml:"display,omitempty" json:"display,omitempty" doc:"human-facing label"`
+	// Builtin marks a first-party tool compiled into bashy rather than a
+	// droppable seed adapter. Under seeds-off, only builtin tools remain available.
+	Builtin bool `yaml:"builtin,omitempty" json:"builtin,omitempty" doc:"first-party tool compiled into bashy"`
 	// Hidden keeps a tool in the registry (still detected, still resolvable by
 	// explicit name) but omits it from `bashy tool` list/help unless --all.
 	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty" doc:"omit the tool from default listings"`

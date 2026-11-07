@@ -85,7 +85,7 @@ func TestKindTableDeclaresEveryNoun(t *testing.T) {
 		dir, dirEnv, pathEnv        string
 		seeded, mechanism, overlays bool
 	}{
-		KindTool:    {dirTools, "BASHY_TOOLS_DIR", "BASHY_TOOLS_PATH", true, true, true},
+		KindTool:    {dirTools, "BASHY_TOOLS_DIR", "BASHY_TOOLS_PATH", true, false, true},
 		KindModel:   {dirModels, "BASHY_MODELS_DIR", "BASHY_MODELS_PATH", true, false, true},
 		KindAgent:   {dirAgents, "BASHY_AGENTS_DIR", "BASHY_AGENTS_PATH", true, false, true},
 		KindPerson:  {dirPeople, "BASHY_PEOPLE_DIR", "BASHY_PEOPLE_PATH", true, false, true},

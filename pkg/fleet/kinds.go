@@ -112,7 +112,9 @@ func init() {
 			Lookup:    holder((*Catalog).Tool, func(t Tool) string { return t.Name }),
 			Names: listed(func(c *Catalog) ([]Tool, []error) { return c.Tools(false) },
 				func(t Tool) string { return t.Name }),
-			Seeded: true, Mechanism: true, Overlay: true,
+			// Tools are seeded; third-party tool contracts drop under seeds-off
+			// while builtin tools (ycode/genie) stay mechanism (catalog.go).
+			Seeded: true, Overlay: true,
 			Record: toolRecord(),
 		},
 		{
