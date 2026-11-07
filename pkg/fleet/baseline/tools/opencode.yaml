@@ -99,6 +99,7 @@ cli:
     # --auto. Config pre-seeding establishes project trust but does not answer
     # later tool permission requests, so governed acting sessions need both.
     exec: opencode run --auto --model {model} {prompt}
+    unsafe: {canonical: --auto}
     acp_exec: opencode acp
     prompt_position: last
     trust_preseed: opencode.json

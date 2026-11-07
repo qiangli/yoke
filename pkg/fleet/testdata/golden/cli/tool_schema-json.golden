@@ -325,6 +325,26 @@
     "description": "config path preseeded for workspace trust"
   },
   {
+    "path": "cli.launch.unsafe",
+    "type": "object",
+    "description": "tool kill-switch spelling: canonical flag and value-qualified unsafe flags"
+  },
+  {
+    "path": "cli.launch.unsafe.canonical",
+    "type": "string",
+    "description": "the tool's single kill-switch flag kept by normalization"
+  },
+  {
+    "path": "cli.launch.unsafe.values",
+    "type": "map[string][]string",
+    "description": "flag to values that disable the tool's approval gate or sandbox"
+  },
+  {
+    "path": "cli.launch.unsafe.values.\u003ckey\u003e",
+    "type": "[]string",
+    "description": "map value"
+  },
+  {
     "path": "cli.launch.version_probe_exec",
     "type": "string",
     "description": "version-probe argv template"

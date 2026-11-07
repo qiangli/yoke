@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // zcode's yolo is a flag WITH A VALUE. Neither token alone is a kill-switch, so a
@@ -47,5 +49,26 @@ func TestMuseCanonicalUnsafeFlag(t *testing.T) {
 	got := normalizeUnsafeFlags("muse", []string{"exec", "--dangerously-skip-permissions", "--yolo", "--yolo", "p"})
 	if want := []string{"exec", "--yolo", "p"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeUnsafeFlags(muse) = %v, want %v", got, want)
+	}
+}
+
+// A tool's declared unsafe spelling ADDS to the guard: a custom tool's own
+// value-qualified kill-switch is refused uncontained, and its canonical flag
+// wins normalization over the core fallback table.
+func TestDeclaredUnsafeSpecAddsToGuard(t *testing.T) {
+	t.Setenv(UnsafeLaunchEnv, "")
+	spec := fleet.ToolUnsafe{Canonical: "--trust-all", Values: map[string][]string{"--approval": {"never"}}}
+	opt := Options{Containerized: func() bool { return false }, Unsafe: spec}
+	if err := GuardUnsafeArgsFor("custom", []string{"--approval", "never", "p"}, opt); err == nil {
+		t.Fatal("declared value-qualified kill-switch passed the guard")
+	}
+	if err := GuardUnsafeArgsFor("custom", []string{"--approval", "ask", "p"}, opt); err != nil {
+		t.Fatalf("safe value refused: %v", err)
+	}
+	if got := readOnlyArgsWith(spec, "custom", []string{"--approval=never", "p"}); !reflect.DeepEqual(got, []string{"p"}) {
+		t.Fatalf("readOnlyArgsWith = %v", got)
+	}
+	if got := normalizeUnsafeFlagsWith(fleet.ToolUnsafe{Canonical: "--yolo"}, "claude", []string{"--dangerously-skip-permissions", "--yolo", "p"}); !reflect.DeepEqual(got, []string{"--yolo", "p"}) {
+		t.Fatalf("declared canonical did not win: %v", got)
 	}
 }

@@ -100,6 +100,7 @@ cli:
     # gemini-3.1-pro-low, …), so adding the flag would kill the whole agy fleet
     # at once. To change effort, bind a different model id.
     exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
+    unsafe: {canonical: --dangerously-skip-permissions}
     # AGY otherwise may retain/select a different project despite the process
     # cwd. Bind the allocated clone explicitly, before model/prompt argv.
     # --add-dir makes the allocated clone visible, but does not select it:

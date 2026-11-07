@@ -133,6 +133,7 @@ cli:
     # sandbox bypass by default (operator decision, 2026-09-30). The template's
     # sandbox remains available for an explicit safe sandbox override.
     exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
+    unsafe: {canonical: --dangerously-bypass-approvals-and-sandbox}
     # These grants apply when an orchestrator allocates a workspace and the
     # caller explicitly selects workspace-write. With the default bypass they
     # have no effect. They were measured on codex-cli 0.157.1: without them,

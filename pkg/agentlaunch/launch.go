@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,6 +82,10 @@ type Options struct {
 	// when invocations run concurrently. It only ever WIDENS what the env opt-in
 	// and AllowUnsafe already decide; ReadOnly still strips regardless.
 	Containerized func() bool
+
+	// Unsafe is the resolved tool's declared kill-switch spelling (catalog
+	// cli.launch.unsafe). Zero means "not declared": the core tables apply.
+	Unsafe fleet.ToolUnsafe
 }
 
 // containerized returns the request's containment probe result, falling back
@@ -472,6 +477,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			return lnch, fmt.Errorf("agent launch: tool %q needs a context window of at least %d tokens, but model %q declares %d; bind a model with a larger window (or raise context_length if the server is configured for more)",
 				tool.Name, min, lnch.ModelName, boundContext)
 		}
+		opt.Unsafe = tool.CLI.Launch.Unsafe
 		if lnch.Model != "" && !tool.TakesModel() {
 			return lnch, fmt.Errorf("agent launch: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
 				tool.Name, name, fleet.ModelToken)
@@ -653,6 +659,29 @@ var UnsafeLaunchValues = map[string]map[string]string{
 // unsafeAt reports whether args[i] begins an unsafe flag: its display spelling,
 // the reason, and how many tokens it spans (1 or 2).
 func unsafeAt(args []string, i int) (string, string, int, bool) {
+	return unsafeAtWith(fleet.ToolUnsafe{}, args, i)
+}
+
+// unsafeAtWith is unsafeAt plus a tool's declared value-qualified flags. A
+// declaration can only add to the core tables.
+func unsafeAtWith(spec fleet.ToolUnsafe, args []string, i int) (string, string, int, bool) {
+	if a, why, span, ok := unsafeAtCore(args, i); ok {
+		return a, why, span, true
+	}
+	a := args[i]
+	if flag, val, ok := strings.Cut(a, "="); ok {
+		if slices.Contains(spec.Values[flag], val) {
+			return a, "disables the agent's approval gate (declared by the tool)", 1, true
+		}
+		return "", "", 0, false
+	}
+	if vals, ok := spec.Values[a]; ok && i+1 < len(args) && slices.Contains(vals, args[i+1]) {
+		return a + " " + args[i+1], "disables the agent's approval gate (declared by the tool)", 2, true
+	}
+	return "", "", 0, false
+}
+
+func unsafeAtCore(args []string, i int) (string, string, int, bool) {
 	a := args[i]
 	if why, ok := UnsafeLaunchFlags[a]; ok {
 		return a, why, 1, true
@@ -682,7 +711,7 @@ func GuardUnsafeArgsFor(tool string, args []string, opt Options) error {
 		return nil
 	}
 	for i := range args {
-		a, why, _, bad := unsafeAt(args, i)
+		a, why, _, bad := unsafeAtWith(opt.Unsafe, args, i)
 		if !bad {
 			continue
 		}
@@ -716,13 +745,13 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 	}
 	switch {
 	case opt.ReadOnly:
-		args = ReadOnlyArgs(tool, args) // a reviewer must never write — always strip
+		args = readOnlyArgsWith(opt.Unsafe, tool, args) // a reviewer must never write — always strip
 	case opt.Attended && !allowed:
-		args = StripKillSwitches(tool, args) // a human is at the terminal → approval ON
+		args = stripKillSwitchesWith(opt.Unsafe, args) // a human is at the terminal → approval ON
 	}
 	args = ApplySandbox(tool, args, opt)
 	args = applyWritableRoots(tool, args, opt.WritableRoots)
-	args = normalizeUnsafeFlags(tool, args)
+	args = normalizeUnsafeFlagsWith(opt.Unsafe, tool, args)
 	if opt.DryRun {
 		return args, nil
 	}
@@ -765,9 +794,13 @@ func applyWritableRoots(tool string, args, roots []string) []string {
 // to refuse. A `--sandbox danger-full-access` pair is downgraded to the tool's
 // default (drop both tokens), since that too disables containment.
 func StripKillSwitches(tool string, args []string) []string {
+	return stripKillSwitchesWith(fleet.ToolUnsafe{}, args)
+}
+
+func stripKillSwitchesWith(spec fleet.ToolUnsafe, args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
-		if _, _, span, unsafe := unsafeAt(args, i); unsafe {
+		if _, _, span, unsafe := unsafeAtWith(spec, args, i); unsafe {
 			i += span - 1 // drop a value too; the tool falls back to its default
 			continue
 		}
@@ -777,10 +810,14 @@ func StripKillSwitches(tool string, args []string) []string {
 }
 
 func ReadOnlyArgs(tool string, args []string) []string {
+	return readOnlyArgsWith(fleet.ToolUnsafe{}, tool, args)
+}
+
+func readOnlyArgsWith(spec fleet.ToolUnsafe, tool string, args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		if args[i] != "--sandbox" {
-			if _, _, span, unsafe := unsafeAt(args, i); unsafe {
+			if _, _, span, unsafe := unsafeAtWith(spec, args, i); unsafe {
 				i += span - 1
 				continue
 			}
@@ -1091,11 +1128,20 @@ var canonicalUnsafeFlag = map[string]string{
 // old template can otherwise combine a former spelling with a newly applied
 // one. Keep at most one canonical flag and discard another tool's spelling.
 func normalizeUnsafeFlags(tool string, args []string) []string {
-	canonical := canonicalUnsafeFlag[tool]
+	return normalizeUnsafeFlagsWith(fleet.ToolUnsafe{}, tool, args)
+}
+
+// normalizeUnsafeFlagsWith prefers the tool's declared canonical spelling;
+// canonicalUnsafeFlag is the fallback for a tool that declares none.
+func normalizeUnsafeFlagsWith(spec fleet.ToolUnsafe, tool string, args []string) []string {
+	canonical := strings.TrimSpace(spec.Canonical)
+	if canonical == "" {
+		canonical = canonicalUnsafeFlag[tool]
+	}
 	seen := make(map[string]bool)
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
-		arg, _, span, unsafe := unsafeAt(args, i)
+		arg, _, span, unsafe := unsafeAtWith(spec, args, i)
 		if !unsafe || span != 1 || arg != args[i] || strings.Contains(arg, "=") {
 			// Value-qualified flags (`--mode yolo`, `--sandbox ...`) are a tool's
 			// own spelling, not an interchangeable kill-switch: keep them as is.

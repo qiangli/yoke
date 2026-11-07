@@ -531,6 +531,12 @@ type ToolLaunch struct {
 	// EnvMarkers are environment variables whose presence identifies this
 	// tool as the one currently running.
 	EnvMarkers []string `yaml:"env_markers,omitempty" json:"env_markers,omitempty" doc:"environment variables identifying the tool"`
+	// Unsafe declares this tool's own kill-switch spelling (agent-cli-adapters
+	// design): Canonical is the single flag kept when a template carries
+	// several spellings, Values adds value-qualified unsafe flags (flag ->
+	// values) to the core's guard. Declarations only ever ADD to what the core
+	// refuses; they can never make a flag safe.
+	Unsafe ToolUnsafe `yaml:"unsafe,omitempty" json:"unsafe,omitzero" doc:"tool kill-switch spelling: canonical flag and value-qualified unsafe flags"`
 }
 
 type ToolWatchdog struct {
@@ -1438,3 +1444,9 @@ const (
 	FlatPlanDiscountNum = 1
 	FlatPlanDiscountDen = 2
 )
+
+// ToolUnsafe is a tool's declared kill-switch spelling.
+type ToolUnsafe struct {
+	Canonical string              `yaml:"canonical,omitempty" json:"canonical,omitempty" doc:"the tool's single kill-switch flag kept by normalization"`
+	Values    map[string][]string `yaml:"values,omitempty" json:"values,omitempty" doc:"flag to values that disable the tool's approval gate or sandbox"`
+}

@@ -5,6 +5,7 @@ cli:
   binary: zcode
   launch:
     exec: zcode --mode yolo -p {prompt}
+    unsafe: {values: {--mode: [yolo]}}
     prompt_position: last
     key_env: [ZCODE_API_KEY]
     env:

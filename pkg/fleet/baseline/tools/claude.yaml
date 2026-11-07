@@ -104,6 +104,7 @@ cli:
       field: type
       values: [result]
     exec: claude --dangerously-skip-permissions --model {model} -p {prompt}
+    unsafe: {canonical: --dangerously-skip-permissions}
     steer_exec: claude --dangerously-skip-permissions --model {model}
     # Context-inheriting fork (`delegate self`): --fork-session branches a NEW session
     # from the current one, inheriting the full transcript; -p runs it headless and it

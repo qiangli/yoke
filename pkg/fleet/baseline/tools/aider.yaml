@@ -53,6 +53,7 @@ cli:
   binary: aider
   launch:
     exec: aider --yes-always --no-git --model {model} --message {prompt}
+    unsafe: {canonical: --yes-always}
     prompt_position: last
     trust_preseed: none
     steer_exec: aider --yes-always --no-git --model {model}
