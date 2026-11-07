@@ -31,7 +31,9 @@ Credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
 `AWS_DEFAULT_REGION`, else `us-east-1`, and must match the model's endpoint.
 `--expires SECONDS` (1..43200, default 43200) shortens the key.
 
-`check.sh` is the offline known-answer check. The signature was cross-checked
-against `pkg/provider/aws` `SigningKey`/`StringToSign`. A live Bedrock call is
-still needed to confirm the empty-payload hash, which differs from S3's
-`UNSIGNED-PAYLOAD`.
+`check.sh` is the offline known-answer check; its signature was cross-checked
+against `pkg/provider/aws` `SigningKey`/`StringToSign`. Verified live
+2026-11-07 against bedrock-runtime us-east-1: only a POST presign with the
+empty-payload SHA-256 authenticates (GET, or S3's `UNSIGNED-PAYLOAD`, gets 401
+"API Key is valid"). So `pkg/provider/aws.PresignURL` (GET-style, unsigned
+payload) is not a substitute.

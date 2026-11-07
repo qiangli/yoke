@@ -1,7 +1,7 @@
 #!/usr/bin/env -S bashy --bashsharp
 # bedrock-key — print an AWS Bedrock short-term API key minted from this
 # host's AWS credentials. The key is "bedrock-api-key-" + base64 of a SigV4
-# query-presigned GET https://bedrock.amazonaws.com/?Action=CallWithBearerToken
+# query-presigned POST https://bedrock.amazonaws.com/?Action=CallWithBearerToken
 # (service bedrock, empty-payload hash, <=12h, region-bound) + "&Version=1",
 # the format AWS's aws-bedrock-token-generator emits. Minting is local
 # arithmetic: no AWS call, nothing stored.
@@ -68,7 +68,7 @@ func Mint(region, akid, secret, session string, expires int, at int) (string, er
 	}
 	query := strings.Join(parts, "&")
 	empty := sha256.Sum256(nil)
-	creq := "GET\n/\n" + query + "\nhost:bedrock.amazonaws.com\n\nhost\n" + hex.EncodeToString(empty[:])
+	creq := "POST\n/\n" + query + "\nhost:bedrock.amazonaws.com\n\nhost\n" + hex.EncodeToString(empty[:])
 	ch := sha256.Sum256([]byte(creq))
 	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + scope + "\n" + hex.EncodeToString(ch[:])
 	k := mac(mac(mac(mac([]byte("AWS4"+secret), day), region), "bedrock"), "aws4_request")
