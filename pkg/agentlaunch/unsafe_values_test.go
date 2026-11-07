@@ -72,3 +72,17 @@ func TestDeclaredUnsafeSpecAddsToGuard(t *testing.T) {
 		t.Fatalf("declared canonical did not win: %v", got)
 	}
 }
+
+// A model record (possibly from a shared/org ring) may set provider-route
+// switches only: never a credential, never a bashy control variable.
+func TestSafeModelEnv(t *testing.T) {
+	t.Setenv("BASHY_ALLOW_AGENT_SECRETS", "")
+	got := safeModelEnv([]string{
+		"CLAUDE_CODE_USE_BEDROCK=1", "AWS_REGION=us-east-1",
+		"BASHY_ALLOW_UNSAFE_AGENT_LAUNCH=1", "WEAVE_AGENT=x",
+		"AWS_BEARER_TOKEN_BEDROCK=k", "OPENAI_API_KEY=k", "malformed",
+	})
+	if want := []string{"CLAUDE_CODE_USE_BEDROCK=1", "AWS_REGION=us-east-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("safeModelEnv = %v, want %v", got, want)
+	}
+}

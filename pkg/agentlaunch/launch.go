@@ -457,7 +457,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		// Model-scoped env last: an opt-in provider route's own switches,
 		// appended ONLY when the bound model declares them, so a native
 		// launch (no model, or a native model with no env) is untouched.
-		lnch.Env = append(lnch.Env, boundModelEnv...)
+		lnch.Env = append(lnch.Env, safeModelEnv(boundModelEnv)...)
 		lnch.FailEvents = tool.CLI.Launch.EventsFail
 		// A BOUND MODEL REFUSES ACP, and the caller falls to the rung below —
 		// which delivers the model the way it always has.
@@ -1197,4 +1197,22 @@ func RegistrationRefusal(name string) error {
 	}
 	return fmt.Errorf("agent launch: %q is not a registered Bashy agent; register it before launching:\n  bashy agent add %s --tool %s --model %s",
 		name, name, tool, model)
+}
+
+// safeModelEnv keeps only the provider-route switches a model record may set.
+// A model can come from a shared or org ring, so its env must never carry a
+// credential (those are granted, never declared) nor steer bashy itself — a
+// BASHY_*/WEAVE_* name could, for example, accept the unsafe-launch risk on the
+// operator's behalf. Malformed pairs are dropped.
+func safeModelEnv(env []string) []string {
+	var out []string
+	for _, kv := range secrets.ScrubAgentEnv(env) {
+		name, _, ok := strings.Cut(kv, "=")
+		upper := strings.ToUpper(strings.TrimSpace(name))
+		if !ok || upper == "" || strings.HasPrefix(upper, "BASHY_") || strings.HasPrefix(upper, "WEAVE_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
