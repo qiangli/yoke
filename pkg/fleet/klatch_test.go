@@ -21,28 +21,33 @@ func TestKlatchManagedServicePin(t *testing.T) {
 	if m.Unverified() || m.License != "Apache-2.0" || m.LicenseURL == "" {
 		t.Fatal("klatch needs a signed, licensed service pin")
 	}
-	if m.Version != "1.2.6-bashy.1" {
-		t.Fatalf("version=%q, want 1.2.6-bashy.1", m.Version)
+	if m.Version != "1.2.7-bashy.1" {
+		t.Fatalf("version=%q, want 1.2.7-bashy.1", m.Version)
 	}
-	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.6-1/"
-	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.6-1"
+	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.7-1/"
+	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.7-1"
 	if m.Sigstore.Identity != identity || m.Sigstore.Issuer != "https://token.actions.githubusercontent.com" {
 		t.Fatalf("wrong signing identity: %+v", m.Sigstore)
 	}
 	assets := map[string]struct{ file, sha256 string }{
-		"linux/amd64":  {"klatch-v1.2.6-linux-amd64.tar.gz", "d1b72f1b2aa689634ba904e33651beba2d21d0eb95fe6afdf40f941cd7ea9bb7"},
-		"linux/arm64":  {"klatch-v1.2.6-linux-arm64.tar.gz", "e202c3b61f3fda8c48b07bf9b3946635c478588d2e1cf6101ac93fecf9304493"},
-		"darwin/amd64": {"klatch-v1.2.6-darwin-amd64.tar.gz", "8d87e4a0917a0cd852d462b7ada387c0814fd4fd4ef6a2a5497358a634305300"},
-		"darwin/arm64": {"klatch-v1.2.6-darwin-arm64.tar.gz", "1a37e4eb5d00749824257f3d99dfe2b474e59480aec0da18548fe4b14ffb157d"},
+		"linux/amd64":   {"klatch-v1.2.7-linux-amd64.tar.gz", "da6f37c19bee9894e54f67bd61e1b4a88036642b661e8eb106d57c4da63bfdfd"},
+		"linux/arm64":   {"klatch-v1.2.7-linux-arm64.tar.gz", "4903ee0415324452ec79bd6ccf18a835fcee96df7d775b323ea513b5e866603e"},
+		"darwin/amd64":  {"klatch-v1.2.7-darwin-amd64.tar.gz", "5ac930f4426832bbc42ab82e74e680e10dc118a144400c6a72a94da6796438c8"},
+		"darwin/arm64":  {"klatch-v1.2.7-darwin-arm64.tar.gz", "55fb9dfba25445bc17447a4cce93c60ce8f9edb1dc0d54958e4615cfbaba1b57"},
+		"windows/amd64": {"klatch-v1.2.7-windows-amd64.tar.gz", "ea4f5ffdad987869d1767d69e6db24e9342b585bc2aedfaa673fe5e49430c565"},
 	}
 	for platform, want := range assets {
 		a, ok := m.Assets[platform]
-		if !ok || a.SHA256 != want.sha256 || a.Member != "klatch" || a.URL != release+want.file {
+		member := "klatch"
+		if strings.HasPrefix(platform, "windows/") {
+			member = "klatch.exe"
+		}
+		if !ok || a.SHA256 != want.sha256 || a.Member != member || a.URL != release+want.file {
 			t.Errorf("%s: invalid signed archive pin: %+v", platform, a)
 		}
 	}
 	if len(m.Assets) != len(assets) {
-		t.Errorf("assets=%d, want four platforms", len(m.Assets))
+		t.Errorf("assets=%d, want five platforms", len(m.Assets))
 	}
 	if _, err := tl.BinmgrTool(); err != nil {
 		t.Fatal(err)
