@@ -73,9 +73,13 @@ func (g *delegateGuard) check(l Launch) error {
 	return nil
 }
 
-// firstPartyTool reports bashy's own agent (fleet tool ycode, alias genie). It
-// authenticates its model itself, so no vendor subscription login applies.
-func firstPartyTool(name string) bool { return name == "ycode" || name == "genie" }
+// firstPartyTool reports whether the named tool is a first-party built-in
+// compiled into bashy (fleet tool ycode, alias genie). It authenticates its
+// model itself, so no vendor subscription login applies.
+func firstPartyTool(name string) bool {
+	t, ok := newCatalog().Tool(name)
+	return ok && t.Builtin
+}
 
 func firstPartyAlias(name string) string {
 	if name == "ycode" {

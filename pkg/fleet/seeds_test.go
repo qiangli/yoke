@@ -71,22 +71,81 @@ func TestEmbeddedPegsCarryASeason(t *testing.T) {
 	}
 }
 
-// BASHY_FLEET_SEEDS=off drops the seeded roster and nothing else: the tool
-// launch contracts are the mechanism and stay embedded. This is the switch
-// fleettest.Ring relies on, and what an org that publishes its own catalog
-// sets on its hosts.
-func TestSeedsSwitchDropsRosterNotContracts(t *testing.T) {
+// BASHY_FLEET_SEEDS=off drops the seeded roster and third-party tool
+// contracts; only first-party builtin tools (ycode/genie) stay mechanism.
+func TestSeedsSwitchDropsThirdPartyTools(t *testing.T) {
+	// Seeds on: full baseline set is present.
+	cOn := New(WithRoot(t.TempDir()), WithoutCloudOverlay())
+	toolsOn, errs := cOn.Tools(true)
+	if len(errs) != 0 || len(toolsOn) == 0 {
+		t.Fatalf("seeds on: tools parse error: %v", errs)
+	}
+	if len(toolsOn) < 10 {
+		t.Fatalf("seeds on: tools = %d, want >= 10", len(toolsOn))
+	}
+
+	// Seeds off: models and agents are dropped; Tools() contains only ycode.
 	t.Setenv(SeedsEnv, "off")
-	c := New(WithRoot(t.TempDir()), WithoutCloudOverlay())
-	if models, _ := c.Models(); len(models) != 0 {
+	cOff := New(WithRoot(t.TempDir()), WithoutCloudOverlay())
+	if models, _ := cOff.Models(); len(models) != 0 {
 		t.Fatalf("seeds off: models = %d, want 0", len(models))
 	}
-	if agents, _ := c.Agents(); len(agents) != 0 {
+	if agents, _ := cOff.Agents(); len(agents) != 0 {
 		t.Fatalf("seeds off: agents = %d, want 0", len(agents))
 	}
-	tools, errs := c.Tools(true)
-	if len(errs) != 0 || len(tools) == 0 {
-		t.Fatalf("seeds off must keep the tool launch contracts: %d tools, errs %v", len(tools), errs)
+	toolsOff, errs := cOff.Tools(true)
+	if len(errs) != 0 {
+		t.Fatalf("seeds off: tools errs %v", errs)
+	}
+	if len(toolsOff) != 1 || toolsOff[0].Name != "ycode" {
+		t.Fatalf("seeds off: tools = %v, want only [ycode]", toolsOff)
+	}
+	// Tools(false) should also return only ycode.
+	cliTools, errs := cOff.Tools(false)
+	if len(errs) != 0 || len(cliTools) != 1 || cliTools[0].Name != "ycode" {
+		t.Fatalf("seeds off: cli tools = %v, want only [ycode]", cliTools)
+	}
+	// Tool("ycode") and Tool("genie") resolve; third-party tools do not.
+	if _, ok := cOff.Tool("ycode"); !ok {
+		t.Errorf("seeds off: Tool(ycode) does not resolve")
+	}
+	if _, ok := cOff.Tool("genie"); !ok {
+		t.Errorf("seeds off: Tool(genie) alias does not resolve")
+	}
+	if _, ok := cOff.Tool("claude"); ok {
+		t.Errorf("seeds off: Tool(claude) should not resolve")
+	}
+}
+
+// RULE: each tool's native default model/subscription launch must render
+// byte-identical argv/env before and after your change. Pins ycode.
+func TestYcodeNativeLaunchContractPinned(t *testing.T) {
+	c := New(WithRoot(t.TempDir()), WithoutCloudOverlay())
+	tool, ok := c.Tool("ycode")
+	if !ok {
+		t.Fatal("ycode tool not found")
+	}
+	if !tool.Builtin {
+		t.Error("ycode must have Builtin=true")
+	}
+	if got := tool.CLI.Binary; got != "bashy" {
+		t.Errorf("binary = %q, want bashy", got)
+	}
+	if got := tool.CLI.Launch.Exec; got != "bashy genie -m {model} {prompt}" {
+		t.Errorf("exec = %q, want bashy genie -m {model} {prompt}", got)
+	}
+	if got := tool.CLI.Launch.SteerExec; got != "bashy ycode -m {model}" {
+		t.Errorf("steer_exec = %q, want bashy ycode -m {model}", got)
+	}
+	if got := tool.CLI.Launch.ACPExec; got != "bashy ycode acp" {
+		t.Errorf("acp_exec = %q, want bashy ycode acp", got)
+	}
+	if got := tool.CLI.Launch.PromptPosition; got != "last" {
+		t.Errorf("prompt_position = %q, want last", got)
+	}
+	if !tool.CLI.Launch.SupportsSay || !tool.CLI.Launch.SupportsGracefulQuit {
+		t.Errorf("supports_say=%v, supports_graceful_quit=%v, want true",
+			tool.CLI.Launch.SupportsSay, tool.CLI.Launch.SupportsGracefulQuit)
 	}
 }
 

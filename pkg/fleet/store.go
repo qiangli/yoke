@@ -67,15 +67,28 @@ func NounDir(root, noun string) string {
 	return filepath.Join(root, noun)
 }
 
-// SeedsEnv is the switch that drops the seeded model + agent roster from the
-// embedded ring. The tool launch contracts are never dropped: they are the
-// mechanism, the roster is data. An org that wants its hosts to see only the
-// catalog it publishes (`sync`) or mounts ($BASHY_*_PATH) sets it to `off`;
-// the test ring sets it so a fixture roster is the whole roster.
+// SeedsEnv is the switch that drops the seeded model + agent roster and
+// third-party tool contracts from the embedded ring. Only first-party builtin
+// tools (ycode/genie) and other mechanism kinds survive seeds-off (`off`).
+// An org that wants its hosts to see only the catalog it publishes (`sync`)
+// or mounts ($BASHY_*_PATH) sets it to `off`; the test ring sets it to
+// `roster` so a fixture roster is the whole roster while tool contracts stay
+// embedded.
 const SeedsEnv = "BASHY_FLEET_SEEDS"
 
 // seedsOff reports whether the seeded roster is switched off for this process.
 func seedsOff() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(SeedsEnv))) {
+	case "off", "none", "0", "false", "no", "roster":
+		return true
+	}
+	return false
+}
+
+// toolSeedsOff reports whether third-party tool contracts are dropped from
+// the embedded ring. BASHY_FLEET_SEEDS=off (or none, 0, false, no) drops them;
+// BASHY_FLEET_SEEDS=roster keeps them for the test fixture ring.
+func toolSeedsOff() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(SeedsEnv))) {
 	case "off", "none", "0", "false", "no":
 		return true

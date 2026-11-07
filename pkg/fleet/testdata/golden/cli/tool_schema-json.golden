@@ -10,6 +10,11 @@
     "description": "list element"
   },
   {
+    "path": "builtin",
+    "type": "bool",
+    "description": "first-party tool compiled into bashy"
+  },
+  {
     "path": "cli",
     "type": "object",
     "description": "command-line harness settings"

@@ -73,7 +73,7 @@ echo delegated
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cat := newCatalog()
-	if err := cat.SaveTool(fleet.Tool{Name: vendor, Aliases: aliasesFor(vendor), Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: vendor, Launch: fleet.ToolLaunch{Exec: vendor + " --model {model} {prompt}", Env: []string{"OPENAI_API_KEY=recipe-secret"}}}}); err != nil {
+	if err := cat.SaveTool(fleet.Tool{Name: vendor, Aliases: aliasesFor(vendor), Builtin: vendor == "ycode", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: vendor, Launch: fleet.ToolLaunch{Exec: vendor + " --model {model} {prompt}", Env: []string{"OPENAI_API_KEY=recipe-secret"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	return marker

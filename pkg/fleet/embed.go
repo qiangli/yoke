@@ -38,7 +38,9 @@ const baselineRoot = "baseline"
 //
 // The tools are the single source of truth for the launch contracts,
 // capability priors, and env markers that used to be duplicated across
-// pkg/chat, pkg/weave, pkg/capability, and pkg/skills.
+// pkg/chat, pkg/weave, pkg/capability, and pkg/skills. Third-party tool
+// contracts are droppable seeds (BASHY_FLEET_SEEDS=off drops them); only
+// first-party builtin tools (ycode/genie) stay mechanism.
 //
 //go:embed baseline/tools/*.yaml baseline/models/*.yaml baseline/agents/*.yaml baseline/plans/*.yaml baseline/services/*.yaml baseline/adapters/*.yaml baseline/infra/*.yaml baseline/rosters/*.yaml
 var baselineFS embed.FS
