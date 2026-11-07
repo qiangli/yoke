@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -206,6 +207,18 @@ func promoted(repo *gogit.Repository, head, base plumbing.Hash, wanted string) (
 	return false, nil
 }
 
+func validPromotionRef(ref plumbing.ReferenceName) bool {
+	if ref.Validate() != nil {
+		return false
+	}
+	for _, part := range strings.Split(ref.String(), "/") {
+		if strings.HasPrefix(part, "-") {
+			return false
+		}
+	}
+	return true
+}
+
 func (s Service) incomingRemote(ctx context.Context, tier string) (*gogit.Repository, *gogit.Remote, []*plumbing.Reference, plumbing.Hash, error) {
 	home, err := s.home()
 	if err != nil {
@@ -243,6 +256,9 @@ func (s Service) incomingRemote(ctx context.Context, tier string) (*gogit.Reposi
 	}
 	var specs []config.RefSpec
 	for _, r := range refs {
+		if !validPromotionRef(r.Name()) {
+			continue
+		}
 		if r.Name() == branch || strings.HasPrefix(r.Name().String(), "refs/heads/shape-submit/") || strings.HasPrefix(r.Name().String(), "refs/tags/") {
 			specs = append(specs, config.RefSpec("+"+r.Name().String()+":refs/shape-incoming/"+tier+"/"+strings.TrimPrefix(r.Name().String(), "refs/")))
 		}
@@ -272,6 +288,10 @@ func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, e
 	}
 	for _, r := range refs {
 		name := r.Name().String()
+		if !validPromotionRef(r.Name()) {
+			out = append(out, IncomingChange{Kind: "change", Ref: name, Status: "warning", Warning: "invalid remote ref"})
+			continue
+		}
 		if strings.HasPrefix(name, "refs/heads/shape-submit/") {
 			id := strings.TrimPrefix(name, "refs/heads/shape-submit/")
 			commit, e := repo.CommitObject(r.Hash())
@@ -291,7 +311,8 @@ func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, e
 			}
 			present, e := promoted(repo, base, parent.Hash, patch)
 			if e != nil {
-				return nil, e
+				out = append(out, IncomingChange{Kind: "change", ID: id, Ref: name, Title: strings.Split(commit.Message, "\n")[0], Status: "warning", Warning: e.Error()})
+				continue
 			}
 			if !present {
 				out = append(out, IncomingChange{Kind: "change", ID: id, Ref: name, Title: strings.Split(commit.Message, "\n")[0], Status: "incoming"})
@@ -336,7 +357,11 @@ func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, e
 				queue = append(queue, c.ParentHashes...)
 			}
 			if count > 0 {
-				out = append(out, IncomingChange{Kind: "commits", ID: fmt.Sprint(count), Ref: name, Title: strings.Join(titles, "; "), Status: "incoming"})
+				id := fmt.Sprint(count)
+				if len(queue) > 0 {
+					id += "+"
+				}
+				out = append(out, IncomingChange{Kind: "commits", ID: id, Ref: name, Title: strings.Join(titles, "; "), Status: "incoming"})
 			}
 		} else if strings.HasPrefix(name, "refs/tags/") {
 			tag := strings.TrimPrefix(name, "refs/tags/")
@@ -355,6 +380,9 @@ func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, e
 }
 
 func (s Service) Pull(ctx context.Context, tier, ref string) (PullResult, error) {
+	if !validPromotionRef(plumbing.ReferenceName(ref)) {
+		return PullResult{}, fmt.Errorf("shape: invalid incoming ref %q", ref)
+	}
 	if !strings.HasPrefix(ref, "refs/heads/shape-submit/") && !strings.HasPrefix(ref, "refs/tags/") {
 		return PullResult{}, fmt.Errorf("shape: unsupported incoming ref %q", ref)
 	}
@@ -389,6 +417,7 @@ func (s Service) Pull(ctx context.Context, tier, ref string) (PullResult, error)
 			return PullResult{}, err
 		}
 	}
+	pruneIncoming(root, dir)
 	checkout := filepath.Join(dir, "work")
 	{
 		clone, e := gogit.PlainInit(checkout, false)
@@ -414,6 +443,38 @@ func (s Service) Pull(ctx context.Context, tier, ref string) (PullResult, error)
 	}
 	return PullResult{Kind: "change", Path: checkout}, nil
 }
+
+// pruneIncoming keeps the five newest completed checkouts, plus the current one.
+func pruneIncoming(root, current string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	type checkout struct {
+		path string
+		mod  time.Time
+	}
+	var old []checkout
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "incoming-") {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		if path == current {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		old = append(old, checkout{path, info.ModTime()})
+	}
+	sort.Slice(old, func(i, j int) bool { return old[i].mod.After(old[j].mod) })
+	for i := 4; i < len(old); i++ {
+		_ = os.RemoveAll(old[i].path)
+	}
+}
+
 func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, error) {
 	home, err := s.home()
 	if err != nil {
@@ -479,7 +540,8 @@ func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, e
 		}
 		present, e := promoted(repo, head, base.Hash, id)
 		if e != nil {
-			return nil, e
+			out = append(out, OutgoingChange{ID: v.ID, Title: strings.Split(candidate.Message, "\n")[0], Base: v.BaseRevision, Candidate: v.ProposalRevision, Evidence: v.Evidence, Status: map[string]string{tier: "warning"}, Warning: e.Error()})
+			continue
 		}
 		if present {
 			continue

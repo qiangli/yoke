@@ -2,6 +2,7 @@ package shape
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,10 +138,20 @@ func TestPromotionIncomingPull(t *testing.T) {
 	if err := src.SetTier(s.Options.Home, s.App.Name, "upstream", bare); err != nil {
 		t.Fatal(err)
 	}
-	s.Options.InstalledVersion = "v1.0.0"
 	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1.1.0"), base)); err != nil {
 		t.Fatal(err)
 	}
+	// The caller must set InstalledVersion to receive release comparisons.
+	withoutVersion, err := s.Incoming(context.Background(), "upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range withoutVersion {
+		if item.Kind == "release" {
+			t.Fatalf("release without installed version: %+v", item)
+		}
+	}
+	s.Options.InstalledVersion = "v1.0.0"
 	items, err := s.Incoming(context.Background(), "upstream")
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +182,23 @@ func TestPromotionIncomingPull(t *testing.T) {
 	head, err := checkout.Head()
 	if err != nil || head.Hash().String() != v.ProposalRevision {
 		t.Fatalf("checkout: %v %v", head, err)
+	}
+	// The remote default branch has a commit absent from the local base.
+	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("master"), plumbing.NewHash(v.ProposalRevision))); err != nil {
+		t.Fatal(err)
+	}
+	items, err = s.Incoming(context.Background(), "upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits := false
+	for _, item := range items {
+		if item.Kind == "commits" && item.ID == "1" {
+			commits = true
+		}
+	}
+	if !commits {
+		t.Fatalf("missing default branch commits: %+v", items)
 	}
 	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("master"), plumbing.NewHash(v.ProposalRevision))); err != nil {
 		t.Fatal(err)
@@ -282,4 +310,33 @@ func TestPromotionOutgoingMasterAndPush(t *testing.T) {
 		t.Fatalf("stale: %+v", changes)
 	}
 
+}
+
+func TestIncomingRefValidationAndRetention(t *testing.T) {
+	for _, name := range []string{"refs/heads/shape-submit/a..b", "refs/heads/shape-submit/-bad", "refs/tags/a.lock", "refs/tags/a@{b", "refs/tags/a\x01b"} {
+		if validPromotionRef(plumbing.ReferenceName(name)) {
+			t.Errorf("accepted %q", name)
+		}
+	}
+	root := t.TempDir()
+	for i := 0; i < 8; i++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("incoming-%02d", i)), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(root, "incoming-08")
+	if err := os.Mkdir(current, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pruneIncoming(root, current)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 5 {
+		t.Fatalf("retained %d checkouts", len(entries))
+	}
+	if _, err := os.Stat(current); err != nil {
+		t.Fatal(err)
+	}
 }

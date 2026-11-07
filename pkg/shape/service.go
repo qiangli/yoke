@@ -46,7 +46,7 @@ type App struct {
 }
 type Options struct {
 	Home, WorkRoot   string
-	InstalledVersion string
+	InstalledVersion string // Caller must set this for Incoming release comparisons.
 	Delegate         Delegator
 	Verifier         Verifier
 	Activator        Activator
