@@ -27,7 +27,9 @@ command and never enter the agent's environment.
 
 Credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
 (`AWS_SESSION_TOKEN`), else the AWS CLI chain (profile, SSO, role) via
-`bashy aws configure export-credentials`. The region is `AWS_REGION`, else
+`bashy aws configure export-credentials`, else (no AWS CLI installed) the
+static keys of profile `AWS_PROFILE` (default `default`) in the shared
+credentials file (`AWS_SHARED_CREDENTIALS_FILE`, default `~/.aws/credentials`). The region is `AWS_REGION`, else
 `AWS_DEFAULT_REGION`, else `us-east-1`, and must match the model's endpoint.
 `--expires SECONDS` (1..43200, default 43200) shortens the key.
 

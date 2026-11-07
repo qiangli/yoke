@@ -8,8 +8,10 @@
 #
 # Credentials: AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY[/AWS_SESSION_TOKEN] from
 # the environment, else the AWS CLI's chain (profile, SSO, role) via
-# `bashy aws configure export-credentials`. Region: AWS_REGION, else
-# AWS_DEFAULT_REGION, else us-east-1 — it must match the model's endpoint.
+# `bashy aws configure export-credentials`, else, with no AWS CLI, the static
+# keys of profile ${AWS_PROFILE:-default} in the shared credentials file.
+# Region: AWS_REGION, else AWS_DEFAULT_REGION, else us-east-1 — it must match
+# the model's endpoint.
 #
 # Register once, then bind it on the host (see README.md):
 #   bashy commands add bedrock-key --set exec.0=bashy --set exec.1=--bashsharp \
@@ -86,9 +88,31 @@ while [ $# -gt 0 ]; do
 	esac
 done
 region=${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}
+# shared_creds PROFILE: the profile's keys from the AWS shared credentials
+# file, as KEY=VALUE lines (static keys only; SSO/role chains need the CLI).
+shared_creds() {
+	awk -v want="[$1]" '
+		/^[[:space:]]*\[/ { gsub(/[[:space:]]/, ""); in_p = ($0 == want); next }
+		in_p && /=/ {
+			k = $0; sub(/=.*/, "", k); gsub(/[[:space:]]/, "", k)
+			v = $0; sub(/^[^=]*=/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+			if (k == "aws_access_key_id") print "AWS_ACCESS_KEY_ID=" v
+			if (k == "aws_secret_access_key") print "AWS_SECRET_ACCESS_KEY=" v
+			if (k == "aws_session_token") print "AWS_SESSION_TOKEN=" v
+		}' "${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}" 2>/dev/null
+}
 if [ -z "$AWS_ACCESS_KEY_ID" ]; then
-	creds=$(bashy aws configure export-credentials --format env) || exit 1
-	eval "$creds"
+	if type -P aws >/dev/null 2>&1; then # a real AWS CLI file, not bashy's aws verb
+		creds=$(bashy aws configure export-credentials --format env) || exit 1
+		eval "$creds"
+	else
+		while IFS='=' read -r k v; do
+			case $k in AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN) export "$k=$v" ;; esac
+		done <<EOF2
+$(shared_creds "${AWS_PROFILE:-default}")
+EOF2
+		[ -n "$AWS_ACCESS_KEY_ID" ] || { echo "bedrock-key: no AWS credentials (env, AWS CLI, or profile ${AWS_PROFILE:-default} in ${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials})" >&2; exit 1; }
+	fi
 fi
 [ -n "$at" ] || at=$(date +%s)
 key := b.Mint("$region", "$AWS_ACCESS_KEY_ID", "$AWS_SECRET_ACCESS_KEY", "$AWS_SESSION_TOKEN", "$expires", "$at")
