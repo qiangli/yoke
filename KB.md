@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Bare Bash# decorator without parens parses as a plain command, not a decorator — WHEN reading Bash# isolation requests with sh/syntax LangBashPP: a bare @sandbox line (no parens) does not attach to the function declaration and parses as a CallExpr with literal @sandbox, so a decorator-only walk silently reports  (kb:bare-bash-decorator-without-parens-parses-as-a-plain-command-not)
+- [repo/page] Gitea's 401 on a push mirror is an address refusal, not auth — WHEN a Gitea push mirror to a LAN/loopback replica answers 401 Permission denied (POST /repos/{o}/{r}/push_mirrors): it is not a credential problem — HandleRemoteAddressError maps ErrInvalidCloneAddr{IsPermissionDenied} to 401 and a correct all-scoped  (kb:gitea-s-401-on-a-push-mirror-is-an-address-refusal-not-auth)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
