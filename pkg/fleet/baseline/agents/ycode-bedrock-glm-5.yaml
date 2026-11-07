@@ -1,0 +1,15 @@
+agents:
+  - name: ycode-bedrock-glm-5
+    tool: ycode
+    model: bedrock-glm-5
+    display: "genie · bedrock-glm-5"
+    ledger:
+      reliability: unmeasured
+      notes: |
+        OPT-IN Bedrock route (S586), data only, not verified live. genie
+        resolves bedrock-glm-5 as an external API model: the model's
+        OpenAI-compatible bedrock-runtime /openai/v1 base_url and its bare
+        zai.glm-5 id, keyed by api_key_ref aws-bedrock. A host binds that
+        ref to a minted short-term key with
+        `AWS_BEDROCK_API_KEY=!bashy bedrock-key` in secrets.map
+        (examples/bedrock-key). The native genie agents are untouched.

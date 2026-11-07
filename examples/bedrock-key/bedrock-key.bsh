@@ -1,0 +1,95 @@
+#!/usr/bin/env -S bashy --bashsharp
+# bedrock-key — print an AWS Bedrock short-term API key minted from this
+# host's AWS credentials. The key is "bedrock-api-key-" + base64 of a SigV4
+# query-presigned GET https://bedrock.amazonaws.com/?Action=CallWithBearerToken
+# (service bedrock, empty-payload hash, <=12h, region-bound) + "&Version=1",
+# the format AWS's aws-bedrock-token-generator emits. Minting is local
+# arithmetic: no AWS call, nothing stored.
+#
+# Credentials: AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY[/AWS_SESSION_TOKEN] from
+# the environment, else the AWS CLI's chain (profile, SSO, role) via
+# `bashy aws configure export-credentials`. Region: AWS_REGION, else
+# AWS_DEFAULT_REGION, else us-east-1 — it must match the model's endpoint.
+#
+# Register once, then bind it on the host (see README.md):
+#   bashy commands add bedrock-key --set exec.0=bashy --set exec.1=--bashsharp \
+#       --set exec.2="$PWD/bedrock-key.bsh"
+#   echo 'AWS_BEDROCK_API_KEY=!bashy bedrock-key' >> ~/.config/bashy/secrets.map
+
+~~~go as b
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"net/url"
+	"sort"
+	"strings"
+	"time"
+)
+
+func mac(k []byte, s string) []byte {
+	m := hmac.New(sha256.New, k)
+	m.Write([]byte(s))
+	return m.Sum(nil)
+}
+
+func enc(s string) string { return strings.ReplaceAll(url.QueryEscape(s), "+", "%20") }
+
+// Mint returns the key for the given credentials, valid for expires seconds
+// from the unix time at.
+func Mint(region, akid, secret, session string, expires int, at int) (string, error) {
+	if akid == "" || secret == "" || region == "" {
+		return "", fmt.Errorf("bedrock-key: no AWS credentials or region")
+	}
+	if expires < 1 || expires > 43200 {
+		return "", fmt.Errorf("bedrock-key: expires must be 1..43200 seconds")
+	}
+	t := time.Unix(int64(at), 0).UTC()
+	amz, day := t.Format("20060102T150405Z"), t.Format("20060102")
+	scope := day + "/" + region + "/bedrock/aws4_request"
+	q := map[string]string{
+		"Action": "CallWithBearerToken", "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+		"X-Amz-Credential": akid + "/" + scope, "X-Amz-Date": amz,
+		"X-Amz-Expires": fmt.Sprint(expires), "X-Amz-SignedHeaders": "host",
+	}
+	if session != "" {
+		q["X-Amz-Security-Token"] = session
+	}
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = enc(k) + "=" + enc(q[k])
+	}
+	query := strings.Join(parts, "&")
+	empty := sha256.Sum256(nil)
+	creq := "GET\n/\n" + query + "\nhost:bedrock.amazonaws.com\n\nhost\n" + hex.EncodeToString(empty[:])
+	ch := sha256.Sum256([]byte(creq))
+	sts := "AWS4-HMAC-SHA256\n" + amz + "\n" + scope + "\n" + hex.EncodeToString(ch[:])
+	k := mac(mac(mac(mac([]byte("AWS4"+secret), day), region), "bedrock"), "aws4_request")
+	u := "bedrock.amazonaws.com/?" + query + "&X-Amz-Signature=" + hex.EncodeToString(mac(k, sts)) + "&Version=1"
+	return "bedrock-api-key-" + base64.StdEncoding.EncodeToString([]byte(u)), nil
+}
+~~~
+
+expires=43200 at=""
+while [ $# -gt 0 ]; do
+	case $1 in
+	--expires) expires=$2; shift 2 ;;
+	--at) at=$2; shift 2 ;; # fixed unix time, for the known-answer check
+	*) echo "usage: bedrock-key [--expires SECONDS]" >&2; exit 2 ;;
+	esac
+done
+region=${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}
+if [ -z "$AWS_ACCESS_KEY_ID" ]; then
+	creds=$(bashy aws configure export-credentials --format env) || exit 1
+	eval "$creds"
+fi
+[ -n "$at" ] || at=$(date +%s)
+key := b.Mint("$region", "$AWS_ACCESS_KEY_ID", "$AWS_SECRET_ACCESS_KEY", "$AWS_SESSION_TOKEN", "$expires", "$at")
+printf '%s\n' "$key"

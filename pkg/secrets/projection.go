@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"io"
 	"os"
 	"strings"
 )
@@ -65,6 +66,12 @@ func projectMissingBindings(parent, names []string) []string {
 	}
 	rendered, missing := renderEnv(selected, items)
 	values := ParseEnv(rendered)
+	// Command bindings mint a fresh value per launch (a short-lived token);
+	// a failing one stays unbound, and its stderr is not the child's.
+	minted, _ := renderCmds(selected, io.Discard)
+	for k, v := range ParseEnv(minted) {
+		values[k] = v
+	}
 	// A reachable vault is authoritative, including deletion. Only an
 	// unavailable vault uses cached values, and only for still-declared refs.
 	if err != nil {

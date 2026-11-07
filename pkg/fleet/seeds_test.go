@@ -265,7 +265,7 @@ func TestEmbeddedSeedsBedrockProvider(t *testing.T) {
 	// Every bedrock agent resolves against the embedded ring alone.
 	for _, name := range []string{
 		"claude-bedrock-opus4.8", "codex-bedrock-gpt6-sol",
-		"opencode-bedrock-glm-5", "zcode-bedrock-glm-5",
+		"opencode-bedrock-glm-5", "zcode-bedrock-glm-5", "ycode-bedrock-glm-5",
 	} {
 		if _, _, _, err := c.Binding(name); err != nil {
 			t.Errorf("bedrock agent %q does not resolve: %v", name, err)

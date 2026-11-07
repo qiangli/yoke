@@ -15,12 +15,17 @@ package secrets
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -98,7 +103,10 @@ func newEnvCmd(cfg *Config) *cobra.Command {
 
 Each line is LOCAL_NAME=RHS. An RHS beginning with '@' is a cloudbox secret
 REFERENCE (@name, or @{name}) resolved from the vault. A bare word matching
-a vault name is refused with "did you mean @NAME?"; other values are literals.
+a vault name is refused with "did you mean @NAME?". An RHS beginning with '!'
+is a host COMMAND (argv split on spaces, no shell) whose stdout is the value,
+minted on every render and never cached: a short-lived token such as
+AWS_BEDROCK_API_KEY=!bashy bedrock-key. Other values are literals.
 Quote an intentional literal that matches a vault name. The template contains
 NO secrets, so it is safe to commit:
 
@@ -132,14 +140,17 @@ with a non-zero exit instead of emitting exports or using the cache.`,
 	return cmd
 }
 
-// binding is one template line: a local env-var NAME mapped to either a
-// cloudbox secret REFERENCE ($ref / ${ref}, resolved from the vault) or a
-// LITERAL value (bare RHS, passed through verbatim).
+// binding is one template line: a local env-var NAME mapped to a cloudbox
+// secret REFERENCE (@ref / @{ref}, resolved from the vault), a host COMMAND
+// (!CMD ARGS, whose stdout is the value), or a LITERAL value (bare RHS,
+// passed through verbatim).
 type binding struct {
 	local   string
-	ref     string // vault reference name, when isRef
-	literal string // literal value, when !isRef
+	ref     string   // vault reference name, when isRef
+	cmd     []string // command argv, when isCmd
+	literal string   // literal value, when neither
 	isRef   bool
+	isCmd   bool
 	bare    bool // unquoted single word: reject an accidental vault name
 }
 
@@ -173,6 +184,7 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 		fmt.Fprintf(out, "# bashy secret: template %s has no ENV_NAME=ref bindings\n", tmplPath)
 		return nil
 	}
+	minted := func() { rendered, _ := renderCmds(bindings, errOut); _, _ = out.Write(rendered) }
 
 	client, err := cfg.Resolve()
 	if err == nil {
@@ -196,6 +208,7 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 				_ = writeCache(cachePath, rendered)
 			}
 			_, _ = out.Write(rendered)
+			minted()
 			return nil
 		}
 	}
@@ -206,17 +219,20 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) er
 			fmt.Fprintf(errOut, "bashy secret: cloudbox unreachable (%v); using cached values\n", err)
 			fmt.Fprintf(out, "# bashy secret: served from cache (cloudbox unreachable: %v)\n", err)
 			_, _ = out.Write(data)
+			minted()
 			return nil
 		}
 	}
 	fmt.Fprintf(errOut, "bashy secret: %v\n", err)
 	fmt.Fprintf(out, "# bashy secret unavailable: %v\n", err)
+	minted()
 	return nil
 }
 
 // readTemplate parses a binding template: 'LOCAL_NAME=RHS' lines. A RHS that
 // starts with '@' is a cloudbox secret REFERENCE (@name or @{name}) resolved
-// from the vault; any other RHS is a LITERAL value passed through verbatim.
+// from the vault; one that starts with '!' is a host COMMAND whose stdout is
+// the value; any other RHS is a LITERAL value passed through verbatim.
 // Comments (#) and blank lines are skipped; the local name must be a valid
 // env identifier; ref names may contain dashes (e.g. host-app-provider).
 func readTemplate(path string) ([]binding, error) {
@@ -245,6 +261,17 @@ func readTemplate(path string) ([]binding, error) {
 		// Detect the '@' ref sigil on the RAW RHS (before unquoting), so a
 		// quoted literal like '@foo' stays a literal.
 		raw := strings.TrimSpace(line[eq+1:])
+		// '!' is a host command minting the value at resolution time (a
+		// short-lived token: `AWS_BEDROCK_API_KEY=!bashy bedrock-key`). Its
+		// argv is split on whitespace and run without a shell.
+		if strings.HasPrefix(raw, "!") {
+			argv := strings.Fields(stripInlineComment(raw[1:]))
+			if len(argv) == 0 {
+				continue
+			}
+			out = append(out, binding{local: local, cmd: argv, isCmd: true})
+			continue
+		}
 		if strings.HasPrefix(raw, "@") {
 			ref := strings.TrimSpace(stripInlineComment(raw))
 			ref = strings.TrimPrefix(ref, "@")
@@ -269,7 +296,9 @@ func readTemplate(path string) ([]binding, error) {
 // renderEnv resolves each binding against the fetched vault items and emits
 // deterministic, safely-quoted export lines. Literal bindings pass through;
 // references absent from the vault are returned in `missing` (and omitted)
-// rather than failing the whole render.
+// rather than failing the whole render. Command bindings are left to
+// renderCmds, so this render — the one that is cached — never holds a minted
+// value.
 func renderEnv(bindings []binding, items []Item) (out []byte, missing []binding) {
 	byName := make(map[string]string, len(items))
 	for _, it := range items {
@@ -279,6 +308,9 @@ func renderEnv(bindings []binding, items []Item) (out []byte, missing []binding)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].local < sorted[j].local })
 	var b strings.Builder
 	for _, bd := range sorted {
+		if bd.isCmd {
+			continue
+		}
 		val := bd.literal
 		if bd.isRef {
 			v, ok := byName[bd.ref]
@@ -289,6 +321,52 @@ func renderEnv(bindings []binding, items []Item) (out []byte, missing []binding)
 			val = v
 		}
 		fmt.Fprintf(&b, "export %s=%s\n", bd.local, shellSingleQuote(val))
+	}
+	return []byte(b.String()), missing
+}
+
+// bindingCmdTimeout bounds one !CMD binding, so a hung minting command
+// cannot stall a launch indefinitely.
+const bindingCmdTimeout = 30 * time.Second
+
+// runBindingCmd runs one !CMD binding and returns its trimmed stdout. A
+// failure or an empty output is an error: an empty credential is never an
+// answer. A seam so tests need no real command.
+var runBindingCmd = func(argv []string, stderr io.Writer) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), bindingCmdTimeout)
+	defer cancel()
+	var out bytes.Buffer
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	c.Stdout, c.Stderr = &out, stderr
+	if err := c.Run(); err != nil {
+		return "", err
+	}
+	v := strings.TrimSpace(out.String())
+	if v == "" {
+		return "", errors.New("empty output")
+	}
+	return v, nil
+}
+
+// renderCmds runs the command bindings and emits their export lines, sorted
+// like renderEnv. A failing command is reported (never its output) and
+// returned in `missing`; it does not fail the other bindings. The values are
+// minted per call and never cached.
+func renderCmds(bindings []binding, errOut io.Writer) (out []byte, missing []binding) {
+	sorted := append([]binding(nil), bindings...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].local < sorted[j].local })
+	var b strings.Builder
+	for _, bd := range sorted {
+		if !bd.isCmd {
+			continue
+		}
+		v, err := runBindingCmd(bd.cmd, errOut)
+		if err != nil {
+			fmt.Fprintf(errOut, "bashy secret: %q -> !%s failed: %v; skipped\n", bd.local, strings.Join(bd.cmd, " "), err)
+			missing = append(missing, bd)
+			continue
+		}
+		fmt.Fprintf(&b, "export %s=%s\n", bd.local, shellSingleQuote(v))
 	}
 	return []byte(b.String()), missing
 }

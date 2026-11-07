@@ -21,6 +21,11 @@ Plan and research: `docs/sprint-agent-cli-adapters-plan.md`.
   model-scoped `env` (provider switches only; credential and BASHY_/WEAVE_ names
   are dropped) and `credential_env aws-bedrock: AWS_BEARER_TOKEN_BEDROCK`. Not
   verified live; needs a short-term Bedrock key on a test host.
+- S586: the short-term key is minted per launch on the host. A `secrets.map`
+  line may be `NAME=!CMD` (a command whose stdout is the value, never cached),
+  and `examples/bedrock-key` is a registered Bash# command that mints a Bedrock
+  key from the host's AWS credentials: `AWS_BEDROCK_API_KEY=!bashy bedrock-key`.
+  genie gets an agent seed (`ycode-bedrock-glm-5`).
 
 Deferred (follow-ups, not MVP): the per-tool `.bsh` hook runner below — the
 existing code-outer `.bsh` records (`pkg/fleet/bsh.go`, a script whose stdout is
