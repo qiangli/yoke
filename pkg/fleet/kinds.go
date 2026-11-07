@@ -164,6 +164,14 @@ func init() {
 			Names:     listed((*Catalog).Plans, func(p Plan) string { return p.Name }),
 			Seeded:    true,
 		},
+		{
+			Name: "roster", Plural: dirRosters, DirEnv: "BASHY_ROSTERS_DIR", PathEnv: "BASHY_ROSTERS_PATH",
+			Type:      reflect.TypeOf(Roster{}),
+			Lifecycle: lifecycleOf((*Catalog).Roster),
+			Lookup:    holder((*Catalog).Roster, func(r Roster) string { return r.Name }),
+			Names:     listed((*Catalog).Rosters, func(r Roster) string { return r.Name }),
+			Seeded:    true, Overlay: true,
+		},
 		// Registered commands and apps have NO embedded ring by design (rod,
 		// not fish): bashy ships the mechanism and never a catalog of them.
 		{

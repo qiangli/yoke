@@ -52,7 +52,7 @@ duration specified by --idle-timeout, preventing background resource leaks.`,
 	cmd.Flags().DurationVar(&interval, "interval", 30*time.Second, "Poll interval (e.g. 30s, 1m)")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 15*time.Minute, "Idle shutdown threshold (e.g. 15m, 1h)")
 	cmd.Flags().BoolVar(&background, "background", false, "Run in background (detaches process)")
-	cmd.Flags().StringVar(&fleetCSV, "orchestrator-fleet", "", "Roster of agents (007, claude:opus) or tools, comma-separated (default: claude,codex,opencode,agy)")
+	cmd.Flags().StringVar(&fleetCSV, "orchestrator-fleet", "", "Roster of agents (007, claude:opus) or tools, comma-separated (default: the \"weave\" roster)")
 	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Adversarial pair agent for every submitted run (default off; must differ from the coder)")
 	return cmd
 }
@@ -172,7 +172,7 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 					if opts.fleetCSV != "" {
 						apArgs = append(apArgs, "--orchestrator-fleet", opts.fleetCSV)
 					} else {
-						apArgs = append(apArgs, "--orchestrator-fleet", strings.Join(weaveDefaultFleet, ","))
+						apArgs = append(apArgs, "--orchestrator-fleet", strings.Join(weaveDefaultRoster(), ","))
 					}
 					if opts.reviewAgent != "" {
 						apArgs = append(apArgs, "--review-agent", opts.reviewAgent)

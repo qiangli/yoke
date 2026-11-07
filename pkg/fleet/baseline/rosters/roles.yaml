@@ -1,0 +1,11 @@
+name: roles
+display: role defaults
+# Agent or tool filling a role when the caller names none.
+roles:
+  conductor: claude
+  reviewer: codex
+  qa: codex
+  release: claude
+  meet-secretary: claude
+  sdlc-conductor-fallback: codex
+notes: Seeded from the former Go literals in chat, meet and sdlc (Sprint 584 A1).

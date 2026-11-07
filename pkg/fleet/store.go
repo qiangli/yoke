@@ -24,6 +24,7 @@ const (
 	dirApps     = "apps"
 	dirPlans    = "plans"
 	dirServices = "services"
+	dirRosters  = "rosters"
 
 	dirResources     = "resources"
 	dirResourceKinds = "resourcekinds"

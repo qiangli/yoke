@@ -1176,6 +1176,9 @@ func principalEnv(base []string, l Launch) []string {
 	return agentlaunch.PrincipalEnv(base, toAgentLaunch(l))
 }
 
+// roleDefaults is the last-resort role table, used only when the catalog has
+// no `roles` roster entry for the role. The default itself is data: the
+// seeded fleet.RosterRoles record, reshaped as fleet data.
 var roleDefaults = map[string]string{
 	"conductor": "claude",
 	"reviewer":  "codex",
@@ -1888,7 +1891,7 @@ func ResolveAgent(agent, role string) (string, error) {
 	if role == "" {
 		return "", errors.New("chat: --agent or --role is required")
 	}
-	if a := roleDefaults[role]; a != "" {
+	if a := newCatalog().RosterRole(fleet.RosterRoles, role, roleDefaults[role]); a != "" {
 		return a, nil
 	}
 	return "", fmt.Errorf("chat: unknown role %q", role)

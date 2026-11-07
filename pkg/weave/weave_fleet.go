@@ -16,10 +16,17 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 )
 
-// weaveDefaultFleet is the canonical agent CLI roster used when --fleet is
-// not given. It matches the autopilot/orchestrator fleet documented in the
-// weave skill.
+// weaveDefaultFleet is the last-resort roster used only when the catalog has
+// no `weave` roster (seeds off and nothing mounted). The default itself is
+// data: the seeded fleet.RosterWeave record, which an operator reshapes with a
+// same-named shared, org or local roster.
 var weaveDefaultFleet = []string{"claude", "codex", "opencode", "agy"}
+
+// weaveDefaultRoster resolves the default fleet from the catalog's `weave`
+// roster, read at use time (never while building the command tree).
+func weaveDefaultRoster() []string {
+	return fleetCatalog().RosterMembers(fleet.RosterWeave, weaveDefaultFleet)
+}
 
 // fleetProbeTTL bounds how long a cached --probe capability result is trusted
 // before re-probing. Existence (PATH lookup) is cheap and never cached.
@@ -66,7 +73,8 @@ Availability is mostly a TOOL property — PATH, throttle, sign-in all belong to
 the binary, and two agents sharing a tool share them. What an agent adds is the
 model: the half that decides whether the launch is even meaningful.
 
-The roster defaults to ` + fmt.Sprintf("%v", weaveDefaultFleet) + ` (tools);
+The roster defaults to the catalog's "weave" roster (seeded with
+` + fmt.Sprintf("%v", weaveDefaultFleet) + ` tools; reshape it as fleet data);
 entries may name agents instead (--fleet 007,codex-gpt-5.5), and --agents
 expands the roster to every agent in the registry.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -74,7 +82,7 @@ expands the roster to every agent in the registry.`,
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools (default claude,codex,opencode,agy)")
+	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools (default: the \"weave\" roster)")
 	cmd.Flags().BoolVar(&agents, "agents", false, "Roster every agent in the registry (`bashy agent list`) instead of the default tool roster")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Run and cache an output-gated smoke turn (may use provider capacity)")
 	cmd.Flags().BoolVar(&auth, "auth", false, "Also probe AUTH-readiness (headless launch on a trivial prompt; catches a tool that is installed but not signed in, before it stalls a real run)")
@@ -145,7 +153,7 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 			}
 			tools := args
 			if all || len(tools) == 0 {
-				tools = append([]string(nil), weaveDefaultFleet...)
+				tools = weaveDefaultRoster()
 			}
 			now := time.Now()
 			profiles := make([]map[string]any, 0, len(tools))
@@ -261,7 +269,7 @@ func weaveFleetRoster(fleetCSV string, agents bool) []string {
 	if r := parseWeaveAutopilotFleet(fleetCSV); len(r) > 0 {
 		return r
 	}
-	return append([]string(nil), weaveDefaultFleet...)
+	return weaveDefaultRoster()
 }
 
 func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool, flags *weaveOutputFlags) error {
