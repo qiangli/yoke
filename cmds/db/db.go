@@ -247,6 +247,12 @@ func run(rc *tool.RunContext, args []string) int {
 		return 2
 	}
 	op := args[0]
+	// `db --help`, `db -h` and `db help` answer with usage before any
+	// target resolution; help never opens, creates or touches a database.
+	if op == "--help" || op == "-h" || op == "help" {
+		fmt.Fprintln(rc.Out, command.Usage)
+		return 0
+	}
 	var child []string
 	if op == "hold" {
 		for i, arg := range args[1:] {
