@@ -19,9 +19,7 @@ type interactiveReader interface {
 }
 
 // stdinIsInteractive reports whether r is an interactive terminal input source.
-var stdinIsInteractive = defaultStdinIsInteractive
-
-func defaultStdinIsInteractive(r io.Reader) bool {
+func stdinIsInteractive(r io.Reader) bool {
 	if r == nil {
 		return false
 	}
