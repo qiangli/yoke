@@ -11,6 +11,14 @@
 // of known-equivalent agent files (CLAUDE.md ⇄ AGENTS.md ⇄ …). Semantic
 // (embedding), graph-adjacency, and co-occurrence signals are later slices.
 // Invariant: recommend, never substitute — surface it, the agent decides.
+//
+// Capability guidance uses one versioned record, Guidance (schema_version
+// "bashy-recommend-v1"): kind (reuse|register|learn|shape|correct), reason,
+// evidence, command (argv), prerequisites, verify, authorization
+// (none|approval|operator), executable (runnable step vs proposal). Kinds are
+// tried in GuidanceOrder — existing composition > declarative configuration/
+// adapter > execution-verified learned skill > shaped implementation — and
+// Earliest picks the first applicable one. See guidance.go.
 package recommend
 
 import (
