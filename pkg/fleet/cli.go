@@ -142,7 +142,7 @@ func newToolsList(opts []Option) *cobra.Command {
 			"  NAME          canonical registry name used by --tool and agent bindings\n" +
 			"  KIND          cli = agent harness; func/web/system appear in explicit views\n" +
 			"  BINARY        executable Bashy will run: declared binary, otherwise NAME;\n" +
-			"                use `tools verify NAME` to check PATH\n" +
+			"                use `tool verify NAME` to check PATH\n" +
 			"  MODEL-SELECT  yes when Bashy can pass a binding's model at launch; no means\n" +
 			"                the tool may choose its own default, and a binding is only a label\n" +
 			"  RING          source of the selected definition (explained below)\n\n" +
@@ -311,7 +311,7 @@ func newModelsList(opts []Option) *cobra.Command {
 			"  KIND      authentication path: subscription, api, or local; not billing mode\n" +
 			"  PROVIDER  backend/provider family used for authentication and routing\n" +
 			"  TARGET    default provider-side id passed to a tool; a tool-specific id may\n" +
-			"            override it, which `agents show NAME` displays\n" +
+			"            override it, which `agent show NAME` displays\n" +
 			"  ALIASES   alternate accepted names, including a derived family alias\n" +
 			"  RING      source of the selected definition (explained below)\n\n" +
 			"Bands are comparable across providers; vendor tier names are not mapped\n" +

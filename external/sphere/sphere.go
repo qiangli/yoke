@@ -1,4 +1,4 @@
-// Package sphere is the `bashy sphere` front-door for the dhnt SPHERE tier
+// Package sphere is the `bashy peer` front-door for the dhnt SPHERE tier
 // (execution tier 4): multi-node, peer-direct pooled p2p inference/compute — the
 // layer between a single-node sandbox and an orchestrated cluster.
 //
@@ -21,10 +21,10 @@ import (
 
 // errHandled signals exit-non-zero without a re-printed error (message already
 // emitted). SilenceErrors keeps cobra from prepending "Error:".
-var errHandled = errors.New("sphere: handled")
+var errHandled = errors.New("peer: handled")
 
 // subVerbs are the outpost subcommands that make up the sphere tier. `bashy
-// sphere <v> …` maps straight to `outpost <v> …`.
+// peer <v> …` maps straight to `outpost <v> …`.
 var subVerbs = map[string]string{
 	"mesh":  "libp2p peer-to-peer transport (the data plane)",
 	"shard": "intra-LAN model sharding over the mesh",
@@ -36,24 +36,25 @@ var subVerbs = map[string]string{
 // keep one import for sphere readiness.
 func ResolveOutpost() (string, bool) { return meshagent.Resolve() }
 
-// NewSphereCmd builds the `bashy sphere` command: a thin passthrough to the
-// outpost mesh agent's sphere subcommands.
+// NewSphereCmd builds the `bashy peer` command (`bashy sphere` is its hidden alias):
+// a thin passthrough to the outpost mesh agent's sphere subcommands.
 func NewSphereCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "sphere",
-		Short: "Peer-direct pooled p2p inference/compute — the sphere tier (via the outpost mesh agent)",
-		Long: `sphere is dhnt execution tier 4: multi-node, PEER-DIRECT pooled inference and
+		Use:     "peer",
+		Aliases: []string{"sphere"},
+		Short:   "Peer-direct pooled p2p inference/compute — the sphere tier (via the outpost mesh agent)",
+		Long: `peer is dhnt execution tier 4: multi-node, PEER-DIRECT pooled inference and
 compute over the libp2p mesh (no control plane — that is the cluster tier). The
 data plane is the outpost mesh agent; this is a thin front-door that execs it, so
 bashy stays standalone (no build dependency on outpost). Without outpost running
 there is no p2p sphere.
 
 Subcommands (pass straight through to outpost):
-  bashy sphere mesh  …    libp2p peer-to-peer transport (the data plane)
-  bashy sphere shard …    intra-LAN model sharding over the mesh
-  bashy sphere pool  …    this node's LLM-pool participation
-  bashy sphere peers …    discovery cache, reachability, predictions
-  bashy sphere status     quick overview (= outpost peers status)
+  bashy peer mesh  …    libp2p peer-to-peer transport (the data plane)
+  bashy peer shard …    intra-LAN model sharding over the mesh
+  bashy peer pool  …    this node's LLM-pool participation
+  bashy peer peers …    discovery cache, reachability, predictions
+  bashy peer status     quick overview (= outpost peers status)
 
 Set $OUTPOST_BIN to point at a specific outpost binary.`,
 		DisableFlagParsing: true,
@@ -70,7 +71,7 @@ Set $OUTPOST_BIN to point at a specific outpost binary.`,
 				sub, rest = "peers", append([]string{"status"}, rest...)
 			}
 			if _, ok := subVerbs[sub]; !ok {
-				fmt.Fprintf(cmd.ErrOrStderr(), "sphere: unknown subcommand %q — try: mesh, shard, pool, peers, status\n", sub)
+				fmt.Fprintf(cmd.ErrOrStderr(), "peer: unknown subcommand %q — try: mesh, shard, pool, peers, status\n", sub)
 				return errHandled
 			}
 			err := meshagent.Exec(cmd.Context(), append([]string{sub}, rest...)...)
@@ -87,7 +88,7 @@ Set $OUTPOST_BIN to point at a specific outpost binary.`,
 // a sphere yet: pool inference/compute across the computers you own by joining
 // Tessaro (the front door), which pairs this machine via the outpost mesh agent.
 var joinLines = strings.Join([]string{
-	"sphere: this machine isn't part of a p2p sphere yet.",
+	"peer: this machine isn't part of a p2p sphere yet.",
 	"",
 	"The sphere tier pools inference + compute across the computers you already own,",
 	"peer-to-peer. Join the mesh through Tessaro — the front door:",
@@ -95,6 +96,6 @@ var joinLines = strings.Join([]string{
 	"    1. Sign in / sign up:   https://tessaro.sh",
 	"    2. Add this machine     (installs the outpost mesh agent + pairs it)",
 	"",
-	"Then `bashy sphere mesh|shard|pool|peers` drives your mesh.",
+	"Then `bashy peer mesh|shard|pool|peers` drives your mesh.",
 	"(Already have outpost installed? Put it on PATH or set $OUTPOST_BIN.)",
 }, "\n")
