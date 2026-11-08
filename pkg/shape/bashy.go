@@ -37,7 +37,9 @@ func IsBashyTarget(name string) bool { return name == BashyTarget }
 // directory: nothing is cloned, built or activated for it.
 func BashyApp() App { return App{Name: BashyTarget} }
 
-func (s Service) isBashy() bool { return IsBashyTarget(s.App.Name) }
+// A registered app may carry the bashy name with a real source (the
+// source-tier promotion path); only the sourceless built-in is record-only.
+func (s Service) isBashy() bool { return IsBashyTarget(s.App.Name) && s.App.SourceDir == "" }
 
 // bashyHost describes the target's limits in status output.
 func bashyHost() *HostStatus {

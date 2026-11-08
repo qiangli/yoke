@@ -71,3 +71,14 @@ func TestBashyTargetRecordsWithoutActivation(t *testing.T) {
 		t.Fatalf("record not in the shape store: %v", e)
 	}
 }
+
+// A registered app named bashy with a real source keeps the ordinary
+// lifecycle (source-tier promotion); only the sourceless built-in records.
+func TestRegisteredBashyAppIsNotRecordOnly(t *testing.T) {
+	if (Service{App: App{Name: BashyTarget, SourceDir: t.TempDir()}}).isBashy() {
+		t.Fatal("registered bashy app treated as record-only target")
+	}
+	if !(Service{App: BashyApp()}).isBashy() {
+		t.Fatal("built-in bashy target not record-only")
+	}
+}

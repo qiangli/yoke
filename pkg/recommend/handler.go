@@ -93,7 +93,13 @@ func Handler() func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 				return next(ctx, args)
 			}
 			sample := &stderrSample{dst: hc.Stderr}
-			err := next(stderrContext{ctx, sample}, args)
+			runCtx := context.Context(stderrContext{ctx, sample})
+			// A real file or terminal must reach children unwrapped (fd
+			// inheritance, isatty); classify from the exit status alone then.
+			if _, isFile := hc.Stderr.(*os.File); isFile {
+				runCtx = ctx
+			}
+			err := next(runCtx, args)
 			code := 0
 			if err != nil {
 				code = 1
@@ -148,8 +154,12 @@ func commandGuidance(dir string, args []string, code int, stderr string) (Guidan
 	}
 	low := strings.ToLower(stderr)
 	_, transient := autoretry.Classify(stderr)
-	prerequisite := containsAny(low, "missing prerequisite", "prerequisite missing", "not initialized", "not initialised", "no such file or directory", "not a git repository", "requires initialization")
-	if code == 2 || (code != 0 && (transient || prerequisite)) {
+	// Exit 2 means usage only by bashy convention (make, grep and test
+	// runners use it for ordinary failures), so usage and prerequisite
+	// corrections apply to front-door verbs or an explicit usage diagnostic.
+	usage := code == 2 && (front || strings.Contains(low, "usage:"))
+	prerequisite := front && containsAny(low, "missing prerequisite", "prerequisite missing", "not initialized", "not initialised", "no such file or directory", "not a git repository", "requires initialization")
+	if usage || (code != 0 && (transient || prerequisite)) {
 		reason := "correct the command usage; inspect bashy " + name + " --help"
 		if prerequisite {
 			reason = "check the app workspace and initialize missing prerequisites before retrying"
@@ -158,7 +168,7 @@ func commandGuidance(dir string, args []string, code int, stderr string) (Guidan
 			reason = "resolve the transient failure before retrying; inspect any autoretry report"
 		}
 		g := NewGuidance(KindCorrect, reason)
-		g.Evidence = []string{key, stderr}
+		g.Evidence = []string{key, excerpt(stderr)}
 		return g, key, true
 	}
 	missing := code == 127 || (code != 0 && (strings.Contains(low, "command not found") || strings.Contains(low, name+": not found")))
@@ -178,7 +188,7 @@ func commandGuidance(dir string, args []string, code int, stderr string) (Guidan
 		g := NewGuidance(KindShape, summary)
 		g.Command = []string{"bashy", "shape", "wish", "bashy", summary}
 		g.Authorization = AuthApproval
-		g.Evidence = []string{key, stderr}
+		g.Evidence = []string{key, excerpt(stderr)}
 		return g, key, true
 	}
 	// Routine errors above always take precedence over script promotion.
@@ -259,4 +269,15 @@ func localScript(dir string, args []string) string {
 		return filepath.Clean(full)
 	}
 	return ""
+}
+
+// excerpt is a short single-line diagnostic for evidence; the full stderr
+// already reached the caller, so the record never re-emits it.
+func excerpt(stderr string) string {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if len(last) > 200 {
+		last = last[:200]
+	}
+	return last
 }

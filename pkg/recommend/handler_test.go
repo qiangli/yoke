@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -233,5 +234,60 @@ func TestHandlerHumanLine(t *testing.T) {
 	g, _, ok := commandGuidance("", []string{"bashy", "app"}, 3, "")
 	if !ok || hint != strings.TrimSpace(g.Line()) {
 		t.Fatalf("human hint = %q", hint)
+	}
+}
+
+// A real file stderr reaches the command unwrapped so children keep fd
+// inheritance and isatty; guidance still comes from the exit status.
+func TestHandlerKeepsFileStderrUnwrapped(t *testing.T) {
+	resetGuidance(t)
+	f, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var seen io.Writer
+	next := func(ctx context.Context, _ []string) error {
+		seen = interp.HandlerCtx(ctx).Stderr
+		return interp.NewExitStatus(127)
+	}
+	wrapped := Handler()(next)
+	runner, err := interp.New(interp.StdIO(nil, io.Discard, f), interp.ExecHandler(func(ctx context.Context, args []string) error {
+		return wrapped(ctx, []string{"nosuchcmd"})
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, _ := syntax.NewParser().Parse(strings.NewReader("fixture-command"), "")
+	_ = runner.Run(context.Background(), file)
+	if seen != io.Writer(f) {
+		t.Fatalf("stderr was wrapped: %T", seen)
+	}
+	b, _ := os.ReadFile(f.Name())
+	if !strings.Contains(string(b), `"kind":"register"`) {
+		t.Fatalf("no guidance from exit status: %q", b)
+	}
+}
+
+// Evidence carries a bounded excerpt, never the whole diagnostic.
+func TestHandlerEvidenceIsBounded(t *testing.T) {
+	resetGuidance(t)
+	long := strings.Repeat("x", 5000) + "\nlast line: usage error"
+	_, hint := runGuidance(t, []string{"bashy", "app"}, long, interp.NewExitStatus(2))
+	g := decodeGuidance(t, hint)
+	for _, e := range g.Evidence {
+		if len(e) > 200 {
+			t.Fatalf("evidence %d bytes", len(e))
+		}
+	}
+}
+
+// Exit 2 from a foreign tool (make, grep, test runners) is an ordinary
+// failure, not a usage error: no correct-usage guidance.
+func TestHandlerForeignExit2IsNotUsage(t *testing.T) {
+	resetGuidance(t)
+	_, hint := runGuidance(t, []string{"make", "all"}, "make: *** [all] Error 1\n", interp.NewExitStatus(2))
+	if hint != "" {
+		t.Fatalf("foreign exit 2 produced guidance: %q", hint)
 	}
 }
