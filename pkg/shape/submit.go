@@ -189,6 +189,9 @@ func createProposal(repo *gogit.Repository, c Candidate, item *issue.Issue, base
 // Submit produces reviewable ordinary records. It never starts an agent,
 // merges a branch, or changes the principal's active revision.
 func (s Service) Submit(ctx context.Context, caller Caller, revision string, opts SubmitOptions) (Submission, error) {
+	if s.isBashy() {
+		return Submission{}, ErrBashyActivation
+	}
 	if err := s.validate(caller); err != nil {
 		return Submission{}, err
 	}
