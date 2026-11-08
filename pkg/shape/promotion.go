@@ -275,6 +275,9 @@ func (s Service) incomingRemote(ctx context.Context, tier string) (*gogit.Reposi
 }
 
 func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, error) {
+	if s.isBashy() {
+		return nil, ErrBashyActivation
+	}
 	repo, _, refs, base, err := s.incomingRemote(ctx, tier)
 	if err != nil {
 		return nil, err
@@ -380,6 +383,9 @@ func (s Service) Incoming(ctx context.Context, tier string) ([]IncomingChange, e
 }
 
 func (s Service) Pull(ctx context.Context, tier, ref string) (PullResult, error) {
+	if s.isBashy() {
+		return PullResult{}, ErrBashyActivation
+	}
 	if !validPromotionRef(plumbing.ReferenceName(ref)) {
 		return PullResult{}, fmt.Errorf("shape: invalid incoming ref %q", ref)
 	}
@@ -476,6 +482,9 @@ func pruneIncoming(root, current string) {
 }
 
 func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, error) {
+	if s.isBashy() {
+		return nil, ErrBashyActivation
+	}
 	home, err := s.home()
 	if err != nil {
 		return nil, err
@@ -561,6 +570,9 @@ func ghArgs(v Submission, repo string) (string, []string) {
 	return title, []string{"pr", "create", "--repo", repo, "--head", v.Branch, "--title", title, "--body", body}
 }
 func (s Service) Push(ctx context.Context, tier, id string, createPR bool) (PushResult, error) {
+	if s.isBashy() {
+		return PushResult{}, ErrBashyActivation
+	}
 	home, err := s.home()
 	if err != nil {
 		return PushResult{}, err

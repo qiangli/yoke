@@ -70,6 +70,11 @@ type Wish struct {
 	Story        string `json:"story,omitempty"`
 	Todo         string `json:"todo,omitempty"`
 	TrackingRoot string `json:"-"`
+	// Reproduction, Expected and Evidence describe a defect report; the
+	// reserved bashy target records them (see BashyTarget).
+	Reproduction string `json:"reproduction,omitempty"`
+	Expected     string `json:"expected,omitempty"`
+	Evidence     string `json:"evidence,omitempty"`
 }
 type CoverageSummary struct {
 	Covered    []string `json:"covered"`
@@ -84,6 +89,9 @@ type Candidate struct {
 	App                 string           `json:"app"`
 	Principal           string           `json:"principal"`
 	Request             string           `json:"request"`
+	Reproduction        string           `json:"reproduction,omitempty"`
+	Expected            string           `json:"expected,omitempty"`
+	Evidence            string           `json:"evidence,omitempty"`
 	Page                string           `json:"page,omitempty"`
 	Element             string           `json:"element,omitempty"`
 	Kind                string           `json:"kind,omitempty"`
@@ -268,6 +276,9 @@ func (s Service) Status(ctx context.Context, c Caller) (Status, error) {
 	if e := s.validate(c); e != nil {
 		return Status{}, e
 	}
+	if s.isBashy() {
+		return s.bashyStatus(ctx, c)
+	}
 	active, e := s.active(c.Principal)
 	if e != nil {
 		return Status{}, e
@@ -299,6 +310,9 @@ func (s Service) Begin(ctx context.Context, caller Caller, w Wish) (Candidate, e
 	return s.begin(ctx, caller, w, false)
 }
 func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool) (Candidate, error) {
+	if s.isBashy() {
+		return s.bashyRecord(ctx, caller, w)
+	}
 	if s.Kind() != "web" {
 		if e := s.RecoverProgram(ctx); e != nil {
 			return Candidate{}, e
@@ -394,6 +408,9 @@ func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runEr
 	return c, runErr
 }
 func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, error) {
+	if s.isBashy() {
+		return s.bashyRecord(ctx, caller, w)
+	}
 	if s.Options.Delegate == nil {
 		return Candidate{}, errors.New("shape: no shaping agent configured")
 	}
@@ -415,6 +432,9 @@ func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, er
 	return s.complete(ctx, caller, c, e)
 }
 func (s Service) Import(ctx context.Context, caller Caller, w Wish, workspace string) (Candidate, error) {
+	if s.isBashy() {
+		return Candidate{}, ErrBashyActivation
+	}
 	c, e := s.Begin(ctx, caller, w)
 	if e != nil {
 		return c, e
@@ -486,6 +506,9 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
 	return SaveCandidate(dir, *c)
 }
 func (s Service) Verify(ctx context.Context, caller Caller, id string) (Candidate, error) {
+	if s.isBashy() {
+		return Candidate{}, ErrBashyActivation
+	}
 	l, e := s.lock(caller)
 	if e != nil {
 		return Candidate{}, e
@@ -504,6 +527,9 @@ func (s Service) Verify(ctx context.Context, caller Caller, id string) (Candidat
 	return c, nil
 }
 func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candidate, error) {
+	if s.isBashy() {
+		return Candidate{}, ErrBashyActivation
+	}
 	l, e := s.lock(caller)
 	if e != nil {
 		return Candidate{}, e
@@ -669,6 +695,9 @@ func (s Service) approvedDir(p, id string) (string, error) {
 	return filepath.Join(r, ".approved", s.App.Name, PrincipalKey(p), id), nil
 }
 func (s Service) remove(p, id, dir string) error {
+	if s.isBashy() {
+		return os.RemoveAll(dir)
+	}
 	if s.Kind() != "web" {
 		if c, _, e := s.load(p, id); e == nil {
 			if e = s.cleanupProgramPreview(context.Background(), c); e != nil {
@@ -691,6 +720,9 @@ func (s Service) remove(p, id, dir string) error {
 // VerifyRecord reuses the same verifier for console draft saves, whose record
 // is owned by the draft store rather than the ordinary candidate listing.
 func (s Service) VerifyRecord(ctx context.Context, caller Caller, c *Candidate, dir string) error {
+	if s.isBashy() {
+		return ErrBashyActivation
+	}
 	l, e := s.lock(caller)
 	if e != nil {
 		return e

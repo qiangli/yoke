@@ -589,6 +589,9 @@ func srcRepoHead(dir string) (string, error) {
 }
 
 func (s Service) HostStatus(ctx context.Context, caller Caller) (HostStatus, error) {
+	if s.isBashy() {
+		return *bashyHost(), s.validate(caller)
+	}
 	if s.Kind() == "web" {
 		return HostStatus{}, errors.New("shape: web apps have principal-scoped status")
 	}
@@ -702,6 +705,9 @@ func (s Service) restoreTarget(ctx context.Context, ref string) (string, string,
 // source and artifact. Product emergency recovery is separate and keeps exact
 // retained release bytes runnable even when normal proof is unavailable.
 func (s Service) HostUndo(ctx context.Context, caller Caller) (HostStatus, error) {
+	if s.isBashy() {
+		return HostStatus{}, ErrBashyActivation
+	}
 	home, e := s.home()
 	if e != nil {
 		return HostStatus{}, e
@@ -739,6 +745,9 @@ func (s Service) HostUndo(ctx context.Context, caller Caller) (HostStatus, error
 	return s.HostRestore(ctx, caller, target)
 }
 func (s Service) HostRestore(ctx context.Context, caller Caller, ref string) (HostStatus, error) {
+	if s.isBashy() {
+		return HostStatus{}, ErrBashyActivation
+	}
 	if s.Kind() == "web" {
 		return HostStatus{}, errors.New("shape: use normal web history restore")
 	}
@@ -806,6 +815,9 @@ func (s Service) HostRestore(ctx context.Context, caller Caller, ref string) (Ho
 }
 
 func (s Service) PreviewProgram(ctx context.Context, caller Caller, id string) (ProgramPreview, error) {
+	if s.isBashy() {
+		return ProgramPreview{}, ErrBashyActivation
+	}
 	if s.Kind() == "web" {
 		return ProgramPreview{}, errors.New("shape: web candidates use console preview")
 	}
@@ -1128,6 +1140,9 @@ func (s Service) retainedServiceArtifact() (string, string, error) {
 
 // RunProgramPreview executes a verified candidate with private state and bounded capture.
 func (s Service) RunProgramPreview(ctx context.Context, caller Caller, id string, args ...string) (ProgramPreviewResult, error) {
+	if s.isBashy() {
+		return ProgramPreviewResult{}, ErrBashyActivation
+	}
 	preview, e := s.PreviewProgram(ctx, caller, id)
 	if e != nil {
 		return ProgramPreviewResult{}, e
