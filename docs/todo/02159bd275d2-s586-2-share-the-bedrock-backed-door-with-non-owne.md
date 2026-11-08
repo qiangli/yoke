@@ -3,14 +3,17 @@ id: 02159bd275d2
 kind: feature
 title: S586.2 Share the Bedrock-backed door with non-owner satellite members (llm share --via cloudbox)
 seq: 3064
-status: todo
+status: done
 priority: p2
 labels:
     - llm
 created: 2026-11-07T18:10:57.113617Z
+assignee: claude-opus5.5-s586
 sprint: 586
 sprint_id: 0d040542-da67-5fa5-917b-6d3a22bdfe3c
 sprint_title: AWS Bedrock via a host-minted short-term key
+closed: 2026-11-08T02:00:51.165859Z
+closed_by: claude-opus5.5-s586
 ---
 
 Usage: an owner shares their host's LLM door (Bedrock-backed via S586.1) with invited non-owners on a satellite (family, friends, team; first case a class). Members may have no outpost and call the satellite with only a credential.

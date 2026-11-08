@@ -3,14 +3,17 @@ id: 27cdbb239461
 kind: feature
 title: S586.1 AWS Bedrock short-term key via a registered refresh command (secrets.map !cmd)
 seq: 3061
-status: doing
+status: done
 priority: p2
 labels:
     - agent-cli
 created: 2026-11-07T03:48:26.212099Z
+assignee: claude-opus5.5-s586
 sprint: 586
 sprint_id: 0d040542-da67-5fa5-917b-6d3a22bdfe3c
 sprint_title: AWS Bedrock via the pooled LLM gateway (bearer upstream)
+closed: 2026-11-08T02:00:50.829375Z
+closed_by: claude-opus5.5-s586
 ---
 
 Replaces S584.B2 (native Converse/SigV4 client). Re-scoped 2026-11-07 (third pass): no outpost, cligw, pool or tool-contract change. A short-term Bedrock key is minted on the host, at credential resolution, by a registered bashy command.
