@@ -194,9 +194,10 @@ func NewSatelliteCmd() *cobra.Command {
 func NewSatelliteInviteCmd() *cobra.Command {
 	var satelliteURL, name, ttl, toFile, tokenOverride string
 	var stdout, asJSON bool
+	var acct accountFlag
 
 	cmd := &cobra.Command{
-		Use:   "invite --satellite URL --name HOST [--ttl 10m] [--to-file PATH] [--json]",
+		Use:   "invite [--satellite URL|--account ALIAS] --name HOST [--ttl 10m] [--to-file PATH] [--json]",
 		Short: "Mint an owner-scoped host pairing invite on a satellite",
 		Long: "Mint an owner-scoped host pairing invite on a satellite.\n\n" +
 			"Exchanges the owner Bearer token for a short-lived host:invite-mint\n" +
@@ -207,7 +208,7 @@ func NewSatelliteInviteCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(satelliteURL) == "" {
+			if !acct.given() && strings.TrimSpace(satelliteURL) == "" {
 				return fmt.Errorf("fleet: satellite invite needs --satellite")
 			}
 			name = strings.TrimSpace(name)
@@ -217,7 +218,7 @@ func NewSatelliteInviteCmd() *cobra.Command {
 			if strings.TrimSpace(ttl) == "" {
 				ttl = "10m"
 			}
-			client, err := NewSatelliteClient(satelliteURL, tokenOverride)
+			client, err := newSatelliteClientFor(cmd.Context(), &acct, satelliteURL, tokenOverride)
 			if err != nil {
 				return err
 			}
@@ -257,12 +258,13 @@ func NewSatelliteInviteCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&satelliteURL, "satellite", "", "satellite base URL (required)")
+	cmd.Flags().StringVar(&satelliteURL, "satellite", "", "satellite base URL (required without --account)")
 	cmd.Flags().StringVar(&name, "name", "", "host name to pair (required)")
 	cmd.Flags().StringVar(&ttl, "ttl", "10m", "time to live for token exchange (default 10m)")
 	cmd.Flags().StringVar(&toFile, "to-file", "", "file path to write the invite code to (0600; default <name>.invite)")
 	cmd.Flags().BoolVar(&stdout, "stdout", false, "print invite code to stdout")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit machine-readable output")
+	acct.bind(cmd)
 	cmd.Flags().StringVar(&tokenOverride, "token", "", "owner Bearer token (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY, else paired token)")
 
 	return cmd

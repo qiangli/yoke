@@ -358,3 +358,39 @@ func newPairedHostsClientFor(ctx context.Context, acct *accountFlag, urlOverride
 	}
 	return NewPairedHostsClient(u, t)
 }
+
+// newOwnerClientFor is the satellite list/show/transfer half: an account
+// REPLACES the master URL and Bearer [REDACTED] an explicit
+// --master/--token alongside `--account` is a conflict, not a precedence
+// question (ResolveCloudAccount). Without `--account` it IS NewOwnerClient,
+// ladder and all.
+func newOwnerClientFor(ctx context.Context, acct *accountFlag, master, token string) (OwnerClient, error) {
+	u, t, err := cloudOverrides(ctx, acct, master, token)
+	if err != nil {
+		return OwnerClient{}, err
+	}
+	return NewOwnerClient(u, t)
+}
+
+// newSatelliteClientFor is the satellite invite half: with `--account` the
+// account names the satellite endpoint and the owner Bearer [REDACTED] (`--satellite`
+// and `--token` alongside it are conflicts). Without `--account` it IS
+// NewSatelliteClient, including the --satellite requirement and the
+// ResolveCloud ladder.
+func newSatelliteClientFor(ctx context.Context, acct *accountFlag, satelliteURL, tokenOverride string) (SatelliteClient, error) {
+	if acct == nil || !acct.given() {
+		return NewSatelliteClient(satelliteURL, tokenOverride)
+	}
+	base, tok, err := cloudOverrides(ctx, acct, satelliteURL, tokenOverride)
+	if err != nil {
+		return SatelliteClient{}, err
+	}
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		base = "https://" + base
+	}
+	return SatelliteClient{
+		BaseURL: strings.TrimRight(base, "/"),
+		Token:   tok,
+		HTTP:    httpClient(),
+	}, nil
+}

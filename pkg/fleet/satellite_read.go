@@ -50,13 +50,14 @@ func selectSatellite(rows []SatelliteEntry, key string) (SatelliteEntry, error) 
 func NewSatelliteListCmd() *cobra.Command {
 	var master, token string
 	var asJSON bool
+	var acct accountFlag
 	c := &cobra.Command{
 		Use:     "list",
 		Short:   "List the satellites visible to the caller",
 		Aliases: []string{"ls"},
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := NewOwnerClient(master, token)
+			client, err := newOwnerClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -86,6 +87,7 @@ func NewSatelliteListCmd() *cobra.Command {
 	c.Flags().StringVar(&master, "master", "", "master base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	c.Flags().StringVar(&token, "token", "", "owner Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY, else the paired credential)")
 	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	acct.bind(c)
 	return c
 }
 
@@ -94,6 +96,7 @@ func NewSatelliteListCmd() *cobra.Command {
 func NewSatelliteShowCmd() *cobra.Command {
 	var master, token string
 	var asJSON bool
+	var acct accountFlag
 	c := &cobra.Command{
 		Use:   "show <id|name>",
 		Short: "Show one satellite by ID or unique exact name",
@@ -103,7 +106,7 @@ func NewSatelliteShowCmd() *cobra.Command {
 			if key == "" {
 				return fmt.Errorf("fleet: satellite show needs an ID or name")
 			}
-			client, err := NewOwnerClient(master, token)
+			client, err := newOwnerClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
 			}
@@ -129,5 +132,6 @@ func NewSatelliteShowCmd() *cobra.Command {
 	c.Flags().StringVar(&master, "master", "", "master base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
 	c.Flags().StringVar(&token, "token", "", "owner Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY, else the paired credential)")
 	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	acct.bind(c)
 	return c
 }

@@ -388,6 +388,10 @@ func TestAccountFlagRegisteredOnTouchedVerbs(t *testing.T) {
 		{"infra credential ls", fleet.NewInfraCmd(), []string{"credential", "ls"}},
 		{"token create", fleet.NewTokenCmd(), []string{"create"}},
 		{"host ls", fleet.NewPairedHostCmd(), []string{"ls"}},
+		{"satellite list", fleet.NewSatelliteCmd(), []string{"list"}},
+		{"satellite show", fleet.NewSatelliteCmd(), []string{"show"}},
+		{"satellite transfer", fleet.NewSatelliteCmd(), []string{"transfer"}},
+		{"satellite invite", fleet.NewSatelliteCmd(), []string{"invite"}},
 	} {
 		c, _, err := tc.root.Find(tc.path)
 		if err != nil {

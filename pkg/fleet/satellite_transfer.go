@@ -13,6 +13,7 @@ import (
 func NewSatelliteTransferCmd() *cobra.Command {
 	var master, token, to string
 	var yes bool
+	var acct accountFlag
 	cmd := &cobra.Command{Use: "transfer <name|id> --to <email>", Short: "Transfer a satellite and everything it owns", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(to) == "" {
 			return fmt.Errorf("satellite transfer needs --to")
@@ -21,7 +22,7 @@ func NewSatelliteTransferCmd() *cobra.Command {
 		if err != nil || addr.Address != to {
 			return fmt.Errorf("invalid --to email %q", to)
 		}
-		client, err := NewOwnerClient(master, token)
+		client, err := newOwnerClientFor(cmd.Context(), &acct, master, token)
 		if err != nil {
 			return err
 		}
@@ -65,5 +66,6 @@ func NewSatelliteTransferCmd() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", "", "owner Bearer token")
 	cmd.Flags().StringVar(&to, "to", "", "recipient account email (required)")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip confirmation")
+	acct.bind(cmd)
 	return cmd
 }
