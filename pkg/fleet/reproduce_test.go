@@ -205,17 +205,29 @@ func TestReproducePlanJSON(t *testing.T) {
 	if len(plan.Gaps) == 0 {
 		t.Fatalf("plan has no gaps; uncovered dimensions must be listed")
 	}
-	sawSatellite, sawRegistry := false, false
+	sawSatellite, sawSatelliteDetail, sawHostMapping, sawRegistry := false, false, false, false
 	for _, g := range plan.Gaps {
-		if strings.Contains(g.MissingEndpoint, "/api/v1/satellites") {
+		if g.Category == "satellite-record" {
 			sawSatellite = true
+			if g.MissingEndpoint != "" {
+				t.Fatalf("satellite-record should not claim missing endpoint: %+v", g)
+			}
+			if !strings.Contains(g.Reason, "BuildReproducePlan does not consume list rows") {
+				t.Fatalf("satellite-record should explain BuildReproducePlan does not consume list rows: %+v", g)
+			}
+		}
+		if g.Category == "satellite-detail" {
+			sawSatelliteDetail = true
+		}
+		if g.Category == "host-satellite-mapping" {
+			sawHostMapping = true
 		}
 		if strings.Contains(g.MissingEndpoint, "registry") {
 			sawRegistry = true
 		}
 	}
-	if !sawSatellite || !sawRegistry {
-		t.Fatalf("gaps do not name the missing satellite/registry endpoints: %+v", plan.Gaps)
+	if !sawSatellite || !sawSatelliteDetail || !sawHostMapping || !sawRegistry {
+		t.Fatalf("gaps do not retain honest limitations (satellite, satellite-detail, host-mapping, registry): %+v", plan.Gaps)
 	}
 	if strings.Contains(jout, "owner-session") {
 		t.Fatalf("plan leaks the caller credential")

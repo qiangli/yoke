@@ -19,11 +19,12 @@ package fleet
 // There is NO --apply in this run: the root refuses anything but --plan,
 // and even --plan --apply is rejected as an unknown flag by cobra.
 //
-// Coverage the wire cannot serve is returned machine-readably in
-// gaps (and mirrored in --help): satellite rows, enrollment + escrowed
+// Coverage the wire cannot serve or the plan does not consume is returned machine-readably in
+// gaps (and mirrored in --help): satellite rows (available list metadata not
+// consumed by the plan), per-satellite detail, enrollment + escrowed
 // recovery keys + checkpoint/etcd locations, DKS bundles and federation,
 // registry backends/routes/grants, and the host→satellite mapping. Each
-// gap names the missing Bearer [REDACTED] instead of inventing one.
+// gap names the missing Bearer endpoint or explains the coverage limit.
 
 import (
 	"fmt"
@@ -70,15 +71,14 @@ type ReproducePlan struct {
 }
 
 // reproduceGaps is the static coverage list: dimensions of the story's
-// design (satellites, enrollment/escrow/snapshots, DKS, registry,
-// host→satellite mapping) with no Bearer [REDACTED] on the master. Kept next to
-// the builder so --plan --json and --help can never drift apart.
+// design (satellite rows not consumed by the plan, per-satellite detail,
+// enrollment/escrow/snapshots, DKS, registry, host→satellite mapping).
+// Kept next to the builder so --plan --json and --help can never drift apart.
 func reproduceGaps() []ReproduceGap {
 	return []ReproduceGap{
 		{
-			Category:        "satellite-record",
-			Reason:          "satellite rows (endpoint, state, key_state, owner) are session-only; the plan derives satellites from provisioning requests instead",
-			MissingEndpoint: "GET /api/v1/satellites",
+			Category: "satellite-record",
+			Reason:   "BuildReproducePlan does not consume list rows; available list metadata is not yet used for manual satellite reconstruction",
 		},
 		{
 			Category:        "satellite-detail",
@@ -241,10 +241,10 @@ func NewReproduceCmd() *cobra.Command {
 		Long: "Dry-run what master metadata can recreate (read-only).\n\n" +
 			"`reproduce --plan` lists, for each managed resource with a master\n" +
 			"record, the action that would recreate it through the product path\n" +
-			"and the record it comes from. Dimensions the Bearer [REDACTED] cannot serve\n" +
-			"(satellite rows, escrow/snapshots, DKS, registry, host→satellite\n" +
-			"mapping) are reported under gaps, each naming the missing endpoint.\n" +
-			"There is no --apply in this run.",
+			"and the record it comes from. Dimensions the Bearer endpoint cannot serve\n" +
+			"or the plan does not consume (satellite rows, per-satellite detail,\n" +
+			"escrow/snapshots, DKS, registry, host→satellite mapping) are reported\n" +
+			"under gaps. There is no --apply in this run.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
