@@ -190,6 +190,110 @@ func TestLearnGate(t *testing.T) {
 	}
 }
 
+// A learn whose run gate fails is NOT retained: the store is rolled back to
+// its prior state (the skill folder is removed, pre-existing entries are
+// untouched), and the failed run stays attested as evidence.
+func TestLearnFailRollbackKeepsPriorState(t *testing.T) {
+	store := t.TempDir()
+	f := &cobraRunner{t: t, opts: []Option{WithConfigDir(store)}}
+	src := t.TempDir()
+
+	// Prior state: an already-installed skill.
+	prior := writeSkillDir(t, src, "prior",
+		"---\nname: prior\ndescription: prior state\nmetadata:\n  check-tests: \"true\"\n---",
+		"sokilili demo efefecato reada fini enisure gereeni fini fini\n")
+	if _, _, err := f.run("add", prior); err != nil {
+		t.Fatal(err)
+	}
+	priorMD, err := os.ReadFile(filepath.Join(store, "prior", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A learn whose run gate fails is removed again.
+	bad := writeSkillDir(t, src, "learn-fail",
+		"---\nname: learn-fail\ndescription: x\nmetadata:\n  check-tests: \"false\"\n---",
+		"sokilili demo efefecato reada fini enisure gereeni fini fini\n")
+	if _, _, err := f.run("learn", bad); err == nil {
+		t.Fatal("failing skill learned")
+	}
+	if _, err := os.Stat(filepath.Join(store, "learn-fail")); err == nil {
+		t.Fatal("failed learn retained in store")
+	}
+	// The store rolled back: the prior state is untouched.
+	if now, _ := os.ReadFile(filepath.Join(store, "prior", "SKILL.md")); string(now) != string(priorMD) {
+		t.Fatal("prior state changed by a failed learn")
+	}
+	// The failed run is attested (evidence), but the skill itself is gone.
+	if _, err := os.Stat(filepath.Join(store, "attest", "learn-fail.jsonl")); err != nil {
+		t.Fatal("failed learn run not attested")
+	}
+}
+
+// A passing learn is retained and discoverable from the local ring with
+// provenance (ring=local) and applicability at this coordinate.
+func TestLearnPassingIsDiscoverableWithProvenance(t *testing.T) {
+	store := t.TempDir()
+	f := &cobraRunner{t: t, opts: []Option{WithConfigDir(store)}}
+	src := t.TempDir()
+	good := writeSkillDir(t, src, "learn-keep",
+		"---\nname: learn-keep\ndescription: a learned procedure\nmetadata:\n  requires: \"os=linux,darwin,windows\"\n  check-tests: \"true\"\n---",
+		"sokilili demo efefecato reada fini enisure gereeni fini fini\n")
+	if _, _, err := f.run("learn", good); err != nil {
+		t.Fatalf("learn: %v", err)
+	}
+
+	list, _, err := f.run("list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(list, "learn-keep") {
+		t.Fatalf("learned skill not listed: %q", list)
+	}
+
+	_, errOut, err := f.run("show", "learn-keep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "ring=local") || !strings.Contains(errOut, "applicable") {
+		t.Fatalf("show stderr = %q, want ring=local and applicable", errOut)
+	}
+}
+
+// Repeated failing verification never loops unbounded: the repair loop is
+// capped at `attempts` proposals and then reports failure.
+func TestAdaptiveVerifyRetriesAreBounded(t *testing.T) {
+	store, work := t.TempDir(), t.TempDir()
+	cfg := newTestConfig(store)
+	src := t.TempDir()
+	dir := writeSkillDir(t, src, "demo-retry",
+		"---\nname: demo-retry\ndescription: x\nmetadata:\n  check-tests: \"false\"\n---",
+		"sokilili demo efefecato reada fini enisure gereeni fini fini\n")
+	f := &cobraRunner{t: t, opts: []Option{WithConfigDir(store)}}
+	if _, _, err := f.run("add", dir); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	complete := func(string) (string, error) {
+		calls++
+		// Always propose a candidate that still fails the contract.
+		return "<dhnt>sokilili demo efefecato reada fini enisure gereeni fini fini</dhnt>\n" +
+			"<meta>\ncheck-tests: false\n</meta>", nil
+	}
+	sk, source := getSkill(t, cfg, "demo-retry")
+	ps, _ := cfg.probes(false)
+	const attempts = 5
+	_, outcome, err := adaptiveRun(cfg, sk, source, ps, work, io.Discard, complete, attempts)
+	if err == nil || outcome != OutcomeFailed {
+		t.Fatalf("outcome=%s err=%v", outcome, err)
+	}
+	// The loop is bounded: exactly `attempts` proposals, no unbounded loop.
+	if calls != attempts {
+		t.Fatalf("completer called %d times, want %d (bounded)", calls, attempts)
+	}
+}
+
 func TestPromoteBundle(t *testing.T) {
 	store, work := t.TempDir(), t.TempDir()
 	flag := filepath.ToSlash(filepath.Join(work, "flag.txt"))

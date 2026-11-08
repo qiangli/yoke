@@ -422,3 +422,59 @@ func TestCommandShadowsAndVerify(t *testing.T) {
 		t.Errorf("unprobed script verify must warn: %+v", chk)
 	}
 }
+
+// The acquire/verify/retain loop for a registered command: writing the
+// record into the store (acquire) makes it discoverable with provenance
+// (ring local) and applicable at this coordinate, and verification is what
+// separates "on the record" from "usable here".
+func TestCommandAcquireVerifyRetainLoop(t *testing.T) {
+	root := t.TempDir()
+	cat := New(WithRoot(root), WithReservedNames(reservedFixture))
+
+	// Acquire: `commands add` writes here through SaveCommand.
+	if err := cat.SaveCommand(Command{Name: "gl", Exec: []string{shPath(t)},
+		Requires: "os=linux,darwin,windows", Synopsis: "compact log"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Discoverable with provenance: the store's listing carries ring=local.
+	cmds, errs := cat.Commands()
+	if len(errs) != 0 {
+		t.Fatalf("Commands() errors: %v", errs)
+	}
+	found := false
+	for _, r := range cmds {
+		if r.Name == "gl" {
+			found = true
+			if r.Ring != assetring.RingLocal || r.Synopsis != "compact log" {
+				t.Fatalf("provenance = %v synopsis=%q, want local ring", r.Ring, r.Synopsis)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("registered command not discoverable from the store")
+	}
+
+	// Verify passes once the executable is present on this host.
+	if chk := cat.VerifyCommand(context.Background(), "gl"); !chk.OK {
+		t.Fatalf("VerifyCommand = %+v", chk)
+	}
+
+	// Applicability holds at this coordinate (os + requires gate).
+	got, ok := cat.Command("gl")
+	if !ok {
+		t.Fatal("Command() lost the verified record")
+	}
+	if v := got.Applicability(Probes(nil)); !v.Applicable {
+		t.Fatalf("Applicability = %+v", v)
+	}
+
+	// A record whose executable is absent is not usable: verification fails,
+	// so it is not retained as a verified command.
+	if err := cat.SaveCommand(Command{Name: "ghost", Exec: []string{filepath.Join(root, "no-such-prog")}}); err != nil {
+		t.Fatal(err)
+	}
+	if chk := cat.VerifyCommand(context.Background(), "ghost"); chk.OK || !strings.Contains(chk.Reason, "not installed") {
+		t.Fatalf("ghost verify = %+v", chk)
+	}
+}
