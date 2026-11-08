@@ -117,7 +117,12 @@ type SatellitePruneEntry struct {
 	LastContact          *time.Time `json:"last_contact"`
 }
 type ProvisionPruneEntry struct{ ID, Name, State, ResourceState, SatelliteID, Reason string }
-type SatelliteEntry struct{ ID, Name, Endpoint, State string }
+type SatelliteEntry struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Endpoint string `json:"endpoint"`
+	State    string `json:"state"`
+}
 type TransferResult struct {
 	SatelliteID   string    `json:"satellite_id"`
 	From          string    `json:"from"`

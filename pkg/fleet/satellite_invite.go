@@ -186,7 +186,7 @@ func NewSatelliteCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	c.AddCommand(NewSatelliteInviteCmd(), NewSatelliteTransferCmd())
+	c.AddCommand(NewSatelliteInviteCmd(), NewSatelliteTransferCmd(), NewSatelliteListCmd(), NewSatelliteShowCmd())
 	return c
 }
 
