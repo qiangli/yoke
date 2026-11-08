@@ -52,6 +52,10 @@ type IntegrationMCP struct {
 	Format string   `yaml:"format" json:"format" doc:"json, jsonc, json5, toml or yaml"`
 	Key    string   `yaml:"key" json:"key" doc:"dotted path of the server map"`
 	CLI    []string `yaml:"cli,omitempty" json:"cli,omitempty" doc:"the tool's own command that adds a server (preferred over editing the file)"`
+	// Entry and Root carry a tool's schema extras for the printed entry:
+	// Entry merges into the server entry, Root adds top-level keys.
+	Entry map[string]any `yaml:"entry,omitempty" json:"entry,omitempty" doc:"extra fields the tool requires in each server entry"`
+	Root  map[string]any `yaml:"root,omitempty" json:"root,omitempty" doc:"extra top-level keys the tool requires in the config file"`
 }
 
 // Scope values for IntegrationFile.

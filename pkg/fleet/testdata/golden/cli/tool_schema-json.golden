@@ -1150,6 +1150,16 @@
     "description": "config file path"
   },
   {
+    "path": "integration.mcp.entry",
+    "type": "map[string]interface {}",
+    "description": "extra fields the tool requires in each server entry"
+  },
+  {
+    "path": "integration.mcp.entry.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
+  },
+  {
     "path": "integration.mcp.format",
     "type": "string",
     "description": "json, jsonc, json5, toml or yaml"
@@ -1158,6 +1168,16 @@
     "path": "integration.mcp.key",
     "type": "string",
     "description": "dotted path of the server map"
+  },
+  {
+    "path": "integration.mcp.root",
+    "type": "map[string]interface {}",
+    "description": "extra top-level keys the tool requires in the config file"
+  },
+  {
+    "path": "integration.mcp.root.\u003ckey\u003e",
+    "type": "interface {}",
+    "description": "map value"
   },
   {
     "path": "integration.shell_env",

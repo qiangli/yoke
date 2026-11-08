@@ -227,7 +227,7 @@ func registerToolMCP(w, errw io.Writer, tool string, mcp *fleet.IntegrationMCP, 
 		fmt.Fprintf(w, "mcp: registered the %s server with %s via its own command (%s)\n", mcpServerName, tool, displayArgv(mcp.CLI))
 		return nil
 	}
-	doc, err := mcpEntryDoc(mcp.Format, mcp.Key)
+	doc, err := mcpEntryDoc(mcp)
 	if err != nil {
 		return err
 	}
@@ -243,15 +243,32 @@ func registerToolMCP(w, errw io.Writer, tool string, mcp *fleet.IntegrationMCP, 
 // mcpEntryDoc renders the server entry under the tool's dotted key —
 // "mcp_servers" nests the server one level down, "a.b" two — in the tool's
 // declared config format (json, jsonc, json5, toml or yaml; json is the
-// default).
-func mcpEntryDoc(format, key string) (string, error) {
-	var doc any = map[string]any{mcpServerName: mcpServerEntry}
-	segs := strings.Split(strings.TrimSpace(key), ".")
+// default). The tool's declared Entry fields merge into the server entry and
+// its Root keys sit beside the server map.
+func mcpEntryDoc(mcp *fleet.IntegrationMCP) (string, error) {
+	entry := map[string]any{}
+	for k, v := range mcpServerEntry {
+		entry[k] = v
+	}
+	for k, v := range mcp.Entry {
+		entry[k] = v
+	}
+	var doc any = map[string]any{mcpServerName: entry}
+	segs := strings.Split(strings.TrimSpace(mcp.Key), ".")
 	for i := len(segs) - 1; i >= 0; i-- {
 		if segs[i] != "" {
 			doc = map[string]any{segs[i]: doc}
 		}
 	}
+	if len(mcp.Root) > 0 {
+		top, _ := doc.(map[string]any)
+		for k, v := range mcp.Root {
+			if _, taken := top[k]; !taken {
+				top[k] = v
+			}
+		}
+	}
+	format := mcp.Format
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "json", "jsonc", "json5":
 		b, err := json.MarshalIndent(doc, "", "  ")

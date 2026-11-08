@@ -2,6 +2,7 @@ package skills
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -180,5 +181,31 @@ func TestCLIExportMCPDryRun(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "claw mcp add -s user bashy -- bashy mcp serve") {
 		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+// A tool whose schema needs extra entry fields and top-level keys (muse:
+// type/mode per server, schema_version at the root) gets them in the printed
+// entry, and the bashy command stays intact.
+func TestMCPEntryDocCarriesToolSchemaExtras(t *testing.T) {
+	doc, err := mcpEntryDoc(&fleet.IntegrationMCP{
+		Format: "json",
+		Key:    "mcpServers",
+		Entry:  map[string]any{"type": "stdio", "mode": "optional"},
+		Root:   map[string]any{"schema_version": 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Servers map[string]map[string]any `json:"mcpServers"`
+		Schema  int                       `json:"schema_version"`
+	}
+	if err := json.Unmarshal([]byte(doc), &got); err != nil {
+		t.Fatalf("entry is not JSON: %v\n%s", err, doc)
+	}
+	e := got.Servers[mcpServerName]
+	if got.Schema != 1 || e["type"] != "stdio" || e["mode"] != "optional" || e["command"] != "bashy" {
+		t.Fatalf("entry lost the tool's schema extras or the command:\n%s", doc)
 	}
 }
