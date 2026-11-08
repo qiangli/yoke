@@ -16,12 +16,12 @@ func TestFleetListHelpDefinesEveryOutputField(t *testing.T) {
 		{
 			name: "tools", root: NewToolsCmd,
 			want: []string{"NAME", "KIND", "BINARY", "MODEL-SELECT", "RING", "selects_model",
-				"declared binary, otherwise NAME", "hidden internal tools", "not where an executable", "tools verify NAME"},
+				"declared binary, otherwise NAME", "hidden internal tools", "not where an executable", "tool verify NAME"},
 		},
 		{
 			name: "models", root: NewModelsCmd,
 			want: []string{"NAME", "BAND", "KIND", "PROVIDER", "TARGET", "ALIASES", "RING",
-				"band_source", "not billing mode", "tool-specific id"},
+				"band_source", "not billing mode", "tool-specific id", "agent show NAME"},
 		},
 		{
 			name: "agents", root: NewAgentsCmd,
@@ -167,5 +167,48 @@ func TestAgentsListJSONRefusesAnAmbiguousIdentity(t *testing.T) {
 	}
 	if strings.HasPrefix(strings.TrimSpace(out), "[") {
 		t.Fatalf("ambiguous JSON roster emitted selectable rows: %s", out)
+	}
+}
+
+func TestFleetHelpDoesNotContainNonCanonicalCommandSpellings(t *testing.T) {
+	cases := []struct {
+		name   string
+		root   func(...Option) *cobra.Command
+		forbid []string
+		want   []string
+	}{
+		{
+			name:   "tool",
+			root:   NewToolsCmd,
+			forbid: []string{"tools verify NAME"},
+			want:   []string{"tool verify NAME"},
+		},
+		{
+			name:   "model",
+			root:   NewModelsCmd,
+			forbid: []string{"agents show NAME"},
+			want:   []string{"agent show NAME"},
+		},
+	}
+
+	for _, tc := range cases {
+		for _, args := range [][]string{{"--help"}, {"list", "--help"}} {
+			t.Run(tc.name+"/"+strings.Join(args, "-"), func(t *testing.T) {
+				out, err := runCmd(t, tc.root(WithRoot(t.TempDir())), args...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, forbid := range tc.forbid {
+					if strings.Contains(out, forbid) {
+						t.Errorf("help contains non-canonical command spelling %q:\n%s", forbid, out)
+					}
+				}
+				for _, want := range tc.want {
+					if !strings.Contains(out, want) {
+						t.Errorf("help does not contain canonical command spelling %q:\n%s", want, out)
+					}
+				}
+			})
+		}
 	}
 }
