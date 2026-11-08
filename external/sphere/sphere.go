@@ -84,9 +84,6 @@ Set $OUTPOST_BIN to point at a specific outpost binary.`,
 	}
 }
 
-// NewPeerCmd builds the `bashy peer` command.
-func NewPeerCmd() *cobra.Command { return NewSphereCmd() }
-
 // joinLines is the clear, inviting message shown when this machine isn't part of
 // a sphere yet: pool inference/compute across the computers you own by joining
 // Tessaro (the front door), which pairs this machine via the outpost mesh agent.
