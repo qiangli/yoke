@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] A service unit's expose.app with no port routes AT the primary listener — WHEN a bashy/outpost service unit fronts its real server with a translating proxy (loom/gitea + X-WEBAUTH-*, or any auth-header gateway): expose.app / expose.mesh with no 'port:' resolve to the unit's PRIMARY listener, so the proxy is sil  (kb:a-service-unit-s-expose-app-with-no-port-routes-at-the-primary-l)
+- [repo/page] Bare Bash# decorator without parens parses as a plain command, not a decorator — WHEN reading Bash# isolation requests with sh/syntax LangBashPP: a bare @sandbox line (no parens) does not attach to the function declaration and parses as a CallExpr with literal @sandbox, so a decorator-only walk silently reports  (kb:bare-bash-decorator-without-parens-parses-as-a-plain-command-not)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
