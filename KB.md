@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Account observation hook: where it can and cannot live — WHEN wiring an automatic account-collection hook (pkg/accounts) into a provider or budget path in yoke — pkg/provider is a stdlib-only nested module and pkg/llmbudget is imported BY accounts, so neither can call the hook directly pkg/accounts.ObserveSuccess cannot  (kb:account-observation-hook-where-it-can-and-cannot-live)
+- [repo/page] Bare Bash# decorator without parens parses as a plain command, not a decorator — WHEN reading Bash# isolation requests with sh/syntax LangBashPP: a bare @sandbox line (no parens) does not attach to the function declaration and parses as a CallExpr with literal @sandbox, so a decorator-only walk silently reports  (kb:bare-bash-decorator-without-parens-parses-as-a-plain-command-not)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
