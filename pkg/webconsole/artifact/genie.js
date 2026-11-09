@@ -86,9 +86,11 @@
   const NEUTRAL = "How can I help you today?";
   const ROTATE_MS = 6000;
 
-  const sparkle = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M12 3l1.8 4.6L18.4 9l-4.6 1.8L12 15.4l-1.8-4.6L5.6 9l4.6-1.4z"/>' +
-    '<path d="M5 17l.9 2.1L8 20l-2.1.9L5 23l-.9-2.1L2 20l2.1-.9z"/></svg>';
+  // The Software Shaping mark ("Flow": two flattened S curves in a diagonal
+  // stack), traced from bashy docs/software-shaping-design/monochrome. It
+  // fills with currentColor, so it follows the light and dark themes.
+  const sparkle = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+    '<path d="M15.67 1.18L14.58 1.34L13.69 1.58L12.8 1.94L11.8 2.5L10.42 3.61L7.74 6.5L6.96 7.12L6.33 7.47L5.54 7.75L4.88 7.85L4.44 7.83L3.78 7.68L2.96 7.2L2.68 7.14L2.31 7.29L1.74 7.9L1.35 8.59L1.11 9.33L1 10.14L1.04 10.58L1.21 11.33L1.43 11.86L1.84 12.48L2.36 13.04L3.06 13.54L3.57 13.79L4.31 14.01L5.03 14.11L6.4 13.96L7.18 13.72L7.93 13.39L8.9 12.79L9.85 12.01L12.09 9.61L13.79 8L14.79 7.33L15.73 6.87L16.63 6.58L17.35 6.43L18.14 6.35L19.02 6.39L20.48 6.71L21.27 7.06L22.2 7.64L22.44 7.67L22.63 7.55L22.7 7.32L22.65 6.54L22.27 5.19L21.72 4.12L20.83 3.01L19.59 2.09L18.48 1.57L17.19 1.25L16.41 1.16ZM18.37 10.05L17.61 10.15L16.77 10.39L15.81 10.84L15.05 11.32L13.82 12.31L10.61 15.69L9.24 16.8L8.04 17.45L7.26 17.69L6.24 17.81L5.07 17.68L4.23 17.45L3.54 17.16L2.08 16.25L1.76 16.3L1.67 16.48L1.65 16.89L1.86 18.09L2.3 19.21L2.76 19.99L3.54 20.95L4.16 21.51L4.9 22.02L5.66 22.4L6.69 22.72L7.54 22.84L8.81 22.81L10.2 22.47L11.2 22.01L12.53 21.13L13.15 20.61L15.55 18.15L16.56 17.37L17.4 16.91L18.53 16.53L19.54 16.41L20.51 16.52L21.62 16.93L21.96 16.88L22.18 16.72L22.46 16.35L22.75 15.72L23 14.46L22.93 13.28L22.75 12.7L22.45 12.09L22.21 11.73L21.64 11.12L20.88 10.58L20.21 10.28L19.74 10.15L18.78 10.03Z"/></svg>';
 
   const css = `
 .bgn{--g-bg:#fff;--g-fg:#18181b;--g-muted:#71717a;--g-border:#e4e4e7;--g-primary:#2563eb;--g-primary-fg:#fff;--g-warn:#b45309;--g-shade:rgba(0,0,0,.45);
@@ -1135,7 +1137,7 @@
       const undone = (st.steps || []).length - (st.cursor || 0);
       if (undone) parts.push(["Undone", plural(undone, "wish", "wishes") + " (redo brings " + (undone === 1 ? "it" : "them") + " back; a new wish clears " + (undone === 1 ? "it" : "them") + ")"]);
       sum.replaceChildren();
-      if (!parts.length) sum.append(el("span", "", "Your private draft of " + app + ": make a wish from the sparkle, as many as you like; nothing changes your current version until you save."));
+      if (!parts.length) sum.append(el("span", "", "Your private draft of " + app + ": make a wish from the shaping button, as many as you like; nothing changes your current version until you save."));
       parts.forEach(([k, v], i) => {
         if (i) sum.append(el("span", "", " · "));
         sum.append(el("b", "", k + ": "), el("span", "", v));
