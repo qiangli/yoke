@@ -23,3 +23,5 @@ Expected: record and show the agent as its tool:model nickname (or agent identit
 Verification: rerun the hello-world web and CLI walkthroughs; the candidate card, review page, Versions list, `shape show --json` and `git log` of the shaped line contain no absolute home or workspace paths. Add a unit test for the agent label and for workspace-path rewriting in coverage.
 
 Related (isolation, separate): with a throwaway BASHY_HOME, each wish still writes its tracking todo under the real ~/.bashy/todo/<caller>/ (tracking_root ignores BASHY_HOME).
+
+Also seen: `shape wish --from DIR` run with the shell inside an unrelated git checkout wrote its tracking todo and .shape-tracking.lock into that checkout's docs/todo/. Shaping tracking should land in the app's or BASHY_HOME's store, never in the caller's current repository.
