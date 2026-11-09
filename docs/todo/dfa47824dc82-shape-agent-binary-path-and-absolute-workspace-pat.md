@@ -3,12 +3,13 @@ id: dfa47824dc82
 kind: bug
 title: 'shape: agent binary path and absolute workspace paths leak into the UI and commit trailers'
 seq: 3066
-status: todo
+status: done
 priority: p1
 labels:
     - shaping
     - privacy
 created: 2026-11-09T08:20:03.750858Z
+closed: 2026-11-09T08:35:50.620499Z
 ---
 
 Found rehearsing the software-shaping demo (examples/shaping/hello-world, codex:gpt6-sol, 2026-11-09).

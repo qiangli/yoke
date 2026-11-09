@@ -426,6 +426,7 @@ func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, er
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	c.Coverage = ParseCoverage(res.Output)
 	c.Next = ParseNext(res.Output)
+	relativizeCoverage(&c)
 	if e == nil {
 		c.Rev, e = CommitCandidate(r, c)
 	}

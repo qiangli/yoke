@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -186,6 +187,63 @@ func CommitCandidate(r *gogit.Repository, c Candidate) (string, error) {
 }
 
 func OneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// RelativizeWorkspace rewrites absolute paths under a candidate workspace to
+// app-relative ones. Agent summaries cite files by absolute path, and the
+// workspace sits under the operator's home or temp directory; the summaries
+// are shown in the console and copied into activation commit messages.
+func RelativizeWorkspace(text, workspace string) string {
+	if text == "" || workspace == "" {
+		return text
+	}
+	for _, ws := range workspaceSpellings(workspace) {
+		text = strings.ReplaceAll(text, ws+"/", "")
+		text = strings.ReplaceAll(text, ws, ".")
+	}
+	return text
+}
+
+// workspaceSpellings lists the forms a workspace path can take in agent
+// output, longest first: as given, symlink-resolved, and with or without the
+// macOS /private prefix (/var and /tmp are symlinks into /private).
+func workspaceSpellings(workspace string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		p = strings.TrimRight(filepath.ToSlash(filepath.Clean(p)), "/")
+		if p != "" && p != "." && p != "/" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	add(workspace)
+	if real, err := filepath.EvalSymlinks(workspace); err == nil {
+		add(real)
+	}
+	for _, p := range append([]string(nil), out...) {
+		if rest, ok := strings.CutPrefix(p, "/private/"); ok {
+			add("/" + rest)
+		} else if strings.HasPrefix(p, "/var/") || strings.HasPrefix(p, "/tmp/") {
+			add("/private" + p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
+}
+
+func relativizeCoverage(c *Candidate) {
+	if c.Coverage != nil {
+		for i := range c.Coverage.Covered {
+			c.Coverage.Covered[i] = RelativizeWorkspace(c.Coverage.Covered[i], c.Workspace)
+		}
+		for i := range c.Coverage.NotCovered {
+			c.Coverage.NotCovered[i] = RelativizeWorkspace(c.Coverage.NotCovered[i], c.Workspace)
+		}
+	}
+	for i := range c.Next {
+		c.Next[i] = RelativizeWorkspace(c.Next[i], c.Workspace)
+	}
+}
 
 func ParseNext(output string) []string {
 	var items []string

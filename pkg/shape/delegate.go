@@ -101,10 +101,11 @@ func (d BashyDelegate) Delegate(ctx context.Context, req DelegateRequest) (Deleg
 		}
 		return DelegateResult{}, fmt.Errorf("delegate: unreadable result envelope: %w", err)
 	}
-	res := DelegateResult{Agent: env.Agent, Identity: env.Identity, Receipt: env.Receipt, Output: env.Output}
-	if res.Agent == "" {
-		res.Agent = d.Agent
-	}
+	// The envelope's agent field is the resolved executable path, which embeds
+	// the operator's home directory. A candidate's agent is shown in the
+	// console and written into commit trailers that can be pushed, so record
+	// the configured tool:model instead.
+	res := DelegateResult{Agent: d.Agent, Identity: env.Identity, Receipt: env.Receipt, Output: env.Output}
 	if runErr != nil || env.ExitCode != 0 {
 		return res, fmt.Errorf("delegate: agent %s exited %d", res.Agent, env.ExitCode)
 	}
