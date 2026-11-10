@@ -27,8 +27,8 @@ func (c zeroPassthroughCLI) ResolveAgent(context.Context, string, string) (Agent
 }
 func (c zeroPassthroughCLI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(r.Context(), "bashy", c.script, "hello")
-	cmd.Env = append(os.Environ(), "OPENAI_BASE_URL="+c.endpoint, "OPENAI_API_KEY=fake-key")
-	raw, err := cmd.CombinedOutput()
+	cmd.Env = append(os.Environ(), "OPENAI_BASE_URL="+c.endpoint, "OPENAI_API_KEY=fake-key", "BASHY_HINTS=off")
+	raw, err := cmd.Output()
 	if err != nil {
 		http.Error(w, err.Error()+": "+string(raw), http.StatusBadGateway)
 		return
