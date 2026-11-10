@@ -3,9 +3,11 @@ id: 926d8f48ce4e
 kind: refactor
 title: Consolidate pkg/pricing (dormant catalog, peak windows) into pkg/llmprice
 seq: 3074
-status: todo
+status: assigned
 priority: p2
 created: 2026-11-10T02:56:14.298332Z
+weave: 46
+assignee: agy-gemini3.8-flash
 sprint: 607
 sprint_id: d3d7f687-3414-576c-ad29-b45dfc879257
 sprint_title: 'Metering follow-ups: one price table, honest cost and alarms, member go-live guards'

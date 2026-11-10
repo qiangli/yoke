@@ -3,9 +3,11 @@ id: c18ec0cbdab5
 kind: enhancement
 title: F2 price cache writes at the cache-write rate
 seq: 3075
-status: todo
+status: assigned
 priority: p3
 created: 2026-11-10T03:47:55.971778Z
+weave: 48
+assignee: codex-gpt6-sol
 sprint: 607
 sprint_id: d3d7f687-3414-576c-ad29-b45dfc879257
 sprint_title: 'Metering follow-ups: one price table, honest cost and alarms, member go-live guards'
