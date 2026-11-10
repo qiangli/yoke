@@ -3,9 +3,11 @@ id: 1916e626b1d3
 kind: bug
 title: 'A1 fix: zero-ycode passthrough exec runs a literal {state_dir}/run.sh at the door'
 seq: 3072
-status: todo
+status: assigned
 priority: p1
 created: 2026-11-10T02:38:21.499178Z
+weave: 25
+assignee: codex-gpt6-sol
 sprint: 602
 sprint_id: 945d80da-6344-5fa1-8afb-08d6cac5d7a0
 sprint_title: 'Metered shared LLM access: per-peer usage, cost and limits on the LLM door (provider-agnostic)'
