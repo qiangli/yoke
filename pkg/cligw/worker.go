@@ -44,6 +44,7 @@ const (
 type Usage struct {
 	InputTokens       int64 `json:"input_tokens"`
 	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens  int64 `json:"cache_write_tokens,omitempty"`
 	OutputTokens      int64 `json:"output_tokens"`
 	TotalTokens       int64 `json:"total_tokens"`
 	Estimated         bool  `json:"estimated"`
@@ -920,6 +921,7 @@ func usageFromEvent(raw []byte) Usage {
 		u := Usage{
 			InputTokens:       number(m, "input_tokens", "prompt_tokens", "input"),
 			CachedInputTokens: number(m, "cached_input_tokens", "cache_read_input_tokens", "cache_read_tokens"),
+			CacheWriteTokens:  number(m, "cache_creation_input_tokens"),
 			OutputTokens:      number(m, "output_tokens", "completion_tokens", "output"),
 			TotalTokens:       number(m, "total_tokens", "total"),
 		}

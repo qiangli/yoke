@@ -32,6 +32,16 @@ func TestRollupUsageFixture(t *testing.T) {
 	}
 }
 
+func TestRollupUsageCacheWrites(t *testing.T) {
+	rows, err := RollupUsage(strings.NewReader("{\"time\":\"2026-11-10T00:00:00Z\",\"principal\":\"owner\",\"prompt_tokens\":15,\"cached_tokens\":7,\"cache_write_tokens\":5}\n"), UsageRollupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].PromptTokens != 15 || rows[0].CachedTokens != 7 || rows[0].CacheWriteTokens != 5 {
+		t.Fatalf("rollup = %+v", rows)
+	}
+}
+
 func TestRollupUsagePrincipalFilter(t *testing.T) {
 	f, err := os.Open(filepath.Join("testdata", "audit_usage.jsonl"))
 	if err != nil {

@@ -41,6 +41,7 @@ type Record struct {
 	WallMS        int64          `json:"wall_ms"`
 	PromptTok     int            `json:"prompt_tokens,omitempty"`
 	CachedTok     int            `json:"cached_tokens,omitempty"`
+	CacheWriteTok int            `json:"cache_write_tokens,omitempty"`
 	OutputTok     int            `json:"completion_tokens,omitempty"`
 	Error         string         `json:"error,omitempty"`
 	// MemberListAgeMS is present for every member-bound peer decision. Offline
@@ -180,13 +181,13 @@ func (c *captureWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 // prompt_tokens/completion_tokens) or Anthropic (usage.input_tokens/
 // output_tokens), JSON or SSE/NDJSON.
 func parseTokens(tail []byte) (prompt, output int) {
-	prompt, output, _ = parseUsage(tail)
+	prompt, output, _, _ = parseUsage(tail)
 	return
 }
 
-func parseUsage(tail []byte) (prompt, output, cached int) {
+func parseUsage(tail []byte) (prompt, output, cached, cacheWrite int) {
 	lines := bytes.Split(tail, []byte("\n"))
-	gotPrompt, gotOutput, gotCached := false, false, false
+	gotPrompt, gotOutput, gotCached, gotCacheWrite := false, false, false, false
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := bytes.TrimSpace(lines[i])
 		line = bytes.TrimPrefix(line, []byte("data:"))
@@ -206,7 +207,8 @@ func parseUsage(tail []byte) (prompt, output, cached int) {
 				CacheRead  *int `json:"cache_read_input_tokens"`
 				CacheWrite *int `json:"cache_creation_input_tokens"`
 				Details    *struct {
-					Cached int `json:"cached_tokens"`
+					Cached     int `json:"cached_tokens"`
+					CacheWrite int `json:"cache_write_tokens"`
 				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 			Message *struct {
@@ -254,6 +256,14 @@ func parseUsage(tail []byte) (prompt, output, cached int) {
 				}
 				gotCached = true
 			}
+			if !gotCacheWrite && (u.CacheWrite != nil || u.Details != nil && u.Details.CacheWrite != 0) {
+				if u.CacheWrite != nil {
+					cacheWrite = *u.CacheWrite
+				} else {
+					cacheWrite = u.Details.CacheWrite
+				}
+				gotCacheWrite = true
+			}
 		}
 		if v.Message != nil && v.Message.Usage != nil {
 			u := v.Message.Usage
@@ -272,6 +282,10 @@ func parseUsage(tail []byte) (prompt, output, cached int) {
 			if !gotCached && u.CacheRead != nil {
 				cached = *u.CacheRead
 				gotCached = true
+			}
+			if !gotCacheWrite && u.CacheWrite != nil {
+				cacheWrite = *u.CacheWrite
+				gotCacheWrite = true
 			}
 		}
 		if v.PromptEval+v.Eval > 0 {
