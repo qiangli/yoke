@@ -27,6 +27,14 @@ type PrincipalUsage struct {
 	CachedTokens     uint64  `json:"cached_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
 	Unpriced         bool    `json:"unpriced"`
+	// PricedTokens is the prompt+completion total of the records the price
+	// table priced (unpriced false). UnpricedTokens is the same total for
+	// the records with no price (unpriced true). The two always add up to
+	// PromptTokens+CompletionTokens, and they split a principal that mixes
+	// priced and unpriced models, which the OR-ed Unpriced flag alone
+	// cannot show.
+	PricedTokens   uint64 `json:"priced_tokens"`
+	UnpricedTokens uint64 `json:"unpriced_tokens"`
 }
 
 // RollupUsage reads door audit JSONL and returns one row per principal, sorted
@@ -70,12 +78,18 @@ func RollupUsage(r io.Reader, opts UsageRollupOptions) ([]PrincipalUsage, error)
 			row = &PrincipalUsage{Principal: rec.Principal}
 			byPrincipal[rec.Principal] = row
 		}
+		tokens := uint64(rec.Prompt + rec.Completion)
 		row.Requests++
 		row.PromptTokens += uint64(rec.Prompt)
 		row.CompletionTokens += uint64(rec.Completion)
 		row.CachedTokens += uint64(rec.Cached)
 		row.CostUSD += rec.CostUSD
 		row.Unpriced = row.Unpriced || rec.Unpriced
+		if rec.Unpriced {
+			row.UnpricedTokens += tokens
+		} else {
+			row.PricedTokens += tokens
+		}
 	}
 	if err := s.Err(); err != nil {
 		return nil, fmt.Errorf("broker: read audit: %w", err)
