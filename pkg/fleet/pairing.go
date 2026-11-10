@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/outpostagent"
 	"github.com/spf13/cobra"
 )
 
@@ -62,6 +63,7 @@ func OutpostAgentFiles() []string {
 // outpostAgent is the subset of agent.json this package reads.
 type outpostAgent struct {
 	ServerAddr  string `json:"server_addr"`
+	PortalURL   string `json:"portal_url"`
 	AccessToken string `json:"access_token"`
 }
 
@@ -77,12 +79,13 @@ func readOutpostAgent(path string) (outpostAgent, bool) {
 	return a, true
 }
 
-// PairedServer is the host the Outpost pairing points at, or "" when this
-// machine has no readable pairing record (unknown, not "unpaired").
+// PairedServer is the canonical portal URL the Outpost pairing points at. For
+// legacy agent.json files it returns server_addr as before. It returns "" when
+// this machine has no readable pairing record (unknown, not "unpaired").
 func PairedServer() string {
 	for _, p := range OutpostAgentFiles() {
 		if a, ok := readOutpostAgent(p); ok {
-			return a.ServerAddr
+			return outpostagent.PortalURL(a.PortalURL, a.ServerAddr)
 		}
 	}
 	return ""

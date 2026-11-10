@@ -85,6 +85,29 @@ func TestResolveCloudReadsLegacyMatrixAgentJSON(t *testing.T) {
 	}
 }
 
+func TestPairedServerPrefersPortalURLAndKeepsLegacyFallback(t *testing.T) {
+	cfg := pairedHost(t, "tunnel.example:7000")
+	path := filepath.Join(cfg, "outpost", "agent.json")
+	if err := os.WriteFile(path, []byte(`{
+		"portal_url":"https://portal.example/exact",
+		"server_addr":"tunnel.example",
+		"server_port":7000,
+		"protocol":"wss"
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := PairedServer(); got != "https://portal.example/exact" {
+		t.Fatalf("PairedServer() = %q, want canonical portal URL", got)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"server_addr":"legacy.example:7000"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := PairedServer(); got != "legacy.example:7000" {
+		t.Fatalf("legacy PairedServer() = %q", got)
+	}
+}
+
 // (b) Migrated to a satellite with the master credential saved: master token.
 func TestResolveCloudSatelliteUsesMasterToken(t *testing.T) {
 	cfg := pairedHost(t, "sat1.dhnt.io")
