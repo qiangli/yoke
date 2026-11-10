@@ -346,23 +346,47 @@ func (s fileDir) Fingerprint() (string, bool) {
 	return dirFingerprint(os.DirFS(s.dir))
 }
 
-// Fingerprint combines the tokens of every source in precedence order. It
-// reports ok=false as soon as one source cannot vouch for itself, so a
-// catalog built from an unknown source shape is simply never memoized.
+// Fingerprint combines the tokens of every source in precedence order. A
+// source that cannot vouch for itself by listing (no Fingerprinter, or one
+// that declines) is hashed by content instead: every entry name and body.
+// Reading bodies costs a fraction of parsing them, so a catalog built from
+// an unknown source shape is still memoized rather than silently re-parsed
+// on every lookup. ok=false only when a listing or body read fails.
 func Fingerprint(sources []Source) (string, bool) {
 	var b strings.Builder
 	for i, src := range sources {
-		f, ok := src.(Fingerprinter)
-		if !ok {
-			return "", false
+		tok, ok := "", false
+		if f, isFP := src.(Fingerprinter); isFP {
+			tok, ok = f.Fingerprint()
 		}
-		tok, ok := f.Fingerprint()
 		if !ok {
-			return "", false
+			tok, ok = contentFingerprint(src)
+			if !ok {
+				return "", false
+			}
 		}
 		fmt.Fprintf(&b, "%d:%d:%s;", i, src.Ring(), tok)
 	}
 	return b.String(), true
+}
+
+// contentFingerprint hashes a source's entry names and bodies.
+func contentFingerprint(src Source) (string, bool) {
+	names, err := src.Names()
+	if err != nil {
+		return "", false
+	}
+	h := fnv.New64a()
+	for _, n := range names {
+		body, ok := src.Body(n)
+		if !ok {
+			return "", false
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", n, len(body))
+		h.Write(body)
+		h.Write([]byte{'\n'})
+	}
+	return "c" + strconv.FormatUint(h.Sum64(), 16), true
 }
 
 // --- catalog -----------------------------------------------------------

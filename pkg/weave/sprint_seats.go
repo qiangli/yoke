@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/capability"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 	"github.com/qiangli/yoke/pkg/ladder/blame"
 	"github.com/qiangli/yoke/pkg/llmbudget"
@@ -117,20 +118,34 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 			bindingReasons[key] = "excluded agent:" + name
 		}
 	}
+	// Resolve each agent's binding once. A lookup re-validates the catalog
+	// memo against the ring directories, and this pool is built over the
+	// whole roster on every assign, so the three passes below share one
+	// resolution per agent instead of each paying for it.
+	type resolvedBinding struct {
+		binding fleet.Agent
+		tool    fleet.Tool
+		model   fleet.Model
+		err     error
+	}
+	resolved := make(map[string]resolvedBinding, len(agents))
+	for _, a := range agents {
+		b, t, m, err := cat.Binding(a.Name)
+		resolved[a.Name] = resolvedBinding{b, t, m, err}
+	}
 	// Role.Scope is the fleet responsibility boundary. A shadow binding must
 	// never affect real picks, even through another name for the same binding.
 	for _, a := range agents {
 		if a.Role != nil && strings.EqualFold(strings.TrimSpace(a.Role.Scope), "shadow") {
-			if binding, _, _, err := cat.Binding(a.Name); err == nil && bindingReasons[binding.MatrixKey()] == "" {
-				bindingReasons[binding.MatrixKey()] = "shadow role scope"
+			if r := resolved[a.Name]; r.err == nil && bindingReasons[r.binding.MatrixKey()] == "" {
+				bindingReasons[r.binding.MatrixKey()] = "shadow role scope"
 			}
 		}
 	}
 	aliases := map[string][]string{}
 	for _, a := range agents {
-		binding, _, _, err := cat.Binding(a.Name)
-		if err == nil {
-			aliases[binding.MatrixKey()] = append(aliases[binding.MatrixKey()], a.Name)
+		if r := resolved[a.Name]; r.err == nil {
+			aliases[r.binding.MatrixKey()] = append(aliases[r.binding.MatrixKey()], a.Name)
 		}
 	}
 	// Plan tier ranks the seat each model bills through; an unrecorded or
@@ -145,10 +160,11 @@ func seatPool(root string, events []ladder.Event, now time.Time, exclusions ...s
 		if a.Ephemeral || a.ClonedFrom != "" {
 			continue
 		}
-		binding, tool, model, err := cat.Binding(a.Name)
-		if err != nil {
+		r := resolved[a.Name]
+		if r.err != nil {
 			continue
 		}
+		binding, tool, model := r.binding, r.tool, r.model
 		key := binding.MatrixKey()
 		ratingKey := key
 		if family, ok, familyErr := cat.FamilyOf(a.Name); familyErr == nil && ok && hasFamilyEvidence(events, family.ID()) {

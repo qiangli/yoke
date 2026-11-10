@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/qiangli/yoke/pkg/assetring"
@@ -29,6 +30,29 @@ type catalogMemo struct {
 	loads   int // rebuilds, counted so a test can tell a hit from a miss
 }
 
+// sharedMemo is the process-wide store behind every Catalog built from the
+// compiled-in baseline with no injected sources — which is every production
+// catalog. Callers build a fresh Catalog per lookup site (fleet.New() is
+// cheap by design), and the sprint seat check does so once per candidate,
+// so a per-instance memo started cold a few hundred times per command. The
+// fingerprint check runs on every hit, so sharing changes nothing about
+// freshness: a ring edited through one instance is seen by all of them.
+// Catalogs with a test baseline or injected sources keep an instance memo,
+// since their world is not addressable by root alone.
+var sharedMemo = struct {
+	mu      sync.Mutex
+	entries map[string]memoEntry
+}{entries: map[string]memoEntry{}}
+
+// memoScope names the shared store slot for this catalog, or reports false
+// when the catalog must keep its memo to itself.
+func (c *Catalog) memoScope() (string, bool) {
+	if c.cfg.baseFS != nil || len(c.cfg.shared) > 0 {
+		return "", false
+	}
+	return c.cfg.root + "|" + strconv.FormatBool(c.cfg.rootSet) + "|" + strconv.FormatBool(c.cfg.noLocal) + "|" + strconv.FormatBool(c.cfg.noCloud), true
+}
+
 type memoEntry struct {
 	fingerprint string
 	value       any
@@ -51,17 +75,23 @@ func memoized[T any](c *Catalog, key string, nouns []string, load func() ([]T, [
 	if !ok {
 		return load()
 	}
-	c.memo.mu.Lock()
-	e, hit := c.memo.entries[key]
-	c.memo.mu.Unlock()
+	mu, entries := &c.memo.mu, c.memo.entries
+	if scope, ok := c.memoScope(); ok {
+		mu, entries, key = &sharedMemo.mu, sharedMemo.entries, scope+"/"+key
+	}
+	mu.Lock()
+	e, hit := entries[key]
+	mu.Unlock()
 	if hit && e.fingerprint == fingerprint {
 		if v, ok := e.value.([]T); ok {
 			return slices.Clone(v), slices.Clone(e.errs)
 		}
 	}
 	v, errs := load()
+	mu.Lock()
+	entries[key] = memoEntry{fingerprint: fingerprint, value: v, errs: errs}
+	mu.Unlock()
 	c.memo.mu.Lock()
-	c.memo.entries[key] = memoEntry{fingerprint: fingerprint, value: v, errs: errs}
 	c.memo.loads++
 	c.memo.mu.Unlock()
 	return slices.Clone(v), slices.Clone(errs)

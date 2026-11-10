@@ -140,15 +140,47 @@ func appendAnnotations(rows []annotation) error {
 	return f.Sync()
 }
 
-func matchObservation(cat *fleet.Catalog, o quotaobs.Observation) *quotaobs.ParsedSignal {
-	var signals []fleet.UsageSignal
-	if p, ok := cat.Plan(o.Plan); ok {
-		signals = append(signals, p.UsageSignals...)
+// signalLookup resolves the usage signals of a plan and a tool once per
+// matcher pass. A pass visits every observation of every seat, and each
+// catalog lookup re-validates the ring memo by listing the catalog
+// directories (fleet/catalog_memo.go), so resolving per observation made one
+// command re-stat the whole catalog thousands of times. The pass sees one
+// catalog state, which is what a deterministic annotation wants anyway.
+type signalLookup struct {
+	cat   *fleet.Catalog
+	plans map[string][]fleet.UsageSignal
+	tools map[string][]fleet.UsageSignal
+}
+
+func newSignalLookup(cat *fleet.Catalog) *signalLookup {
+	return &signalLookup{cat: cat, plans: map[string][]fleet.UsageSignal{}, tools: map[string][]fleet.UsageSignal{}}
+}
+
+// signals returns the plan's signals followed by the tool's, the order the
+// matcher has always used. An unknown plan or tool contributes nothing, and
+// that absence is remembered too.
+func (l *signalLookup) signals(plan, tool string) []fleet.UsageSignal {
+	ps, ok := l.plans[plan]
+	if !ok {
+		if p, found := l.cat.Plan(plan); found {
+			ps = p.UsageSignals
+		}
+		l.plans[plan] = ps
 	}
-	if t, ok := cat.Tool(o.Tool); ok {
-		signals = append(signals, t.UsageSignals...)
+	ts, ok := l.tools[tool]
+	if !ok {
+		if t, found := l.cat.Tool(tool); found {
+			ts = t.UsageSignals
+		}
+		l.tools[tool] = ts
 	}
-	got := fleet.MatchSignals(signals, o.Excerpt, o.Headers, o.At)
+	out := make([]fleet.UsageSignal, 0, len(ps)+len(ts))
+	out = append(out, ps...)
+	return append(out, ts...)
+}
+
+func matchObservation(lk *signalLookup, o quotaobs.Observation) *quotaobs.ParsedSignal {
+	got := fleet.MatchSignals(lk.signals(o.Plan, o.Tool), o.Excerpt, o.Headers, o.At)
 	if len(got) == 0 {
 		return nil
 	}
@@ -167,7 +199,7 @@ func MatchObservations(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	cat := fleet.New()
+	lk := newSignalLookup(fleet.New())
 	var rows []annotation
 	for _, o := range obs {
 		if err := ctx.Err(); err != nil {
@@ -176,7 +208,7 @@ func MatchObservations(ctx context.Context) (int, error) {
 		if o.Parsed != nil || cache[o.ExcerptSHA+"\x00"].Parsed != nil {
 			continue
 		}
-		if p := matchObservation(cat, o); p != nil {
+		if p := matchObservation(lk, o); p != nil {
 			a := annotation{ExcerptSHA: o.ExcerptSHA, Parsed: p}
 			rows = append(rows, a)
 			cache[o.ExcerptSHA+"\x00"] = a
@@ -390,7 +422,7 @@ func ObservedRows(obs []quotaobs.Observation, now time.Time) []ObservedState {
 	if err != nil {
 		return nil
 	}
-	cat := fleet.New()
+	lk := newSignalLookup(fleet.New())
 	var out []ObservedState
 	for _, o := range obs {
 		if o.At.After(now) {
@@ -401,7 +433,7 @@ func ObservedRows(obs []quotaobs.Observation, now time.Time) []ObservedState {
 			parsed = cache[o.ExcerptSHA+"\x00"].Parsed
 		}
 		if parsed == nil {
-			parsed = matchObservation(cat, o)
+			parsed = matchObservation(lk, o)
 		}
 		var model *quotaobs.Analysis
 		summary := ""
