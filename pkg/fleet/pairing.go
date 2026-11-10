@@ -126,6 +126,16 @@ func CoordinationBase() string {
 	return PortalBase()
 }
 
+// Attachments is the satellite attachments of this host's pairing record
+// (agent.json `attachments`), in config order; nil when there is none.
+func Attachments() []outpostagent.Attachment {
+	a, ok := pairingRecord()
+	if !ok {
+		return nil
+	}
+	return a.Attachments
+}
+
 // PairedServer is the canonical portal URL the Outpost pairing points at. For
 // legacy agent.json files it returns server_addr as before. It returns "" when
 // this machine has no readable pairing record (unknown, not "unpaired").

@@ -31,13 +31,44 @@ type Cloudbox struct {
 
 // Attachment is one row of agent.json's `attachments`: a satellite this host
 // is attached to as a member of its account, with the satellite host token
-// that satellite issued (wire §4).
+// that satellite issued (wire §4). Host is this host's name on the satellite
+// and Tunnel the matrix-tunnel registration the attach returned.
 type Attachment struct {
-	SatelliteID string   `json:"satellite_id"`
-	Name        string   `json:"name,omitempty"`
-	Endpoint    string   `json:"endpoint"`
-	Token       string   `json:"token"`
-	Scopes      []string `json:"scopes,omitempty"`
+	SatelliteID string            `json:"satellite_id"`
+	Name        string            `json:"name,omitempty"`
+	Endpoint    string            `json:"endpoint"`
+	Host        string            `json:"host,omitempty"`
+	Token       string            `json:"token"`
+	Scopes      []string          `json:"scopes,omitempty"`
+	Tunnel      *AttachmentTunnel `json:"tunnel,omitempty"`
+}
+
+// AttachmentTunnel is the subset of an attachment's tunnel registration yoke
+// reads: the agent name the satellite serves this host under.
+type AttachmentTunnel struct {
+	AgentName string `json:"agent_name,omitempty"`
+}
+
+// Matches reports whether the attachment is the satellite called name, by
+// name or satellite id (case-insensitive).
+func (a Attachment) Matches(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && (strings.EqualFold(strings.TrimSpace(a.Name), name) || strings.EqualFold(strings.TrimSpace(a.SatelliteID), name))
+}
+
+// AppURL is the URL of this host's app on the attached satellite:
+// <endpoint>/matrix/h/<host or tunnel agent_name>/app/<app>. It returns ""
+// when the attachment names no endpoint or host.
+func (a Attachment) AppURL(app string) string {
+	ep := strings.TrimRight(strings.TrimSpace(a.Endpoint), "/")
+	host := strings.TrimSpace(a.Host)
+	if host == "" && a.Tunnel != nil {
+		host = strings.TrimSpace(a.Tunnel.AgentName)
+	}
+	if ep == "" || host == "" {
+		return ""
+	}
+	return ep + "/matrix/h/" + url.PathEscape(host) + "/app/" + url.PathEscape(app)
 }
 
 // Paired reports whether the block holds a usable cloudbox identity.

@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/broker/door"
+	"github.com/qiangli/yoke/pkg/fleet"
 	_ "github.com/qiangli/yoke/pkg/nativepath"
 	"github.com/qiangli/yoke/pkg/outpostagent"
 	"github.com/qiangli/yoke/pkg/toolcmd"
@@ -219,12 +220,31 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 	return cloudbox + "/matrix/h/" + url.PathEscape(host) + "/app/" + doorServiceName, nil
 }
 
-// satelliteAppURL is the door's app URL on a satellite served by an extra
-// outpost instance (`outpost-profile up NAME --app llm`): the main outpost's
-// status names only its own satellite. It reads the profile outpost-profile
-// writes under ${XDG_CONFIG_HOME:-$HOME/.config}/matrix/profiles/NAME — the
-// running instance's config first, else the registered profile.
+// satelliteAppURL is the door's app URL on the satellite called name. An
+// attachment of this host's pairing (agent.json `attachments`, matched by name
+// or satellite id) wins: <endpoint>/matrix/h/<host>/app/llm. Otherwise the
+// satellite is one served by an extra outpost instance (`outpost-profile up
+// NAME --app llm`) and its profile names it.
 func satelliteAppURL(name string) (string, error) {
+	for _, at := range fleet.Attachments() {
+		if !at.Matches(name) {
+			continue
+		}
+		if u := at.AppURL(doorServiceName); u != "" {
+			return u, nil
+		}
+		return "", fmt.Errorf("satellite attachment %q names no endpoint or host (re-attach: `outpost satellite attach %s`)", name, firstNonEmpty(at.SatelliteID, name))
+	}
+	return satelliteProfileAppURL(name)
+}
+
+// satelliteProfileAppURL is the door's app URL on a satellite served by an
+// extra outpost instance (`outpost-profile up NAME --app llm`): the main
+// outpost's status names only its own satellite. It reads the profile
+// outpost-profile writes under ${XDG_CONFIG_HOME:-$HOME/.config}/matrix/
+// profiles/NAME — the running instance's config first, else the registered
+// profile.
+func satelliteProfileAppURL(name string) (string, error) {
 	if !ValidPeerName(name) {
 		return "", fmt.Errorf("invalid satellite profile name %q", name)
 	}
@@ -337,8 +357,10 @@ credential is never printed or logged here). On PEER, then:
   eval "$(bashy llm env --from THIS-HOST)"
 
 Rerunning share is safe: it reuses the exposure and rotates the credential.
---satellite NAME points the grant at a satellite served by an extra outpost
-instance (outpost-profile up NAME --app llm) instead of the main outpost's;
+--satellite NAME points the grant at a satellite this host is attached to
+(agent.json attachments, by name or satellite id), else at one served by an
+extra outpost instance (outpost-profile up NAME --app llm), instead of the
+main outpost's;
 the instance keeps its copy of the llm app, so rerun up NAME --app llm after
 the main app changes.
 --ssh names the outpost ssh target when it is not PEER (user@host). --print
@@ -411,7 +433,7 @@ cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it sec
 		},
 	}
 	cmd.Flags().StringVar(&via, "via", "mesh", "expose the door over mesh|cloudbox|both")
-	cmd.Flags().StringVar(&satellite, "satellite", "", "satellite profile served by an extra outpost instance (outpost-profile up NAME --app llm)")
+	cmd.Flags().StringVar(&satellite, "satellite", "", "satellite attachment (name or id), else an outpost-profile instance (outpost-profile up NAME --app llm)")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "outpost ssh target when it is not PEER (e.g. user@host)")
 	cmd.Flags().BoolVar(&printGrant, "print", false, "print the grant (it holds the credential) instead of pushing it to PEER")
 	return cmd

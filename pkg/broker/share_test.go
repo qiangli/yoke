@@ -577,6 +577,7 @@ func TestShareSatelliteNamesTheInstanceSatellite(t *testing.T) {
 	t.Setenv(door.PortEnv, "")
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
 	prof := filepath.Join(cfg, "matrix", "profiles", "zoo-aws")
 	for path, body := range map[string]string{
 		filepath.Join(prof, "agent.json"):                              `{"agent_name":"old","server_addr":"stale.example"}`,
@@ -616,6 +617,7 @@ func TestShareSatelliteNamesTheInstanceSatellite(t *testing.T) {
 func TestSatelliteAppURLPrefersPortalURL(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(cfg, "matrix", "profiles", "zoo-aws", "agent.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -654,5 +656,61 @@ func TestSatelliteHTTPBaseMatchesOutpost(t *testing.T) {
 		if got := satelliteHTTPBase(c.proto, c.addr, c.port); got != c.want {
 			t.Errorf("satelliteHTTPBase(%q,%q,%d) = %q, want %q", c.proto, c.addr, c.port, got, c.want)
 		}
+	}
+}
+
+// --satellite NAME resolves an attachment of the pairing record first (by
+// name or satellite id; host, else the tunnel's agent_name), and falls back
+// to the outpost-profile instance only when no attachment matches.
+func TestShareSatelliteResolvesAttachment(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+	for path, body := range map[string]string{
+		filepath.Join(cfg, "outpost", "agent.json"): `{
+			"cloudbox":{"portal_url":"https://portal.example","host":"studio","token":"t0"},
+			"attachments":[
+				{"satellite_id":"sat_1","name":"zoo-aws","endpoint":"https://sat.example/","host":"studio","token":"t1","tunnel":{"agent_name":"ignored"}},
+				{"satellite_id":"sat_2","name":"edge","endpoint":"https://edge.example","token":"t2","tunnel":{"agent_name":"studio-edge"}},
+				{"satellite_id":"sat_3","name":"bare","token":"t3"}
+			]}`,
+		filepath.Join(cfg, "matrix", "profiles", "zoo-aws", "agent.json"): `{"agent_name":"dragon","server_addr":"profile.example","protocol":"wss"}`,
+		filepath.Join(cfg, "matrix", "profiles", "solo", "agent.json"):    `{"agent_name":"dragon","server_addr":"profile.example","protocol":"wss"}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]string{
+		"zoo-aws": "https://sat.example/matrix/h/studio/app/llm", // attachment beats the profile
+		"SAT_1":   "https://sat.example/matrix/h/studio/app/llm",
+		"sat_2":   "https://edge.example/matrix/h/studio-edge/app/llm",
+		"solo":    "https://profile.example/matrix/h/dragon/app/llm", // no attachment: profile fallback
+	} {
+		got, err := satelliteAppURL(name)
+		if err != nil || got != want {
+			t.Errorf("satelliteAppURL(%q) = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	if _, err := satelliteAppURL("bare"); err == nil || !strings.Contains(err.Error(), "names no endpoint or host") {
+		t.Errorf("incomplete attachment: %v", err)
+	}
+
+	useFakeOutpost(t)
+	out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox", "--satellite", "edge", "--print")
+	if err != nil {
+		t.Fatalf("share: %v\n%s", err, out)
+	}
+	var g DoorGrant
+	if err := json.Unmarshal([]byte(out), &g); err != nil {
+		t.Fatalf("grant: %v\n%s", err, out)
+	}
+	if g.CloudboxURL != "https://edge.example/matrix/h/studio-edge/app/llm" {
+		t.Fatalf("cloudbox url = %q", g.CloudboxURL)
 	}
 }
