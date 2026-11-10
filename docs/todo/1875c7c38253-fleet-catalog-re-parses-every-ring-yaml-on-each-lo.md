@@ -3,9 +3,10 @@ id: 1875c7c38253
 kind: bug
 title: fleet catalog re-parses every ring YAML on each lookup; sprint assign takes 2-3.5 min to pick an agent
 seq: 3093
-status: todo
+status: done
 priority: p1
 created: 2026-11-10T21:05:27.922967Z
+closed: 2026-11-10T21:22:56.661033Z
 ---
 
 Measured 2026-11-10 on the dev box (yoke 56edc4f3): `bashy sprint assign --dry-run` alone = 110 s wall / 134 s CPU, nothing launched; three concurrent assigns ~3.5 min each (CPU contention, no lock wait, no sockets). `bashy agent show NAME` = 5.7 s, `bashy agent list` = 10.6 s.
