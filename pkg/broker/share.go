@@ -132,15 +132,24 @@ func outpostSelf(ctx context.Context) (name, cloudbox string, err error) {
 		Config struct {
 			AgentName   string `json:"agent_name"`
 			CloudboxURL string `json:"cloudbox_url"`
+			// A host that paired once with the master carries its name in
+			// the identity record only; agent_name is the legacy pairing's.
+			Cloudbox *struct {
+				Host string `json:"host"`
+			} `json:"cloudbox"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(out, &st); err != nil {
 		return "", "", fmt.Errorf("outpost status: %w", err)
 	}
-	if st.Config.AgentName == "" {
-		return "", "", errors.New("outpost status names no host (is this host paired? `outpost connect`)")
+	name = st.Config.AgentName
+	if name == "" && st.Config.Cloudbox != nil {
+		name = st.Config.Cloudbox.Host
 	}
-	return st.Config.AgentName, strings.TrimRight(st.Config.CloudboxURL, "/"), nil
+	if name == "" {
+		return "", "", errors.New("outpost status names no host (is this host paired? `outpost register`)")
+	}
+	return name, strings.TrimRight(st.Config.CloudboxURL, "/"), nil
 }
 
 // ensureMeshService exposes addr over the mesh unless a persistent service

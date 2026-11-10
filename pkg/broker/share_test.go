@@ -737,7 +737,9 @@ func TestShareSatelliteAttachmentNeedsNoLegacyCloudbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := useFakeOutpost(t)
-	f.status = `{"config":{"agent_name":"Dooor"}}`
+	// The real status of a pair-once host: no legacy agent_name or
+	// cloudbox_url, the name only in the identity record.
+	f.status = `{"config":{"agent_name":"","cloudbox":{"portal_url":"https://master.example","host":"studio","has_token":true}},"state":"dormant (unpaired)"}`
 	for _, sat := range []string{"zoo-aws", "sat_1"} {
 		out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox", "--satellite", sat, "--print")
 		if err != nil {
@@ -746,6 +748,9 @@ func TestShareSatelliteAttachmentNeedsNoLegacyCloudbox(t *testing.T) {
 		var g DoorGrant
 		if err := json.Unmarshal([]byte(out), &g); err != nil {
 			t.Fatalf("grant: %v\n%s", err, out)
+		}
+		if g.Door != "studio" {
+			t.Fatalf("door = %q, want the pair-once host name", g.Door)
 		}
 		if g.CloudboxURL != "https://sat.example/matrix/h/studio/app/llm" {
 			t.Fatalf("cloudbox url = %q", g.CloudboxURL)
