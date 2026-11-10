@@ -302,15 +302,21 @@ revoked, master assignment removed. → `204`; repeat → `401`.
 
 | Event | Effective at master | Effective at satellites / peers |
 |---|---|---|
-| `DELETE /members/:id` | immediately | ≤ 30 s (membership cache) |
+| `DELETE /members/:id` | immediately | ≤ 60 s (satellites); ≤ 30 s plus one request (bashy member cache, LLM door) |
 | invitation expiry | at `expires_at` | — |
 | `DELETE /hosts/self` (master) | immediately | ≤ 60 s |
 | `DELETE /satellites/:id/attach` | immediately | ≤ 60 s |
-| `DELETE /hosts/self` (satellite) | ≤ 60 s | immediately |
+| `DELETE /hosts/self` (satellite) | ≤ 60 s while the master is reachable (durable retry until acknowledged) | immediately |
 | attach token | single-use; 10 min TTL | — |
 
-"≤ 60 s" is a ceiling a client may rely on: after it, a revoked token gets
-`401` everywhere. Clients must not assume faster.
+"≤ 60 s" is a ceiling a client may rely on **while the master is reachable**:
+satellites pull authorization (members, reverse rows, attachments) every
+30 s on their own schedule, independent of checkpoints and release retries.
+When the master is unreachable, a satellite (like the LLM door) keeps using
+its last successfully pulled authorization for at most **24 h**, records its
+age, and after that refuses member access to shared apps and new attaches;
+the satellite owner keeps access. Clients must not assume faster than these
+ceilings.
 
 ## 5. Endpoint → bashy verb
 
