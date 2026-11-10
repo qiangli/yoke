@@ -15,6 +15,7 @@ import (
 	"github.com/qiangli/yoke/pkg/cligw"
 	"github.com/qiangli/yoke/pkg/execlog"
 	"github.com/qiangli/yoke/pkg/redact"
+	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 const captureLimit = 4 << 20
@@ -192,7 +193,17 @@ func captureLevel(body []byte) string {
 	}
 	return "eval"
 }
-func captureRedact(s string) string { return redact.FromHost().String(execlog.MaskSecrets(s)) }
+
+// captureRedact masks a captured turn body three ways, innermost first:
+// vault-projected values present in this process's environment (the exact
+// secrets the operator rendered into the shell that started the door — an
+// arbitrary vault value embedded in prompt or response text has no
+// recognizable shape, only exact matching finds it), then credential shapes
+// (execlog.MaskSecrets), then host identity (redact.FromHost).
+func captureRedact(s string) string {
+	masked := secrets.RedactKnownValues(s)
+	return redact.FromHost().String(execlog.MaskSecrets(masked))
+}
 func (b *Broker) appendCapture(ri *reqInfo, path string, req *boundedBody, cw *captureWriter) {
 	dir, err := captureSessionDir(ri.session)
 	if err != nil {

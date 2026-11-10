@@ -125,9 +125,20 @@ Default template: $XDG_CONFIG_HOME/bashy/secrets.map (else
 ~/.config/bashy/secrets.map); pass a path to override. The last successful
 render is cached (mode 0600) and reused only when cloudbox is unreachable,
 with a leading comment on degraded paths. Ambiguous bare vault names fail
-with a non-zero exit instead of emitting exports or using the cache.`,
+with a non-zero exit instead of emitting exports or using the cache.
+
+Because env prints real values it passes the same reveal gate as show: it
+refuses a non-interactive stdin and any bashy-launched agent session. A
+script or agent that needs a value uses the handle form (secret exec),
+which keeps values out of argv and output.`,
 		Args: cobra.RangeArgs(0, 1),
 		RunE: func(c *cobra.Command, args []string) error {
+			// Reveal gate FIRST, before any template read or network call:
+			// a refused caller learns nothing, not even whether a template
+			// exists.
+			if err := CheckReveal(os.Environ(), revealInteractive(c.InOrStdin())); err != nil {
+				return err
+			}
 			tmpl := ""
 			if len(args) == 1 {
 				tmpl = args[0]
@@ -422,9 +433,21 @@ func newLsCmd(cfg *Config) *cobra.Command {
 func newGetCmd(cfg *Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "show NAME",
-		Short: "Print one secret value (for KEY=$(bashy secret show NAME))",
-		Args:  cobra.ExactArgs(1),
+		Short: "Print one secret value at an interactive terminal (owner human only)",
+		Long: `Print one secret value, for KEY=$(bashy secret show NAME) at an
+interactive terminal.
+
+Plaintext values are owner-human-only: this verb refuses a non-interactive
+stdin (pipes, buffers, detached callers) and any bashy-launched agent
+session. Agents and scripts use the handle form instead, which resolves the
+value at the exec boundary into the child's environment only:
+
+  bashy secret exec NAME=ENVVAR -- command args`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
+			if err := CheckReveal(os.Environ(), revealInteractive(c.InOrStdin())); err != nil {
+				return err
+			}
 			client, err := cfg.Resolve()
 			if err != nil {
 				return err

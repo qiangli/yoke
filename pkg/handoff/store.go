@@ -50,6 +50,10 @@ func Save(dir string, r *Record) (string, error) {
 		return "", err
 	}
 	r.SchemaVersion = SchemaVersion
+	// The single persistence choke: every write path (create, claim, retire)
+	// re-saves through here, so the record that lands on disk — the artifact
+	// meant to travel off-host — never carries a vault value.
+	redactRecord(r)
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return "", err

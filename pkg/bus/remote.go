@@ -141,6 +141,11 @@ func sendRemote(req SendRequest, route RemoteRoute) (SendResult, error) {
 	if err := ValidateCoordinationBody(req.Body); err != nil {
 		return SendResult{}, &BodyError{Err: err}
 	}
+	// Member-facing egress: everything below (the relay envelope, the
+	// sender's outbox copy, the path-advice hint) is written from this one
+	// redacted body, so a vault value that slipped into the text is masked
+	// before it leaves the owner's host or lands in the public board store.
+	req.Body = RedactCrossHostBody(req.Body)
 	if RemoteSend == nil {
 		return SendResult{}, fmt.Errorf("remote: %s resolves to %s but no relay is wired on this host", req.To, route.Participant)
 	}

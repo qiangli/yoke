@@ -143,6 +143,7 @@ func digest(s string) [sha256.Size]byte {
 }
 
 func TestImportThenEnvRoundTrip(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	fv := newFakeVault(t)
 	rc := `# a comment
 export OPENAI_API_KEY=sk-proj-abc
@@ -190,6 +191,7 @@ KIMI_API_KEY="sk-quoted"
 // TestEnvMissingRefSkipped: a template ref not present in the vault is
 // skipped (with a stderr note), not fatal.
 func TestEnvMissingRefSkipped(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	fv := newFakeVault(t)
 	fv.data["OPENAI_API_KEY"] = "sk-ok"
 	tmpl := filepath.Join(t.TempDir(), "secrets.map")
@@ -209,6 +211,7 @@ func TestEnvMissingRefSkipped(t *testing.T) {
 }
 
 func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	fv := newFakeVault(t)
 	fv.data["DEEPSEEK_API_KEY"] = "sk-d"
 
@@ -259,6 +262,7 @@ func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
 }
 
 func TestEnvRevalidatesReachableVault(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	fv := newFakeVault(t)
 	configureSecretsTestEnv(t)
 	writeDefaultTemplate(t, "OPENAI_API_KEY=@openai\n")
@@ -288,6 +292,7 @@ func TestEnvRevalidatesReachableVault(t *testing.T) {
 }
 
 func TestSetInvalidatesCacheAndRotationTakesEffect(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	fv := newFakeVault(t)
 	configureSecretsTestEnv(t)
 	writeDefaultTemplate(t, "OPENAI_API_KEY=@openai\n")
@@ -381,6 +386,7 @@ func TestSecretsHelpPointsToAskWithoutAddingAlias(t *testing.T) {
 }
 
 func TestGetSetRm(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	fv := newFakeVault(t)
 
 	if _, _, err := run(t, fv.cfg(), "set", "TELEGRAM_BOT_TOKEN", "123:abc"); err != nil {

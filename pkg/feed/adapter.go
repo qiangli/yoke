@@ -153,6 +153,10 @@ func SendEnvelopes(ctx context.Context, ch Channel, envelopes []Envelope) ([]str
 		if err := envelopes[i].Validate(); err != nil {
 			return nil, fmt.Errorf("feed: envelope %d: %w", i, err)
 		}
+		// The one outbound choke: every adapter (built-in and declared)
+		// delivers through here, so the body that leaves this host is
+		// masked before any transport sees it.
+		envelopes[i].Text = redactOutboundText(envelopes[i].Text)
 	}
 	return getEnvelopeSender()(ctx, ch, envelopes)
 }

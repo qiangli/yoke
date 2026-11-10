@@ -122,6 +122,7 @@ func TestSecretExecInvalidArguments(t *testing.T) {
 }
 
 func TestEnvRefusesBareVaultNamesBeforeOutputOrCache(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	configureSecretsTestEnv(t)
 	fv := newFakeVault(t)
 	fv.data["NAME"] = "synthetic-value"
@@ -179,6 +180,7 @@ func TestSecretListPrefix(t *testing.T) {
 }
 
 func TestSecretNamesEscapedRoundTrip(t *testing.T) {
+	allowRevealForTest(t) // simulate the interactive owner terminal
 	configureSecretsTestEnv(t)
 	fv := newFakeVault(t)
 	for _, tc := range []struct{ name, escaped string }{

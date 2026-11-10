@@ -636,7 +636,10 @@ func resolveAgent(name string) (string, error) {
 }
 
 // recordEvent puts a handoff transition on the host event log (bashy events).
-// Best effort: the record is already saved, which is the transaction.
+// Best effort: the record is already saved, which is the transaction. The
+// brief is redacted here — the timeline is streamed to session members, so a
+// vault value must not ride it even when the caller built the brief from
+// text Save never saw.
 func recordEvent(rec *Record, verb, actor, brief string) {
-	room.Record(room.EventHandoff, actor, "handoff:"+rec.ID, verb, brief)
+	room.Record(room.EventHandoff, actor, "handoff:"+rec.ID, verb, redactText(brief))
 }

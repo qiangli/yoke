@@ -115,7 +115,11 @@ func SendRemoteMessage(ctx context.Context, repoRoot string, m bus.RemoteMessage
 	if err != nil {
 		return bus.RemoteReceipt{}, err
 	}
-	ev, err := sc.client.AppendEvent(ctx, taskID, AppendEventReq{Kind: MessageEventKind, Summary: m.Body, Detail: detail})
+	// Member-facing egress: the relay event's Summary carries the free-text
+	// body to every host on the session, so it passes the same cross-host
+	// redaction as bus's own mail path before it leaves this host.
+	summary := bus.RedactCrossHostBody(m.Body)
+	ev, err := sc.client.AppendEvent(ctx, taskID, AppendEventReq{Kind: MessageEventKind, Summary: summary, Detail: detail})
 	if err != nil {
 		return bus.RemoteReceipt{}, err
 	}
