@@ -323,13 +323,13 @@ flag does not exist yet; its wave story builds it against the fake.
 
 | Endpoint | Verb | State |
 |---|---|---|
-| `GET /api/v1/members` | `bashy member ls [--circle C]` | gap (W1) |
-| `POST /api/v1/members` | `bashy member invite EMAIL [--circle C]` | gap (W1) |
+| `GET /api/v1/members` | `bashy member ls [--circle C]` | implemented (bashy member, S583.2) |
+| `POST /api/v1/members` | `bashy member invite EMAIL [--circle C]` | implemented (bashy member, S583.2) |
 | `PATCH /api/v1/members/:id` | `bashy member set ID\|EMAIL --circle C` | gap (W1) |
 | `DELETE /api/v1/members/:id` | `bashy member rm ID\|EMAIL` (also how a member leaves: remove your reverse row) | gap (W1) |
-| `GET /api/v1/member/invitations` | `bashy member invitations` | gap (W1) |
-| `POST /api/v1/member/invitations/:id/accept` | `bashy member accept ID [--circle C]` | gap (W1) |
-| `GET /api/v1/members/of` | `bashy member of` | gap (W1) |
+| `GET /api/v1/member/invitations` | `bashy member invitations` | implemented (bashy member, S583.2) |
+| `POST /api/v1/member/invitations/:id/accept` | `bashy member accept ID [--circle C]` | implemented (bashy member, S583.2) |
+| `GET /api/v1/members/of` | `bashy member of` | implemented (bashy member, S583.2) |
 | members reads (mutual, circle/email filter) | `bashy llm peer add NAME --email E [--circle C]` / `bashy llm peer set NAME --email E [--circle C]` | implemented (W3); `--circle` constrains the bound email rather than creating a shared circle credential |
 | `POST /api/v1/hosts/invites` (master) | `bashy paired-host invite` (pairing code for your own account) | implemented |
 | `POST /api/v1/hosts/pair` | `outpost register --code CODE` — identity-only when the server is the master | implemented (outpost 44db24d) |
@@ -338,8 +338,8 @@ flag does not exist yet; its wave story builds it against the fake.
 | `GET /api/v1/satellites` (host) | `outpost satellite list` | implemented (outpost d7963fa) |
 | `GET /api/v1/satellites/:id` | `bashy satellite show ID` | implemented — direct ID lookup; unique names resolve through the list on 404 |
 | `GET /api/v1/satellites/assignment` | `bashy paired-host ls --satellite ID` | implemented — filters hosts and peers using the Bearer assignment list |
-| `POST /api/v1/satellites/:id/attach` + satellite `POST /api/v1/hosts/attach` | `outpost satellite attach ID` (one verb, both calls) | gap (W2) |
-| `DELETE /api/v1/satellites/:id/attach` + satellite `DELETE /api/v1/hosts/self` | `outpost satellite detach ID` | gap (W2) |
+| `POST /api/v1/satellites/:id/attach` + satellite `POST /api/v1/hosts/attach` | `outpost satellite attach ID` (one verb, both calls) | implemented (outpost d7963fa) |
+| `DELETE /api/v1/satellites/:id/attach` + satellite `DELETE /api/v1/hosts/self` | `outpost satellite detach ID` | implemented (outpost d7963fa) |
 
 ## 6. Journeys as Bash# skill-scripts
 
