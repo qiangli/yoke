@@ -175,6 +175,20 @@ circle — the owner's label is not shown to the member (least disclosure).
 "status": "active", "mutual": true, "since": "2026-11-09T18:05:00Z"}]}`.
 Cacheable 30 s.
 
+## 2b. App shares (standalone and satellite; never the master)
+
+Shares live where the host row lives; the master holds identity-only hosts
+and has no share routes. Two callers: an owner Bearer (`hosts:read` /
+`hosts:write`), or the host's OWN token (the satellite host token from
+attach, or a legacy pairing token) for shares of that host only (any other
+`:host` is `404 not_found`).
+
+- `GET /api/v1/hosts/:host/shares` → `200 {"shares": [{"id", "host", "app", "email", "created_at"}]}`
+- `POST /api/v1/hosts/:host/shares` body `{"app": "board", "email": "bob@example.com"}` →
+  `201 {"share": {...}}`; an identical existing share → `200`; `422 not_mutual_member`
+  unless the email is an active mutual member of the host's owner; `422 invalid_email`.
+- `DELETE /api/v1/hosts/:host/shares/:id` → `204`, idempotent.
+
 ## 3. Pair once — identity-only (master)
 
 Pairing establishes **who a host is** and nothing else: it stores a host
@@ -344,6 +358,7 @@ flag does not exist yet; its wave story builds it against the fake.
 | `GET /api/v1/satellites` (host) | `outpost satellite list` | implemented (outpost d7963fa) |
 | `GET /api/v1/satellites/:id` | `bashy satellite show ID` | implemented — direct ID lookup; unique names resolve through the list on 404 |
 | `GET /api/v1/satellites/assignment` | `bashy paired-host ls --satellite ID` | implemented — filters hosts and peers using the Bearer assignment list |
+| `GET/POST/DELETE /api/v1/hosts/:host/shares` (satellite/standalone) | `bashy outpost apps share APP --email E` / `unshare` / `shares` (journey: `satellite-member share`) | implemented (cloudbox S7, outpost 993631d) |
 | `POST /api/v1/satellites/:id/attach` + satellite `POST /api/v1/hosts/attach` | `outpost satellite attach ID` (one verb, both calls) | implemented (outpost d7963fa) |
 | `DELETE /api/v1/satellites/:id/attach` + satellite `DELETE /api/v1/hosts/self` | `outpost satellite detach ID` | implemented (outpost d7963fa) |
 
