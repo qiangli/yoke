@@ -613,6 +613,32 @@ func TestShareSatelliteNamesTheInstanceSatellite(t *testing.T) {
 	}
 }
 
+func TestSatelliteAppURLPrefersPortalURL(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	path := filepath.Join(cfg, "matrix", "profiles", "zoo-aws", "agent.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{
+		"agent_name":"dragon",
+		"portal_url":"https://portal.example/exact",
+		"server_addr":"tunnel.example",
+		"server_port":7000,
+		"protocol":"wss"
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := satelliteAppURL("zoo-aws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://portal.example/exact/matrix/h/dragon/app/llm"
+	if got != want {
+		t.Fatalf("satelliteAppURL() = %q, want %q", got, want)
+	}
+}
+
 func TestSatelliteHTTPBaseMatchesOutpost(t *testing.T) {
 	for _, c := range []struct {
 		proto, addr string

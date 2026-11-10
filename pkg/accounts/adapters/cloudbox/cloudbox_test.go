@@ -160,6 +160,29 @@ func TestDiscoverNotInstalledNoProfilesIsEmpty(t *testing.T) {
 	}
 }
 
+func TestReadProfilePrefersPortalURLAndKeepsLegacySidecar(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "server"), "https://stale-sidecar.example\n")
+	write(t, filepath.Join(dir, "agent.json"), `{
+		"portal_url":"https://portal.example/exact",
+		"server_addr":"tunnel.example",
+		"server_port":7000,
+		"protocol":"wss"
+	}`)
+	if p, ok := readProfile(dir, "new"); !ok || p.server != "https://portal.example/exact" {
+		t.Fatalf("portal profile = %+v, ok=%v", p, ok)
+	}
+
+	write(t, filepath.Join(dir, "agent.json"), `{
+		"server_addr":"tunnel.example",
+		"server_port":7000,
+		"protocol":"wss"
+	}`)
+	if p, ok := readProfile(dir, "legacy"); !ok || p.server != "https://stale-sidecar.example" {
+		t.Fatalf("legacy profile = %+v, ok=%v", p, ok)
+	}
+}
+
 func TestRegisterAndSelect(t *testing.T) {
 	r := accounts.NewRegistry()
 	if err := Register(r); err != nil {

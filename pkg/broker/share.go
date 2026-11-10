@@ -21,6 +21,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/broker/door"
 	_ "github.com/qiangli/yoke/pkg/nativepath"
+	"github.com/qiangli/yoke/pkg/outpostagent"
 	"github.com/qiangli/yoke/pkg/toolcmd"
 )
 
@@ -246,6 +247,7 @@ func satelliteAppURL(name string) (string, error) {
 		}
 		var prof struct {
 			AgentName  string `json:"agent_name"`
+			PortalURL  string `json:"portal_url"`
 			ServerAddr string `json:"server_addr"`
 			ServerPort int    `json:"server_port"`
 			Protocol   string `json:"protocol"`
@@ -253,18 +255,19 @@ func satelliteAppURL(name string) (string, error) {
 		if err := json.Unmarshal(data, &prof); err != nil {
 			return "", fmt.Errorf("satellite profile %s: %w", p, err)
 		}
-		if prof.AgentName == "" || prof.ServerAddr == "" {
+		if prof.AgentName == "" || (strings.TrimSpace(prof.PortalURL) == "" && strings.TrimSpace(prof.ServerAddr) == "") {
 			return "", fmt.Errorf("satellite profile %s names no host or server (is it registered? `outpost-profile add`)", p)
 		}
-		return satelliteHTTPBase(prof.Protocol, prof.ServerAddr, prof.ServerPort) + "/matrix/h/" + url.PathEscape(prof.AgentName) + "/app/" + doorServiceName, nil
+		base := outpostagent.PortalURL(prof.PortalURL, satelliteHTTPBase(prof.Protocol, prof.ServerAddr, prof.ServerPort))
+		return strings.TrimRight(base, "/") + "/matrix/h/" + url.PathEscape(prof.AgentName) + "/app/" + doorServiceName, nil
 	}
 	return "", fmt.Errorf("no satellite profile %q under %s (see `outpost-profile list`)", name, filepath.Join(base, "matrix", "profiles"))
 }
 
-// satelliteHTTPBase is the satellite's HTTP(S) base from its pairing fields,
-// as outpost derives it (cloudboxHTTPBase): wss pairs with https, ws /
-// websocket / tcp with plain http on the same port (local dev satellites),
-// and the scheme's default port is left out.
+// satelliteHTTPBase is the legacy fallback for profiles without portal_url.
+// It derives the satellite's HTTP(S) base from pairing fields as outpost did:
+// wss pairs with https, ws / websocket / tcp with plain http on the same port
+// (local dev satellites), and the scheme's default port is left out.
 func satelliteHTTPBase(protocol, addr string, port int) string {
 	scheme := "https"
 	switch strings.ToLower(protocol) {

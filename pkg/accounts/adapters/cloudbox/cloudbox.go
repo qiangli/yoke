@@ -20,6 +20,7 @@ import (
 
 	"github.com/qiangli/yoke/external/meshagent"
 	"github.com/qiangli/yoke/pkg/accounts"
+	"github.com/qiangli/yoke/pkg/outpostagent"
 )
 
 const Name = "cloudbox"
@@ -166,11 +167,15 @@ func readProfile(dir, name string) (profile, bool) {
 		return p, false
 	}
 
-	// Derive endpoint from sidecar if present, else from protocol/server_addr/server_port in agent.json.
-	if sb, err := os.ReadFile(filepath.Join(dir, "server")); err == nil {
-		sidecar := strings.TrimSpace(strings.SplitN(string(sb), "\n", 2)[0])
-		if sidecar != "" {
-			p.server = sidecar
+	// New agent.json files carry the canonical portal directly. Sidecars and
+	// protocol/tunnel fields remain only as fallbacks for legacy profiles.
+	p.server = outpostagent.PortalURL(strField(m, "portal_url"), "")
+	if p.server == "" {
+		if sb, err := os.ReadFile(filepath.Join(dir, "server")); err == nil {
+			sidecar := strings.TrimSpace(strings.SplitN(string(sb), "\n", 2)[0])
+			if sidecar != "" {
+				p.server = sidecar
+			}
 		}
 	}
 	if p.server == "" {
