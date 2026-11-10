@@ -70,6 +70,33 @@ func TestYcodeModelAliasResolvesToGenieBackend(t *testing.T) {
 	}
 }
 
+func TestZeroYcodeBindingRendersStateDirInLaunch(t *testing.T) {
+	l, err := ResolveWithCatalog("zero-bedrock-glm-5", Options{AllowUnsafe: true, DryRun: true}, bedrockBaselineCatalog(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := ToolStateDir("zero-ycode", l.ModelName, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Args) == 0 {
+		t.Fatalf("zero-ycode launch has no argv: %+v", l)
+	}
+	if got, want := l.Args[len(l.Args)-1], filepath.Join(dir, "run.sh"); got != want {
+		t.Fatalf("run argv = %q, want %q", got, want)
+	}
+	for _, arg := range append(append([]string(nil), l.Args[3:]...), "prompt") {
+		if strings.Contains(arg, "{") {
+			t.Errorf("unrendered placeholder in argv: %q", arg)
+		}
+	}
+	for _, kv := range l.Env {
+		if strings.Contains(kv, "{") {
+			t.Errorf("unrendered placeholder in env: %q", kv)
+		}
+	}
+}
+
 func TestResolveYcodePreservesACPAndSteerLaunches(t *testing.T) {
 	fleettest.Ring(t)
 	t.Setenv(UnsafeLaunchEnv, "1")

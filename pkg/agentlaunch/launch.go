@@ -526,6 +526,9 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			}
 		}
 		if args, ok := render(lnch.Model); ok {
+			for i := range args {
+				args[i] = strings.ReplaceAll(args[i], fleet.StateDirToken, vars.StateDir)
+			}
 			out, err := FinalizeArgs(tool.Name, args, opt)
 			if err != nil {
 				return lnch, err
