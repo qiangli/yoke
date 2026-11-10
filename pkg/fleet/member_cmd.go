@@ -31,7 +31,7 @@ func NewMemberCmd() *cobra.Command {
 			return nil, err
 		}
 		selected := t != "" || os.Getenv("BASHY_FLEET_TOKEN") != "" || os.Getenv("BASHY_API_KEY") != ""
-		u, t = ResolveCloud(u, t)
+		u, t = ResolveMaster(u, t)
 		// A paired host's token has only the host scope. Member verbs act as
 		// the account, so prefer its saved master credential when no owner
 		// token was explicitly selected.

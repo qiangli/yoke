@@ -1,6 +1,10 @@
 // Package cloudbox discovers outpost/cloudbox profiles as accounts. Profile
 // files are read-only; credential values are never read into a record, only a
 // profile:<name> reference is kept.
+//
+// Outpost's canonical config (agent.json `cloudbox` + `attachments`, S606)
+// adds the host's ONE cloudbox pairing as its primary account and every
+// satellite it is attached to as a satellite account linked from it.
 package cloudbox
 
 import (
@@ -29,10 +33,14 @@ const Name = "cloudbox"
 type ExecFunc func(ctx context.Context, args ...string) ([]byte, error)
 
 type Adapter struct {
-	ConfigDir string   // matrix config dir; default ${XDG_CONFIG_HOME:-$HOME/.config}/matrix
-	CachePath string   // optional last-good snapshot file
-	Exec      ExecFunc // injectable seam; default execs outpost via meshagent
-	Now       func() time.Time
+	ConfigDir string // matrix config dir; default ${XDG_CONFIG_HOME:-$HOME/.config}/matrix
+	// OutpostDir holds outpost's canonical agent.json (cloudbox pairing +
+	// attachments). Default: ConfigDir when that is set, else
+	// ${XDG_CONFIG_HOME:-$HOME/.config}/outpost then .../matrix.
+	OutpostDir string
+	CachePath  string   // optional last-good snapshot file
+	Exec       ExecFunc // injectable seam; default execs outpost via meshagent
+	Now        func() time.Time
 
 	mu   sync.Mutex
 	last []accounts.Observation
@@ -79,6 +87,135 @@ func (a *Adapter) dir() string {
 		base = filepath.Join(h, ".config")
 	}
 	return filepath.Join(base, "matrix")
+}
+
+// canonicalPaths lists the agent.json files that may carry the canonical
+// cloudbox pairing, in precedence order.
+func (a *Adapter) canonicalPaths() []string {
+	if a.OutpostDir != "" {
+		return []string{filepath.Join(a.OutpostDir, "agent.json")}
+	}
+	if a.ConfigDir != "" {
+		return []string{filepath.Join(a.ConfigDir, "agent.json")}
+	}
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		h, _ := os.UserHomeDir()
+		base = filepath.Join(h, ".config")
+	}
+	return []string{filepath.Join(base, "outpost", "agent.json"), filepath.Join(base, "matrix", "agent.json")}
+}
+
+// canonicalConfig is the S606 part of agent.json. Tokens are parsed with the
+// rest of the block but never copied into a record.
+type canonicalConfig struct {
+	Cloudbox    *outpostagent.Cloudbox    `json:"cloudbox"`
+	Attachments []outpostagent.Attachment `json:"attachments"`
+}
+
+// canonical reads the first agent.json that parses; ok only when it holds a
+// cloudbox pairing or an attachment.
+func (a *Adapter) canonical() (canonicalConfig, bool) {
+	for _, p := range a.canonicalPaths() {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var c canonicalConfig
+		if json.Unmarshal(b, &c) != nil {
+			continue
+		}
+		if c.Cloudbox != nil && strings.TrimSpace(c.Cloudbox.PortalURL) == "" {
+			c.Cloudbox = nil
+		}
+		var atts []outpostagent.Attachment
+		for _, at := range c.Attachments {
+			if strings.TrimSpace(at.Endpoint) != "" {
+				atts = append(atts, at)
+			}
+		}
+		c.Attachments = atts
+		return c, c.Cloudbox != nil || len(c.Attachments) > 0
+	}
+	return canonicalConfig{}, false
+}
+
+// addCanonical folds the canonical config into the observations: the
+// cloudbox pairing is the primary account (merged with a legacy profile of
+// the same portal and user), each attachment a satellite account linked from
+// it. It returns the keys it produced.
+func addCanonical(c canonicalConfig, byKey map[string]*accounts.Observation, order *[]string, now time.Time) map[string]bool {
+	keys := map[string]bool{}
+	var user, host string
+	if c.Cloudbox != nil {
+		user, host = strings.TrimSpace(c.Cloudbox.OwnerEmail), strings.TrimSpace(c.Cloudbox.Host)
+	}
+	identity := firstNonEmpty(user, host)
+	get := func(key string, acc accounts.Account) *accounts.Observation {
+		o, ok := byKey[key]
+		if !ok {
+			t := now
+			acc.ObservedAt = &t
+			o = &accounts.Observation{Account: acc, SourceKey: key}
+			byKey[key] = o
+			*order = append(*order, key)
+			keys[key] = true
+		}
+		return o
+	}
+
+	var primary *accounts.Observation
+	if c.Cloudbox != nil {
+		portal := strings.TrimRight(strings.TrimSpace(c.Cloudbox.PortalURL), "/")
+		key := portal
+		if identity != "" {
+			key = portal + "|" + identity
+		}
+		primary = get(key, accounts.Account{
+			Category: accounts.Cloudbox, Provider: Name, Username: user, Name: host,
+			ProviderAccountID: key, Source: "outpost-config", Provenance: "local-observation",
+			Status: accounts.Resolved,
+		})
+		primary.Account.Connections = append(primary.Account.Connections, accounts.Connection{
+			ID: "cloudbox", Endpoint: portal, Scopes: append([]string(nil), c.Cloudbox.Scopes...),
+		})
+		if host != "" {
+			primary.Account.Links.Hosts = appendUniq(primary.Account.Links.Hosts, host)
+		}
+	}
+	for _, at := range c.Attachments {
+		endpoint := strings.TrimRight(strings.TrimSpace(at.Endpoint), "/")
+		name := firstNonEmpty(strings.TrimSpace(at.Name), strings.TrimSpace(at.SatelliteID), endpoint)
+		id := endpoint
+		if identity != "" {
+			id = endpoint + "|" + identity
+		}
+		o := get("attachment:"+firstNonEmpty(strings.TrimSpace(at.SatelliteID), endpoint), accounts.Account{
+			Category: accounts.Satellite, Provider: Name, Username: user, Name: name,
+			ProviderAccountID: id, Source: "outpost-config", Provenance: "local-observation",
+			Status: accounts.Resolved,
+		})
+		o.Account.Connections = append(o.Account.Connections, accounts.Connection{
+			ID: firstNonEmpty(strings.TrimSpace(at.SatelliteID), name), Endpoint: endpoint,
+			Scopes: append([]string(nil), at.Scopes...),
+		})
+		if host != "" {
+			o.Account.Links.Hosts = appendUniq(o.Account.Links.Hosts, host)
+		}
+		if primary != nil {
+			primary.Account.Links.Satellites = appendUniq(primary.Account.Links.Satellites, name)
+		}
+	}
+	return keys
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (a *Adapter) now() time.Time {
@@ -334,7 +471,8 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 		}
 	}
 
-	if len(profiles) == 0 && lastErr != "" {
+	canon, hasCanon := a.canonical()
+	if len(profiles) == 0 && !hasCanon && lastErr != "" {
 		// Discovery is local-only: a host with no profiles, no previous
 		// observation and no reachable outpost (typically not installed) simply
 		// has no cloudbox account. That is not an adapter failure.
@@ -487,11 +625,18 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 		}
 	}
 
+	// The canonical config is a local fact: a daemon that did not answer
+	// does not make it an error.
+	var fromConfig map[string]bool
+	if hasCanon {
+		fromConfig = addCanonical(canon, byKey, &order, now)
+	}
+
 	var out []accounts.Observation
 	for _, k := range order {
 		o := byKey[k]
 		sort.Strings(o.Account.Links.Satellites)
-		if lastErr != "" && o.Account.LastError == "" {
+		if lastErr != "" && o.Account.LastError == "" && !fromConfig[k] {
 			o.Account.LastError = lastErr
 		}
 		if o.Account.LastError != "" {
@@ -522,6 +667,10 @@ func (a *Adapter) Discover(ctx context.Context) ([]accounts.Observation, error) 
 func recordProven(ctx context.Context, obs []accounts.Observation) {
 	for _, o := range obs {
 		acc := o.Account
+		if acc.Source == "outpost-config" {
+			// Read from config, not proven by the daemon.
+			continue
+		}
 		if acc.ProviderAccountID == "" || len(acc.Connections) == 0 {
 			// An unresolved profile names no identity; inventing one from a
 			// config file is exactly what discovery must not do.

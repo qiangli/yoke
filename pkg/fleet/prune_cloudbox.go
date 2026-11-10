@@ -21,7 +21,7 @@ type OwnerClient struct {
 }
 
 func NewOwnerClient(base, token string) (OwnerClient, error) {
-	base, token = ResolveCloud(base, token)
+	base, token = ResolveMaster(base, token)
 	if token == "" {
 		return OwnerClient{}, fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token)")
 	}

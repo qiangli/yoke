@@ -61,9 +61,9 @@ type CredentialClient struct {
 }
 
 // NewCredentialClient resolves base + caller token through
-// ResolveCloud, the same ladder `bashy token` walks.
+// ResolveMaster, the same ladder `bashy token` walks.
 func NewCredentialClient(urlOverride, tokenOverride string) (CredentialClient, error) {
-	base, tok := ResolveCloud(urlOverride, tokenOverride)
+	base, tok := ResolveMaster(urlOverride, tokenOverride)
 	if tok == "" {
 		return CredentialClient{}, fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token)")
 	}

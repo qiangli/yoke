@@ -80,9 +80,9 @@ type PairedHostsClient struct {
 }
 
 // NewPairedHostsClient resolves base + caller token through
-// ResolveCloud, the same ladder `bashy token` walks.
+// ResolveMaster, the same ladder `bashy token` walks.
 func NewPairedHostsClient(urlOverride, tokenOverride string) (PairedHostsClient, error) {
-	base, tok := ResolveCloud(urlOverride, tokenOverride)
+	base, tok := ResolveMaster(urlOverride, tokenOverride)
 	if tok == "" {
 		return PairedHostsClient{}, fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token)")
 	}
