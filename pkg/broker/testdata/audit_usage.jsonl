@@ -1,0 +1,6 @@
+{"time":"2026-11-01T00:00:00Z","principal":"owner","prompt_tokens":999,"completion_tokens":999,"cached_tokens":999,"cost_usd":9.99}
+{"time":"2026-11-08T10:00:00Z","principal":"peer:beta","prompt_tokens":20,"completion_tokens":4,"cached_tokens":5,"cost_usd":0.025}
+{"time":"2026-11-08T11:00:00Z","principal":"owner","prompt_tokens":10,"completion_tokens":2,"cached_tokens":3,"cost_usd":0.0125,"extra_field":"ignored"}
+{"time":"2026-11-09T12:00:00Z","principal":"peer:alpha","prompt_tokens":30,"completion_tokens":6,"cached_tokens":7,"unpriced":true}
+{"time":"2026-11-09T13:00:00Z","principal":"owner","prompt_tokens":40,"completion_tokens":8,"cached_tokens":9,"cost_usd":0.05}
+{"time":"2026-11-09T14:00:00Z","principal":"peer:alpha","prompt_tokens":50,"completion_tokens":10,"cached_tokens":11,"cost_usd":0.075}

@@ -370,7 +370,7 @@ its share policy is allow.`
 			cmd.RemoveCommand(c)
 		}
 	}
-	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStatusCmd(), newStickyCmd(), newPeerCmd(), newShareCmd(), newDoorCmd(), newCaptureCmd())
+	cmd.AddCommand(newServeCmd(), newUpCmd(), newDownCmd(), newEnvCmd(), newStatusCmd(), newStickyCmd(), newPeerCmd(), newUsageCmd(), newShareCmd(), newDoorCmd(), newCaptureCmd())
 	return cmd
 }
 
