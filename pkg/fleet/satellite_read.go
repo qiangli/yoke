@@ -3,15 +3,8 @@ package fleet
 // `satellite list` / `satellite show` — read-only daily-operation rods
 // (S598 story 299f93c16dd2).
 //
-// Both verbs speak exactly one Bearer [REDACTED] endpoint already served by the
-// master:
-//
-//	GET /api/v1/satellites -> {"satellites": [{id, name, endpoint, state}]}
-//
-// `show` selects from the list response; there is no detail/status lookup
-// and no host-assignment inference. The JSON envelopes mirror the wire:
-// `list --json` emits {"satellites":[...]}, `show --json` emits
-// {"satellite":{...}}. Empty lists succeed. Reads issue no mutations.
+// show reads the detail endpoint directly, resolving a unique name through
+// the list only after a 404. Reads issue no mutations.
 
 import (
 	"fmt"
@@ -92,7 +85,7 @@ func NewSatelliteListCmd() *cobra.Command {
 }
 
 // NewSatelliteShowCmd builds the `satellite show <id|name>` verb. The record
-// comes from the list response; only ID, name, endpoint and state surface.
+// comes from the detail endpoint.
 func NewSatelliteShowCmd() *cobra.Command {
 	var master, token string
 	var asJSON bool
@@ -110,11 +103,7 @@ func NewSatelliteShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rows, err := client.Satellites(cmd.Context())
-			if err != nil {
-				return err
-			}
-			sat, err := selectSatellite(rows, key)
+			sat, err := client.satelliteByKey(cmd.Context(), key)
 			if err != nil {
 				return err
 			}

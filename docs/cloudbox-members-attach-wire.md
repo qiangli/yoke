@@ -327,11 +327,11 @@ flag does not exist yet; its wave story builds it against the fake.
 | members reads (mutual, circle/email filter) | `bashy llm peer --email E` / `--circle C` | gap (W3) |
 | `POST /api/v1/hosts/invites` (master) | `bashy paired-host invite` (pairing code for your own account) | gap (W2) |
 | `POST /api/v1/hosts/pair` | `outpost register --code CODE` — identity-only when the server is the master | exists — W2 handles the `tunnel: false` response |
-| `DELETE /api/v1/hosts/self` (master) | `outpost unpair` | exists — W2 points it at this endpoint |
+| `DELETE /api/v1/hosts/self` (master) | `outpost unpair` | client method implemented; W2 wires outpost unpair to this endpoint |
 | `GET /api/v1/satellites` (owner) | `bashy satellite list` | exists |
 | `GET /api/v1/satellites` (host) | `outpost satellite list` | gap (W2) |
-| `GET /api/v1/satellites/:id` | `bashy satellite show ID` | exists — selects from the list today; W1 switches to this endpoint |
-| `GET /api/v1/satellites/assignment` | `bashy paired-host ls --satellite ID` | exists — fails loudly naming this endpoint until W1 wires it |
+| `GET /api/v1/satellites/:id` | `bashy satellite show ID` | implemented — direct ID lookup; unique names resolve through the list on 404 |
+| `GET /api/v1/satellites/assignment` | `bashy paired-host ls --satellite ID` | implemented — filters hosts and peers using the Bearer assignment list |
 | `POST /api/v1/satellites/:id/attach` + satellite `POST /api/v1/hosts/attach` | `outpost satellite attach ID` (one verb, both calls) | gap (W2) |
 | `DELETE /api/v1/satellites/:id/attach` + satellite `DELETE /api/v1/hosts/self` | `outpost satellite detach ID` | gap (W2) |
 

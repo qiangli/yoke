@@ -53,6 +53,14 @@ func (f *accountMaster) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"satellites": rows})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/satellites/"):
+		for _, row := range f.rows {
+			if row["id"] == strings.TrimPrefix(r.URL.Path, "/api/v1/satellites/") {
+				_ = json.NewEncoder(w).Encode(map[string]any{"satellite": row})
+				return
+			}
+		}
+		http.NotFound(w, r)
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/satellites/") &&
 		strings.HasSuffix(r.URL.Path, "/transfer"):
 		w.Header().Set("Content-Type", "application/json")
