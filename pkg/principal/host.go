@@ -119,11 +119,19 @@ func readOutpostOwnerEmail(path string) string {
 	if err != nil {
 		return ""
 	}
+	// Pair-once (S606 S2) records the owner under the `cloudbox` block;
+	// a legacy top-level owner_email is the fallback.
 	var record struct {
 		OwnerEmail string `json:"owner_email"`
+		Cloudbox   *struct {
+			OwnerEmail string `json:"owner_email"`
+		} `json:"cloudbox"`
 	}
 	if json.Unmarshal(data, &record) != nil {
 		return ""
+	}
+	if record.Cloudbox != nil && strings.TrimSpace(record.Cloudbox.OwnerEmail) != "" {
+		return strings.ToLower(strings.TrimSpace(record.Cloudbox.OwnerEmail))
 	}
 	return strings.ToLower(strings.TrimSpace(record.OwnerEmail))
 }

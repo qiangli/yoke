@@ -27,3 +27,13 @@ func TestOwnerFromPairing(t *testing.T) {
 		t.Fatal(local.owner)
 	}
 }
+
+func TestReadOutpostOwnerEmailPrefersCloudboxBlock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "agent.json")
+	if err := os.WriteFile(p, []byte(`{"agent_name":"studio","owner_email":"legacy@example.com","cloudbox":{"portal_url":"https://portal.example.com","host":"studio","owner_email":"Owner@Example.com"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readOutpostOwnerEmail(p); got != "owner@example.com" {
+		t.Fatalf("owner = %q, want the cloudbox block owner", got)
+	}
+}
