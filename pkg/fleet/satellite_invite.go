@@ -117,6 +117,9 @@ func (c SatelliteClient) ExchangeToken(scopes []string, ttl string) (string, err
 
 // MintInvite mints an owner-scoped, single-use invite code on the satellite
 // using the exchanged token.
+// The minted code makes the SATELLITE OWNER (the account that minted it)
+// the owner of the host that redeems it: owner node provisioning only,
+// never for members.
 func (c SatelliteClient) MintInvite(exchangedToken, name string) (*HostInvite, error) {
 	var rdr io.Reader
 	if name != "" {
@@ -178,6 +181,13 @@ func (c SatelliteClient) Invite(name, ttl string) (*HostInvite, error) {
 	return c.MintInvite(exchangedToken, name)
 }
 
+// satelliteInviteOwnerNote is printed (stderr) on every successful mint and
+// carried as the `note` field of --json. The single most dangerous misuse of
+// this code is handing it to a member — a host paired with it becomes the
+// SATELLITE OWNER's, not the member's — so every output says whose host it
+// becomes.
+const satelliteInviteOwnerNote = "this code makes the SATELLITE OWNER the owner of the host that redeems it; owner node provisioning only, never for members"
+
 // NewSatelliteCmd builds the `satellite` verb tree.
 func NewSatelliteCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -198,12 +208,19 @@ func NewSatelliteInviteCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "invite [--satellite URL|--account ALIAS] --name HOST [--ttl 10m] [--to-file PATH] [--json]",
-		Short: "Mint an owner-scoped host pairing invite on a satellite",
-		Long: "Mint an owner-scoped host pairing invite on a satellite.\n\n" +
+		Short: "Mint an owner-scoped node-provisioning invite on a satellite",
+		Long: "Mint an owner-scoped node-provisioning invite on a satellite.\n\n" +
 			"Exchanges the owner Bearer token for a short-lived host:invite-mint\n" +
 			"satellite token, mints a single-use invite code, and writes the code\n" +
 			"to --to-file (0600; default <name>.invite) or prints it to stdout with --stdout.\n" +
-			"Bearer tokens are never printed.",
+			"Bearer tokens are never printed.\n\n" +
+			"The code is OWNER-SCOPED: the host that redeems it becomes OWNED BY\n" +
+			"THE SATELLITE OWNER — the account that minted it. This is owner node\n" +
+			"provisioning (registering one of your own hardware nodes) ONLY, never\n" +
+			"for members: a member joins by membership (`member invite`), pairs\n" +
+			"their own host under their own account (`paired-host invite` there)\n" +
+			"and attaches it with `outpost satellite attach`. Never hand this\n" +
+			"code to a member — their host would become the satellite owner's.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -226,6 +243,10 @@ func NewSatelliteInviteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			// Every successful mint says whose host the code makes the owner
+			// of — on stderr, so the stdout code lane stays machine-clean.
+			fmt.Fprintln(cmd.ErrOrStderr(), satelliteInviteOwnerNote)
 
 			// Destination handling:
 			// --stdout: print code only to stdout (or JSON if --json).
@@ -302,6 +323,11 @@ func writeInviteJSON(w io.Writer, inv *HostInvite, name, satelliteURL, targetFil
 		"expires":    expStr,
 		"name":       name,
 		"satellite":  satelliteURL,
+		// Whose host the code makes the owner of, machine-readable and in
+		// prose: an owner-scoped code must never be mistaken for a member
+		// invitation downstream.
+		"owner": "satellite-owner",
+		"note":  satelliteInviteOwnerNote,
 	}
 	if targetFile != "" {
 		out["file"] = targetFile

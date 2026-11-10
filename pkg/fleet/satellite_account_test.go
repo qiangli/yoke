@@ -297,10 +297,12 @@ func TestSatelliteInviteAccountSuppliesEndpoint(t *testing.T) {
 	}
 
 	// --json through the parent tree keeps the invite-code compatibility.
+	// The owner-transfer note rides stderr (and a `note` JSON field), so it
+	// must not pollute the JSON stdout lane.
 	parent := NewSatelliteCmd()
-	var pout strings.Builder
+	var pout, perr strings.Builder
 	parent.SetOut(&pout)
-	parent.SetErr(&pout)
+	parent.SetErr(&perr)
 	parent.SetArgs([]string{"invite", "--account", "zoo", "--name", "ivy", "--stdout", "--json"})
 	if err := parent.Execute(); err != nil {
 		t.Fatalf("parent invite --account: %v (%s)", err, pout.String())
@@ -311,6 +313,9 @@ func TestSatelliteInviteAccountSuppliesEndpoint(t *testing.T) {
 	}
 	if res["code"] != fake.inviteCode || res["name"] != "ivy" || res["satellite"] != srv.URL {
 		t.Fatalf("unexpected invite record: %v", res)
+	}
+	if !strings.Contains(perr.String(), satelliteInviteOwnerNote) {
+		t.Fatalf("parent --json path missing owner note: %q", perr.String())
 	}
 }
 

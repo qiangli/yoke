@@ -1,8 +1,10 @@
 package fleet
 
-// `host ls` — paired hosts from the master, read-only (S490 story 7107fb14).
+// `host ls` — paired hosts from the master, read-only (S490 story 7107fb14)
+// — and `host invite`, the pair-once identity code of wire contract §3
+// (S606 story 748f23cc0790).
 //
-// It speaks only two Bearer [REDACTED] endpoints, both already served by the
+// ls speaks only two Bearer [REDACTED] endpoints, both already served by the
 // master (cloudbox hub/internal/server/routes_peer.go):
 //
 //	GET /api/v1/hosts -> {"hosts": [{host, os_user, title, hostname,
@@ -17,13 +19,22 @@ package fleet
 // uses). Nothing is printed but the records; credentials never are.
 //
 // --satellite uses the Bearer assignment endpoint to filter both catalogs.
+//
+// invite POSTs /api/v1/hosts/invites on the master with the account Bearer
+// — no token exchange, no satellite scope — and prints {code, expires_at}.
+// The code pairs exactly one host with cloudbox under the account that
+// minted it: owner node provisioning for your own hardware, never a member
+// invitation (docs/cloudbox-members-attach-wire.md §3).
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -150,6 +161,52 @@ func (c PairedHostsClient) ListPeers() ([]PeerEntry, json.RawMessage, error) {
 	return env.Peers, json.RawMessage(raw), nil
 }
 
+// InvitePairCode mints a pair-once identity code on the master with the
+// account Bearer: POST /api/v1/hosts/invites, wire contract §3. There is no
+// token exchange and no satellite scope — unlike `satellite invite`, which
+// exchanges for host:invite-mint on a satellite. The code is single-use,
+// pairs exactly one host with cloudbox, and the host that redeems it is
+// owned by the account that minted this code.
+func (c PairedHostsClient) InvitePairCode(ctx context.Context) (*HostInvite, error) {
+	const op = "POST /api/v1/hosts/invites"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/v1/hosts/invites", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Accept", "application/json")
+	hc := c.HTTP
+	if hc == nil {
+		hc = httpClient()
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, provisionAPIError(op, resp.StatusCode, raw)
+	}
+	var inv HostInvite
+	if err := json.Unmarshal(raw, &inv); err != nil {
+		return nil, fmt.Errorf("fleet: %s: decode: %w", op, err)
+	}
+	if inv.ExpiresAt.IsZero() && !inv.Expires.IsZero() {
+		inv.ExpiresAt = inv.Expires
+	}
+	if inv.Expires.IsZero() && !inv.ExpiresAt.IsZero() {
+		inv.Expires = inv.ExpiresAt
+	}
+	if inv.Code == "" {
+		return nil, fmt.Errorf("fleet: %s: response missing code", op)
+	}
+	return &inv, nil
+}
+
 // ListPaired joins the hosts rows with their peers rows by host name.
 // A host missing from the peers board keeps its hosts row with empty
 // location/version columns rather than vanishing.
@@ -196,17 +253,20 @@ func joinPaired(hosts []HostEntry, peers []PeerEntry) []PairedHost {
 }
 
 // NewPairedHostCmd builds the `host` verb tree: the paired hosts the
-// master sees. Read-only; the only verb in this run is `ls`.
+// master sees (`ls`, read-only) and the pair-once pairing code for your
+// own account (`invite`).
 func NewPairedHostCmd() *cobra.Command {
 	var master, token, satellite string
 	var acct accountFlag
 	var asJSON bool
 	c := &cobra.Command{
 		Use:   "host",
-		Short: "Paired hosts from the master (read-only)",
-		Long: "Paired hosts from the master (read-only).\n\n" +
-			"Reads GET /api/v1/hosts and GET /api/v1/peers and joins them by\n" +
-			"host name. --satellite filters through GET /api/v1/satellites/assignment.",
+		Short: "Paired hosts from the master, and pairing codes for your own account",
+		Long: "Paired hosts from the master, and pairing codes for your own account.\n\n" +
+			"`ls` reads GET /api/v1/hosts and GET /api/v1/peers and joins them by\n" +
+			"host name. --satellite filters through GET /api/v1/satellites/assignment.\n" +
+			"`invite` POSTs /api/v1/hosts/invites with the account Bearer and prints\n" +
+			"the pair-once code for one host of your own.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -287,6 +347,77 @@ func NewPairedHostCmd() *cobra.Command {
 	ls.Aliases = []string{"list"}
 	ls.Flags().StringVar(&satellite, "satellite", "", "filter by satellite ID")
 	c.AddCommand(ls)
+
+	var dryRun, noInput bool
+	invite := &cobra.Command{
+		Use:   "invite",
+		Short: "Mint a pair-once host pairing code for your own account",
+		Long: "Mint a pair-once host pairing code for your own account.\n\n" +
+			"POST /api/v1/hosts/invites on the master with the account Bearer — no\n" +
+			"token exchange, no satellite scope (docs/cloudbox-members-attach-wire.md\n" +
+			"§3). The code is single-use, expires in 15 minutes, and pairs exactly\n" +
+			"one host with cloudbox: the host that redeems it via\n" +
+			"`outpost register --code CODE` becomes OWNED BY THE ACCOUNT THAT\n" +
+			"MINTED IT (yours).\n\n" +
+			"That makes this owner node provisioning for YOUR OWN hardware nodes —\n" +
+			"never a member invitation. Invite people with `member invite`; a\n" +
+			"member pairs their own host under their own account and attaches it\n" +
+			"to a satellite with `outpost satellite attach`. Never hand this code\n" +
+			"to another member: their host would become yours.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// The verb acts as the ACCOUNT, so mirror the member verbs: with no
+			// explicitly selected owner credential, prefer the saved master
+			// credential over the paired host token, whose host scope cannot
+			// mint (POST /api/v1/hosts/invites needs hosts:write).
+			u, t, err := cloudOverrides(cmd.Context(), &acct, master, token)
+			if err != nil {
+				return err
+			}
+			selected := t != "" || os.Getenv("BASHY_FLEET_TOKEN") != "" || os.Getenv("BASHY_API_KEY") != ""
+			base, tok := ResolveMaster(u, t)
+			if !selected {
+				if ownerToken := masterToken(base); ownerToken != "" {
+					tok = ownerToken
+				}
+			}
+			if tok == "" {
+				return fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token)")
+			}
+			out := cmd.OutOrStdout()
+			if dryRun {
+				if asJSON {
+					return writeJSON(out, map[string]any{"dry_run": true, "method": http.MethodPost, "path": "/api/v1/hosts/invites"})
+				}
+				_, err := fmt.Fprintln(out, "POST /api/v1/hosts/invites")
+				return err
+			}
+			inv, err := (PairedHostsClient{BaseURL: base, Token: tok, HTTP: httpClient()}).InvitePairCode(cmd.Context())
+			if err != nil {
+				return err
+			}
+			exp := inv.ExpiresAt
+			if exp.IsZero() {
+				exp = inv.Expires
+			}
+			var expStr string
+			if !exp.IsZero() {
+				expStr = exp.UTC().Format(time.RFC3339)
+			}
+			if asJSON {
+				return writeJSON(out, map[string]any{"code": inv.Code, "expires_at": expStr})
+			}
+			fmt.Fprintf(out, "%s\t%s\n", inv.Code, dashIfEmpty(expStr))
+			fmt.Fprintln(out, "the host paired with this code becomes owned by the account that minted it (you); never hand it to another member")
+			return nil
+		},
+	}
+	invite.Flags().BoolVar(&dryRun, "dry-run", false, "print the request without sending")
+	invite.Flags().BoolVar(&noInput, "no-input", false, "never prompt")
+	_ = noInput
+	c.AddCommand(invite)
 	return c
 }
 

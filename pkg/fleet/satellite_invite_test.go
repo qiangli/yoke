@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,7 +110,10 @@ func runSatelliteInvite(t *testing.T, args ...string) (string, error) {
 	cmd := NewSatelliteInviteCmd()
 	var out strings.Builder
 	cmd.SetOut(&out)
-	cmd.SetErr(&out)
+	// stderr carries the owner-transfer note on every mint; keep the
+	// returned string the stdout lane only, so code assertions see the
+	// bare code. The note has its own test.
+	cmd.SetErr(io.Discard)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return out.String(), err
@@ -369,9 +373,9 @@ func TestSatelliteInviteViaParentCmd(t *testing.T) {
 	fake, srv := setupFakeSatellite(t)
 
 	parent := NewSatelliteCmd()
-	var out strings.Builder
+	var out, errOut strings.Builder
 	parent.SetOut(&out)
-	parent.SetErr(&out)
+	parent.SetErr(&errOut)
 	parent.SetArgs([]string{
 		"invite",
 		"--satellite", srv.URL,
@@ -386,6 +390,80 @@ func TestSatelliteInviteViaParentCmd(t *testing.T) {
 
 	if strings.TrimSpace(out.String()) != fake.inviteCode {
 		t.Fatalf("stdout = %q, want %q", out.String(), fake.inviteCode)
+	}
+	if !strings.Contains(errOut.String(), satelliteInviteOwnerNote) {
+		t.Fatalf("parent path missing owner note: %q", errOut.String())
+	}
+}
+
+// The code makes the SATELLITE OWNER the owner of the host that redeems it.
+// Help, every output mode and --json must say so — an owner-scoped code
+// handed to a member silently transfers that member's host to the satellite
+// owner, so the warning rides every mint (S606 story 748f23cc0790).
+func TestSatelliteInviteSaysOwnerTransfer(t *testing.T) {
+	fake, srv := setupFakeSatellite(t)
+
+	// Help says it.
+	cmd := NewSatelliteInviteCmd()
+	for _, want := range []string{"SATELLITE OWNER", "owner node", "provisioning", "Never hand this"} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Fatalf("help missing %q:\n%s", want, cmd.Long)
+		}
+	}
+
+	run := func(args ...string) (string, string, error) {
+		t.Helper()
+		c := NewSatelliteInviteCmd()
+		var out, errOut strings.Builder
+		c.SetOut(&out)
+		c.SetErr(&errOut)
+		c.SetArgs(args)
+		err := c.Execute()
+		return out.String(), errOut.String(), err
+	}
+
+	// --stdout: bare code on stdout, the note on stderr, no tokens anywhere.
+	out, errOut, err := run("--satellite", srv.URL, "--name", "pup", "--stdout", "--token", fake.ownerToken)
+	if err != nil {
+		t.Fatalf("invite: %v (%s)", err, out)
+	}
+	if strings.TrimSpace(out) != fake.inviteCode {
+		t.Fatalf("stdout = %q, want the bare code %q", out, fake.inviteCode)
+	}
+	if !strings.Contains(errOut, satelliteInviteOwnerNote) {
+		t.Fatalf("stderr note missing: %q", errOut)
+	}
+	if strings.Contains(out+errOut, fake.ownerToken) || strings.Contains(out+errOut, fake.exchangedToken) {
+		t.Fatalf("tokens leaked: out=%q err=%q", out, errOut)
+	}
+
+	// default file mode notes it too.
+	outFile := filepath.Join(t.TempDir(), "node.invite")
+	out, errOut, err = run("--satellite", srv.URL, "--name", "node", "--to-file", outFile, "--token", fake.ownerToken)
+	if err != nil {
+		t.Fatalf("invite to file: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, "wrote invite for node to "+outFile) {
+		t.Fatalf("file confirmation missing: %q", out)
+	}
+	if !strings.Contains(errOut, satelliteInviteOwnerNote) {
+		t.Fatalf("file mode note missing: %q", errOut)
+	}
+
+	// --json carries it as fields.
+	out, _, err = run("--satellite", srv.URL, "--name", "node", "--stdout", "--json", "--token", fake.ownerToken)
+	if err != nil {
+		t.Fatalf("invite --json: %v (%s)", err, out)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("invite --json is not JSON: %v (%s)", err, out)
+	}
+	if res["owner"] != "satellite-owner" {
+		t.Fatalf("json owner = %v, want satellite-owner", res["owner"])
+	}
+	if note, _ := res["note"].(string); !strings.Contains(note, "SATELLITE OWNER") || !strings.Contains(note, "never for members") {
+		t.Fatalf("json note = %v", res["note"])
 	}
 }
 

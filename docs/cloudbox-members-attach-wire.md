@@ -331,11 +331,11 @@ flag does not exist yet; its wave story builds it against the fake.
 | `POST /api/v1/member/invitations/:id/accept` | `bashy member accept ID [--circle C]` | gap (W1) |
 | `GET /api/v1/members/of` | `bashy member of` | gap (W1) |
 | members reads (mutual, circle/email filter) | `bashy llm peer add NAME --email E [--circle C]` / `bashy llm peer set NAME --email E [--circle C]` | implemented (W3); `--circle` constrains the bound email rather than creating a shared circle credential |
-| `POST /api/v1/hosts/invites` (master) | `bashy paired-host invite` (pairing code for your own account) | gap (W2) |
-| `POST /api/v1/hosts/pair` | `outpost register --code CODE` — identity-only when the server is the master | exists — W2 handles the `tunnel: false` response |
-| `DELETE /api/v1/hosts/self` (master) | `outpost unpair` | client method implemented; W2 wires outpost unpair to this endpoint |
+| `POST /api/v1/hosts/invites` (master) | `bashy paired-host invite` (pairing code for your own account) | implemented |
+| `POST /api/v1/hosts/pair` | `outpost register --code CODE` — identity-only when the server is the master | implemented (outpost 44db24d) |
+| `DELETE /api/v1/hosts/self` (master) | `outpost unpair` | implemented (outpost 44db24d) |
 | `GET /api/v1/satellites` (owner) | `bashy satellite list` | exists |
-| `GET /api/v1/satellites` (host) | `outpost satellite list` | gap (W2) |
+| `GET /api/v1/satellites` (host) | `outpost satellite list` | implemented (outpost d7963fa) |
 | `GET /api/v1/satellites/:id` | `bashy satellite show ID` | implemented — direct ID lookup; unique names resolve through the list on 404 |
 | `GET /api/v1/satellites/assignment` | `bashy paired-host ls --satellite ID` | implemented — filters hosts and peers using the Bearer assignment list |
 | `POST /api/v1/satellites/:id/attach` + satellite `POST /api/v1/hosts/attach` | `outpost satellite attach ID` (one verb, both calls) | gap (W2) |
