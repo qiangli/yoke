@@ -339,7 +339,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if cw.status == 0 {
 				cw.status = http.StatusOK
 			}
-			ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok = parseUsage(cw.tail)
+			ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok, ri.rec.CacheWriteTok = parseUsage(cw.tail)
 			b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 		}
 		if capture && ri.principal != "" {
@@ -732,7 +732,7 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 		ri.rec.PromptTok, ri.rec.OutputTok = b.serveAnthropicLocal(ctx, cw, body, anthStream, clientModel)
 	} else {
 		b.proxyEngine(cw, r, body)
-		ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok = parseUsage(cw.tail)
+		ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok, ri.rec.CacheWriteTok = parseUsage(cw.tail)
 	}
 	status := cw.status
 	if ctx.Err() != nil {
@@ -798,15 +798,11 @@ func (b *Broker) price(ri *reqInfo) {
 		rec.Unpriced = true
 		return
 	}
-	// Cached tokens are part of the prompt, and a vendor bills them at the
-	// cache-read rate, not the input rate: charging the full input price for
-	// a warm turn would double-count what the cache already paid for. The
-	// record keeps PromptTok as the whole prompt (what a usage report shows);
-	// the pricer gets the uncached part and the cached part apart. A cached
-	// count larger than the prompt (a stream truncated before usage arrived,
-	// a provider counting its own way) clamps to zero rather than going
-	// negative.
-	input := int64(rec.PromptTok) - int64(rec.CachedTok)
+	// The prompt includes cache reads and writes. Price each at its own
+	// rate while retaining the whole prompt in the audit record. Clamp an
+	// inconsistent count so a partial provider response cannot create a
+	// negative input amount.
+	input := int64(rec.PromptTok) - int64(rec.CachedTok) - int64(rec.CacheWriteTok)
 	if input < 0 {
 		input = 0
 	}
@@ -815,9 +811,10 @@ func (b *Broker) price(ri *reqInfo) {
 		pricer = llmprice.Cost
 	}
 	cost, ok := pricer(model, llmprice.Usage{
-		Input:     input,
-		Output:    int64(rec.OutputTok),
-		CacheRead: int64(rec.CachedTok),
+		Input:      input,
+		Output:     int64(rec.OutputTok),
+		CacheWrite: int64(rec.CacheWriteTok),
+		CacheRead:  int64(rec.CachedTok),
 	})
 	if !ok {
 		rec.Unpriced = true
@@ -916,7 +913,7 @@ func (b *Broker) delegateCLI(w http.ResponseWriter, r *http.Request, ri *reqInfo
 		// Responses surface, /cligw/...) get the list from cligw itself.
 		ri.rec.Ignored = cw.Header().Get(cligw.IgnoredHeader)
 	}
-	ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok = parseUsage(cw.tail)
+	ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok, ri.rec.CacheWriteTok = parseUsage(cw.tail)
 	ri.rec.UpstreamModel = cw.Header().Get("X-Bashy-Upstream-Model")
 	b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 }

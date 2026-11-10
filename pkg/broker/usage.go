@@ -25,6 +25,7 @@ type PrincipalUsage struct {
 	PromptTokens     uint64  `json:"prompt_tokens"`
 	CompletionTokens uint64  `json:"completion_tokens"`
 	CachedTokens     uint64  `json:"cached_tokens"`
+	CacheWriteTokens uint64  `json:"cache_write_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
 	Unpriced         bool    `json:"unpriced"`
 	// PricedTokens is the prompt+completion total of the records the price
@@ -47,6 +48,7 @@ func RollupUsage(r io.Reader, opts UsageRollupOptions) ([]PrincipalUsage, error)
 		Prompt     int64     `json:"prompt_tokens"`
 		Completion int64     `json:"completion_tokens"`
 		Cached     int64     `json:"cached_tokens"`
+		CacheWrite int64     `json:"cache_write_tokens"`
 		CostUSD    float64   `json:"cost_usd"`
 		Unpriced   bool      `json:"unpriced"`
 	}
@@ -70,7 +72,7 @@ func RollupUsage(r io.Reader, opts UsageRollupOptions) ([]PrincipalUsage, error)
 		if rec.Principal == "" || (opts.Principal != "" && rec.Principal != opts.Principal) || (!opts.Since.IsZero() && rec.Time.Before(opts.Since)) {
 			continue
 		}
-		if rec.Prompt < 0 || rec.Completion < 0 || rec.Cached < 0 || rec.CostUSD < 0 {
+		if rec.Prompt < 0 || rec.Completion < 0 || rec.Cached < 0 || rec.CacheWrite < 0 || rec.CostUSD < 0 {
 			return nil, fmt.Errorf("broker: audit line %d: usage values must not be negative", line)
 		}
 		row := byPrincipal[rec.Principal]
@@ -83,6 +85,7 @@ func RollupUsage(r io.Reader, opts UsageRollupOptions) ([]PrincipalUsage, error)
 		row.PromptTokens += uint64(rec.Prompt)
 		row.CompletionTokens += uint64(rec.Completion)
 		row.CachedTokens += uint64(rec.Cached)
+		row.CacheWriteTokens += uint64(rec.CacheWrite)
 		row.CostUSD += rec.CostUSD
 		row.Unpriced = row.Unpriced || rec.Unpriced
 		if rec.Unpriced {

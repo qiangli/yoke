@@ -41,6 +41,20 @@ func TestFinishWritesCostUSDForPricedModel(t *testing.T) {
 	}
 }
 
+func TestPriceSeparatesCacheWrites(t *testing.T) {
+	pricing := llmprice.Lookup("claude-sonnet-4")
+	if !pricing.Known || pricing.CacheWritePerM == pricing.InputPerM {
+		t.Fatal("test requires distinct Claude input and cache-write rates")
+	}
+	ri := &reqInfo{rec: Record{Backend: BackendCLI, Model: "claude-sonnet-4", PromptTok: 15, CachedTok: 7, CacheWriteTok: 5, OutputTok: 2}}
+	h := newHarness(t, nil)
+	h.b.price(ri)
+	want := (3*pricing.InputPerM + 7*pricing.CacheReadPerM + 5*pricing.CacheWritePerM + 2*pricing.OutputPerM) / 1e6
+	if ri.rec.CostUSD != want || ri.rec.PromptTok != 15 {
+		t.Errorf("record = %+v; want whole prompt 15 and cost %.9f", ri.rec, want)
+	}
+}
+
 // A model the table has never heard of is UNPRICED, not priced at another
 // model's rate. This is the rule the story states outright: the door never
 // falls back to another model's price.
