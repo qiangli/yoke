@@ -186,9 +186,19 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 	if cloudbox == "" {
 		return "", errors.New("this host has no cloudbox (outpost status names none)")
 	}
+	if err := ensureLocalApp(ctx, port); err != nil {
+		return "", err
+	}
+	return cloudbox + "/matrix/h/" + url.PathEscape(host) + "/app/" + doorServiceName, nil
+}
+
+// ensureLocalApp publishes the door as this outpost's app "llm" unless it
+// already is. It needs no cloudbox: a host attached to a satellite serves
+// its apps through the attachment, not a legacy pairing.
+func ensureLocalApp(ctx context.Context, port int) error {
 	out, err := outpostRun(ctx, nil, "apps", "list", "--json")
 	if err != nil {
-		return "", err
+		return err
 	}
 	var list struct {
 		Apps []struct {
@@ -200,7 +210,7 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 		} `json:"apps"`
 	}
 	if err := json.Unmarshal(out, &list); err != nil {
-		return "", fmt.Errorf("outpost apps list: %w", err)
+		return fmt.Errorf("outpost apps list: %w", err)
 	}
 	// Name+port+enabled+!login is not enough: an app wired by hand before
 	// share existed can carry the port inside its host ("127.0.0.1:17788"
@@ -214,10 +224,21 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 	}
 	if !present {
 		if _, err := outpostRun(ctx, nil, "apps", "add", doorServiceName, "--url", fmt.Sprintf("http://127.0.0.1:%d", port)); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return cloudbox + "/matrix/h/" + url.PathEscape(host) + "/app/" + doorServiceName, nil
+	return nil
+}
+
+// attachedTo reports whether name (or satellite id) is an attachment of
+// this host's pairing.
+func attachedTo(name string) bool {
+	for _, at := range fleet.Attachments() {
+		if at.Matches(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // satelliteAppURL is the door's app URL on the satellite called name. An
@@ -394,10 +415,19 @@ cannot reach; pipe it to ` + "`bashy llm door import`" + ` there and keep it sec
 				}
 			}
 			if via != "mesh" {
-				// The main outpost's app is also what `outpost-profile up
-				// NAME --app llm` copies into the satellite's instance.
-				if g.CloudboxURL, err = ensureCloudboxApp(ctx, host, cloudbox, door.Port()); err != nil {
-					return fmt.Errorf("llm share: cloudbox: %w", err)
+				switch {
+				case satellite != "" && attachedTo(satellite):
+					// An attached host serves the local app through the
+					// attachment; it may have no legacy cloudbox at all.
+					if err := ensureLocalApp(ctx, door.Port()); err != nil {
+						return fmt.Errorf("llm share: app: %w", err)
+					}
+				default:
+					// The main outpost's app is also what `outpost-profile up
+					// NAME --app llm` copies into the satellite's instance.
+					if g.CloudboxURL, err = ensureCloudboxApp(ctx, host, cloudbox, door.Port()); err != nil {
+						return fmt.Errorf("llm share: cloudbox: %w", err)
+					}
 				}
 				if satellite != "" {
 					if g.CloudboxURL, err = satelliteAppURL(satellite); err != nil {

@@ -36,6 +36,7 @@ type fakeOutpost struct {
 	calls    [][]string
 	stdin    []string
 	sshErr   error
+	status   string // `status --json` output; empty = the paired default
 }
 
 func (f *fakeOutpost) run(_ context.Context, stdin io.Reader, args ...string) ([]byte, error) {
@@ -50,6 +51,9 @@ func (f *fakeOutpost) run(_ context.Context, stdin io.Reader, args ...string) ([
 	f.stdin = append(f.stdin, in)
 	switch strings.Join(args[:min(len(args), 3)], " ") {
 	case "status --json":
+		if f.status != "" {
+			return []byte(f.status), nil
+		}
 		return []byte(`{"config":{"agent_name":"Dooor","cloudbox_url":"https://cloudbox.example/"}}`), nil
 	case "mesh service ls":
 		return []byte(f.services), nil
@@ -712,5 +716,46 @@ func TestShareSatelliteResolvesAttachment(t *testing.T) {
 	}
 	if g.CloudboxURL != "https://edge.example/matrix/h/studio-edge/app/llm" {
 		t.Fatalf("cloudbox url = %q", g.CloudboxURL)
+	}
+}
+
+// A host that paired once with the master and attached to a satellite has no
+// legacy cloudbox: share --satellite still publishes the local app and names
+// the attachment's URL instead of failing on the missing cloudbox.
+func TestShareSatelliteAttachmentNeedsNoLegacyCloudbox(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	t.Setenv(door.PortEnv, "")
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(cfg, "outpost", "agent.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{
+		"attachments":[{"satellite_id":"sat_1","name":"zoo-aws","endpoint":"https://sat.example/","host":"studio","token":"t1"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := useFakeOutpost(t)
+	f.status = `{"config":{"agent_name":"Dooor"}}`
+	for _, sat := range []string{"zoo-aws", "sat_1"} {
+		out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox", "--satellite", sat, "--print")
+		if err != nil {
+			t.Fatalf("share --satellite %s: %v\n%s", sat, err, out)
+		}
+		var g DoorGrant
+		if err := json.Unmarshal([]byte(out), &g); err != nil {
+			t.Fatalf("grant: %v\n%s", err, out)
+		}
+		if g.CloudboxURL != "https://sat.example/matrix/h/studio/app/llm" {
+			t.Fatalf("cloudbox url = %q", g.CloudboxURL)
+		}
+	}
+	if f.count("apps add llm") != 1 {
+		t.Fatalf("local app not published exactly once (idempotent): %v", f.calls)
+	}
+	// Without an attachment the legacy path still needs a cloudbox.
+	if out, err := runShareLLM(t, "", "share", "peer", "--via", "cloudbox", "--print"); err == nil || !strings.Contains(err.Error(), "no cloudbox") {
+		t.Fatalf("legacy without cloudbox: %v\n%s", err, out)
 	}
 }
