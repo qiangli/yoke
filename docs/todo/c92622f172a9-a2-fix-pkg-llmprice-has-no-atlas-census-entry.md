@@ -3,9 +3,11 @@ id: c92622f172a9
 kind: bug
 title: 'A2 fix: pkg/llmprice has no atlas census entry'
 seq: 3073
-status: todo
+status: assigned
 priority: p1
 created: 2026-11-10T02:56:14.187417Z
+weave: 26
+assignee: agy-gemini3.8-flash
 sprint: 602
 sprint_id: 945d80da-6344-5fa1-8afb-08d6cac5d7a0
 sprint_title: 'Metered shared LLM access: per-peer usage, cost and limits on the LLM door (provider-agnostic)'
