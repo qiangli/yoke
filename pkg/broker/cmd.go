@@ -24,6 +24,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/cligw"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/resources"
 )
 
@@ -259,6 +260,11 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 		return err
 	}
 	opts := Options{Token: token, StateDir: stateDir, PeersFile: peersFile, Capture: o.Capture || os.Getenv("BASHY_LLM_CAPTURE") == "1"}
+	// A missing account credential does not stop the owner's legacy door.
+	// Only a member-bound peer is refused when no member client is available.
+	if members, memberErr := fleet.NewMemberClient("", ""); memberErr == nil {
+		opts.Members = members
+	}
 	var cli *cligw.Server
 	if !o.NoCLI {
 		cliOpts, err := cliServerOptions(token, o)

@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/boundary"
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/cligw"
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
@@ -102,6 +103,9 @@ type Options struct {
 	// PeersFile holds hashed per-peer credentials and their share policy
 	// ("" = no peer is ever admitted). See peershare.go.
 	PeersFile string
+	// Members checks Cloudbox membership for peers carrying an email binding.
+	// Nil refuses bound peers while leaving legacy unbound peers unchanged.
+	Members MemberAuthorizer
 	// QueueLimit bounds the local run queue (0 = DefaultQueueLimit).
 	QueueLimit int
 	// MemoryBytes is the host's physical memory for admission (0 = unknown,
@@ -255,13 +259,15 @@ const unixOwnerKey ctxKey = 1
 
 // reqInfo is everything the pipeline learned about a request.
 type reqInfo struct {
-	principal string
-	session   string
-	class     Class
-	params    map[string]string
-	started   time.Time
-	rec       Record
-	finished  bool
+	principal         string
+	session           string
+	class             Class
+	params            map[string]string
+	started           time.Time
+	rec               Record
+	finished          bool
+	memberListAgeMS   *int64
+	memberListOffline bool
 }
 
 // splitParams peels the /k/<token>, /s/<session> and /sticky/<key> pairs a
@@ -283,12 +289,12 @@ func splitParams(p string) (map[string]string, string) {
 	}
 }
 
-func (b *Broker) authorize(r *http.Request, pathToken string) (string, *PeerLimits, error) {
+func (b *Broker) authorize(r *http.Request, pathToken string) (peerAuthorization, error) {
 	if owner, unixPeer := r.Context().Value(unixOwnerKey).(bool); unixPeer {
 		if !owner {
-			return "", nil, errors.New("unix socket peer is not the owner")
+			return peerAuthorization{}, errors.New("unix socket peer is not the owner")
 		}
-		return b.opts.Principal, nil, nil
+		return peerAuthorization{principal: b.opts.Principal}, nil
 	}
 	presented := pathToken
 	if presented == "" {
@@ -298,19 +304,19 @@ func (b *Broker) authorize(r *http.Request, pathToken string) (string, *PeerLimi
 		presented = strings.TrimSpace(r.Header.Get("x-api-key"))
 	}
 	if presented == "" {
-		return "", nil, errors.New("missing token: use the owner-only socket, a bearer token, or the /k/<token> URL form (see `bashy llm env`)")
+		return peerAuthorization{}, errors.New("missing token: use the owner-only socket, a bearer token, or the /k/<token> URL form (see `bashy llm env`)")
 	}
 	if subtle.ConstantTimeCompare([]byte(presented), []byte(b.opts.Token)) == 1 {
-		return b.opts.Principal, nil, nil
+		return peerAuthorization{principal: b.opts.Principal}, nil
 	}
-	peer, limits, err := b.authorizePeer(presented)
+	auth, err := b.authorizePeer(r.Context(), presented)
 	if err != nil {
-		return peer, nil, err
+		return auth, err
 	}
-	if peer == "" {
-		return "", nil, errors.New("invalid token (see `bashy llm env`)")
+	if auth.principal == "" {
+		return peerAuthorization{}, errors.New("invalid token (see `bashy llm env`)")
 	}
-	return peer, limits, nil
+	return auth, nil
 }
 
 // ---- HTTP surface ----------------------------------------------------------
@@ -340,16 +346,20 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			b.appendCapture(ri, rest, &requestBody, cw)
 		}
 	}()
-	principal, limits, err := b.authorize(r, params["k"])
+	auth, err := b.authorize(r, params["k"])
 	if err != nil {
 		status := http.StatusUnauthorized
-		if errors.Is(err, errPeerNotShared) {
+		var memberRefusal *peerMemberRefusal
+		if errors.Is(err, errPeerNotShared) || errors.As(err, &memberRefusal) {
 			status = http.StatusForbidden
-			ri.rec.Principal = principal
+			ri.rec.Principal = auth.principal
 		}
+		stampMemberDecision(ri, auth.member)
 		writeErr(w, rest, status, err.Error())
 		return
 	}
+	principal, limits := auth.principal, auth.limits
+	stampMemberDecision(ri, auth.member)
 	ri.principal = principal
 	ri.rec.Principal = principal
 	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) {
@@ -399,6 +409,15 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, rest, http.StatusNotFound, "no such route: "+rest)
 	}
+}
+
+func stampMemberDecision(ri *reqInfo, d *boundary.Decision) {
+	if d == nil {
+		return
+	}
+	ms := d.ListAge.Milliseconds()
+	ri.memberListAgeMS = &ms
+	ri.memberListOffline = d.Offline
 }
 
 func isInferencePath(p string) bool {
@@ -731,6 +750,8 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 	ri.rec.WaitMS = wait.Milliseconds()
 	ri.rec.WallMS = b.opts.Now().Sub(ri.started).Milliseconds()
 	ri.rec.Error = errMsg
+	ri.rec.MemberListAgeMS = ri.memberListAgeMS
+	ri.rec.MemberListOffline = ri.memberListOffline
 	b.price(ri)
 	b.audit.append(ri.rec)
 	if b.meter != nil && strings.HasPrefix(ri.rec.Principal, PeerPrincipalPrefix) {

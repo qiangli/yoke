@@ -1,9 +1,11 @@
 package broker
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/boundary"
 	"github.com/qiangli/yoke/pkg/cligw"
 	"github.com/qiangli/yoke/pkg/toolcmd"
 )
@@ -60,6 +63,163 @@ func peerHarness(t *testing.T) (*harness, *capCLI, string) {
 	cli := &capCLI{fakeCLI: &fakeCLI{}}
 	h := newHarness(t, func(o *Options) { o.CLI = cli; o.PeersFile = peers })
 	return h, cli, peers
+}
+
+type memberFixture struct {
+	mu   sync.Mutex
+	rows []boundary.Member
+}
+
+func (f *memberFixture) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"members": f.rows})
+}
+
+func (f *memberFixture) set(rows ...boundary.Member) {
+	f.mu.Lock()
+	f.rows = append([]boundary.Member{}, rows...)
+	f.mu.Unlock()
+}
+
+func memberPeerHarness(t *testing.T, members MemberAuthorizer) (*harness, string) {
+	t.Helper()
+	peers := filepath.Join(t.TempDir(), "cligw", "peers.json")
+	h := newHarness(t, func(o *Options) {
+		o.CLI = &capCLI{fakeCLI: &fakeCLI{}}
+		o.PeersFile = peers
+		o.Members = members
+	})
+	return h, peers
+}
+
+func TestMemberBoundPeerRemovalCircleOfflineAndLegacy(t *testing.T) {
+	clock := time.Now().UTC()
+	row := boundary.Member{Email: "bob@example.com", Circle: "family", Status: "active", Mutual: true}
+	fixture := &memberFixture{}
+	fixture.set(row)
+	server := httptest.NewServer(fixture)
+	client := &boundary.Client{BaseURL: server.URL, Token: "owner", HTTP: server.Client(), TTL: time.Second, Now: func() time.Time { return clock }}
+	h, peers := memberPeerHarness(t, client)
+
+	emailCred, err := MintPeerCredentialFor(peers, "bob", ShareAllow, row.Email, "", clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := peerPost(t, h, "/v1/chat/completions", emailCred, nil); code != http.StatusOK {
+		t.Fatalf("member peer = %d %s", code, body)
+	}
+	fixture.set()
+	clock = clock.Add(2 * time.Second)
+	if code, body := peerPost(t, h, "/v1/chat/completions", emailCred, nil); code != http.StatusForbidden || !strings.Contains(body, "not an active mutual member") {
+		t.Fatalf("removed member = %d %s", code, body)
+	}
+
+	fixture.set(row)
+	clock = clock.Add(2 * time.Second)
+	circleCred, err := MintPeerCredentialFor(peers, "family", ShareAllow, row.Email, "family", clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := peerPost(t, h, "/v1/chat/completions", circleCred, nil); code != http.StatusOK {
+		t.Fatalf("circle peer = %d %s", code, body)
+	}
+	row.Circle = "team"
+	fixture.set(row)
+	clock = clock.Add(2 * time.Second)
+	if code, body := peerPost(t, h, "/v1/chat/completions", circleCred, nil); code != http.StatusForbidden || !strings.Contains(body, "not an active mutual member") {
+		t.Fatalf("changed circle = %d %s", code, body)
+	}
+
+	row.Circle = "family"
+	fixture.set(row)
+	clock = clock.Add(2 * time.Second)
+	if code, body := peerPost(t, h, "/v1/chat/completions", circleCred, nil); code != http.StatusOK {
+		t.Fatalf("warm member list = %d %s", code, body)
+	}
+	server.Close()
+	clock = clock.Add(time.Hour)
+	if code, body := peerPost(t, h, "/v1/chat/completions", circleCred, nil); code != http.StatusOK {
+		t.Fatalf("1h offline = %d %s", code, body)
+	}
+	recs := h.b.audit.snapshot()
+	last := recs[len(recs)-1]
+	if !last.MemberListOffline || last.MemberListAgeMS == nil || *last.MemberListAgeMS != time.Hour.Milliseconds() {
+		t.Fatalf("offline audit = %+v", last)
+	}
+	clock = clock.Add(24 * time.Hour)
+	if code, body := peerPost(t, h, "/v1/chat/completions", circleCred, nil); code != http.StatusForbidden || !strings.Contains(body, "maximum 24h") {
+		t.Fatalf("25h offline = %d %s", code, body)
+	}
+
+	legacy, err := MintPeerCredential(peers, "legacy", ShareAllow, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := peerPost(t, h, "/v1/chat/completions", legacy, nil); code != http.StatusOK {
+		t.Fatalf("legacy peer changed = %d %s", code, body)
+	}
+}
+
+func TestMemberBoundPeerLimitsStillApply(t *testing.T) {
+	row := boundary.Member{Email: "bob@example.com", Circle: "family", Status: "active", Mutual: true}
+	fixture := &memberFixture{}
+	fixture.set(row)
+	server := httptest.NewServer(fixture)
+	t.Cleanup(server.Close)
+	client := &boundary.Client{BaseURL: server.URL, Token: "owner", HTTP: server.Client()}
+	h, peers := memberPeerHarness(t, client)
+	cred, err := MintPeerCredentialFor(peers, "limited", ShareAllow, row.Email, "family", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPeerLimits(peers, "limited", PeerLimits{RPM: 1}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := peerPost(t, h, "/v1/chat/completions", cred, nil); code != http.StatusOK {
+		t.Fatalf("first request = %d %s", code, body)
+	}
+	if code, body := peerPost(t, h, "/v1/chat/completions", cred, nil); code != http.StatusTooManyRequests || !strings.Contains(body, LimitRPM) {
+		t.Fatalf("second request = %d %s", code, body)
+	}
+}
+
+type fixedMemberAuthorizer struct{ decision boundary.Decision }
+
+func (f fixedMemberAuthorizer) Decide(context.Context, string, []string) (boundary.Decision, error) {
+	return f.decision, nil
+}
+
+func TestPeerAddRefusesNonMember(t *testing.T) {
+	oldPath, oldClient := peersPath, peerMemberClient
+	path := filepath.Join(t.TempDir(), "peers.json")
+	peersPath = func() (string, error) { return path, nil }
+	peerMemberClient = func() (MemberAuthorizer, error) { return fixedMemberAuthorizer{}, nil }
+	t.Cleanup(func() { peersPath, peerMemberClient = oldPath, oldClient })
+
+	cmd := newPeerAddCmd()
+	cmd.SetArgs([]string{"bob", "--email", "bob@example.com", "--share", "allow"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "not an active mutual member") {
+		t.Fatalf("non-member add error = %v", err)
+	}
+	if ps, err := LoadPeerShares(path); err != nil || len(ps.Peers) != 0 {
+		t.Fatalf("refused add wrote a peer: %+v err=%v", ps, err)
+	}
+
+	peerMemberClient = func() (MemberAuthorizer, error) {
+		return fixedMemberAuthorizer{decision: boundary.Decision{Allowed: true}}, nil
+	}
+	cmd = newPeerAddCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"bob", "--email", "bob@example.com", "--circle", "family", "--share", "allow"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := LoadPeerShares(path)
+	if err != nil || ps.Peers["bob"].Email != "bob@example.com" || ps.Peers["bob"].Circle != "family" {
+		t.Fatalf("member peer = %+v err=%v", ps.Peers["bob"], err)
+	}
 }
 
 func peerPost(t *testing.T, h *harness, path, cred string, hdr map[string]string) (int, string) {

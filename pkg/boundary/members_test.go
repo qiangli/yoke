@@ -58,8 +58,13 @@ func TestListCacheOffline(t *testing.T) {
 	if err != nil || !stale || len(rows) != 0 {
 		t.Fatalf("offline: %#v %t %v", rows, stale, err)
 	}
-	if ok, err := c.Allowed(context.Background(), "bob@example.com", []string{"family"}); ok || err == nil {
-		t.Fatalf("offline authorization: allowed=%t err=%v", ok, err)
+	d, err := c.Decide(context.Background(), "bob@example.com", []string{"family"})
+	if err != nil || d.Allowed || !d.Offline || d.ListAge != 2*time.Second {
+		t.Fatalf("offline authorization: decision=%+v err=%v", d, err)
+	}
+	now = now.Add(24 * time.Hour)
+	if _, err := c.Decide(context.Background(), "bob@example.com", []string{"family"}); err == nil {
+		t.Fatal("list older than 24h authorized")
 	}
 }
 

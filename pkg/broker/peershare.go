@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/boundary"
 )
 
 // Per-peer door credentials (Sprint 418 S9; the bounded slice of Sprint 308
@@ -39,6 +42,10 @@ type PeerShare struct {
 	Share   string    `json:"share"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated,omitempty"`
+	// Email binds this credential to one Cloudbox member. Circle optionally
+	// narrows that member to the owner's current circle label.
+	Email  string `json:"email,omitempty"`
+	Circle string `json:"circle,omitempty"`
 	// Limits caps the peer's usage (nil = unlimited); see peerlimit.go.
 	Limits *PeerLimits `json:"limits,omitempty"`
 }
@@ -99,6 +106,12 @@ func savePeerShares(path string, ps PeerShares) error {
 // The share policy starts at deny unless share says otherwise; rotating keeps
 // the existing policy. The credential is returned once and never stored.
 func MintPeerCredential(path, name, share string, now time.Time) (string, error) {
+	return MintPeerCredentialFor(path, name, share, "", "", now)
+}
+
+// MintPeerCredentialFor is MintPeerCredential plus an optional membership
+// binding. Empty email/circle preserve an existing binding during rotation.
+func MintPeerCredentialFor(path, name, share, email, circle string, now time.Time) (string, error) {
 	if !ValidPeerName(name) {
 		return "", fmt.Errorf("broker: invalid peer name %q (want [a-z0-9][a-z0-9._-]*)", name)
 	}
@@ -123,9 +136,34 @@ func MintPeerCredential(path, name, share string, now time.Time) (string, error)
 		}
 		rec.Share = share
 	}
+	if email != "" {
+		rec.Email = strings.ToLower(strings.TrimSpace(email))
+		rec.Circle = strings.TrimSpace(circle)
+	}
 	rec.Hash = hashCredential(cred)
 	ps.Peers[name] = rec
 	return cred, savePeerShares(path, ps)
+}
+
+// SetPeerMember changes an existing peer's member binding. Empty email clears
+// the binding and restores legacy owner-tool behavior.
+func SetPeerMember(path, name, email, circle string, now time.Time) error {
+	ps, err := LoadPeerShares(path)
+	if err != nil {
+		return err
+	}
+	rec, ok := ps.Peers[name]
+	if !ok {
+		return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
+	}
+	rec.Email = strings.ToLower(strings.TrimSpace(email))
+	rec.Circle = strings.TrimSpace(circle)
+	if rec.Email == "" {
+		rec.Circle = ""
+	}
+	rec.Updated = now
+	ps.Peers[name] = rec
+	return savePeerShares(path, ps)
 }
 
 // SetPeerShare sets an existing peer's share policy.
@@ -173,17 +211,32 @@ func (ps PeerShares) Names() []string {
 // errPeerNotShared is a known peer whose share policy does not admit it.
 var errPeerNotShared = errors.New("peer credential is valid but this door does not share with that peer (share: deny); the owner can run `llm peer share NAME allow`")
 
+// MemberAuthorizer supplies active+mutual Cloudbox membership decisions.
+type MemberAuthorizer interface {
+	Decide(context.Context, string, []string) (boundary.Decision, error)
+}
+
+type peerAuthorization struct {
+	principal string
+	limits    *PeerLimits
+	member    *boundary.Decision
+}
+
+type peerMemberRefusal struct{ reason string }
+
+func (e *peerMemberRefusal) Error() string { return e.reason }
+
 // authorizePeer matches presented against the stored peer hashes. It returns
 // ("", nil) when no peer matches, so the caller reports an unknown bearer.
 // The file is read per request so share/revoke/limit take effect without
 // restart; the matched peer's limits come back with it.
-func (b *Broker) authorizePeer(presented string) (string, *PeerLimits, error) {
+func (b *Broker) authorizePeer(ctx context.Context, presented string) (peerAuthorization, error) {
 	if b.opts.PeersFile == "" {
-		return "", nil, nil
+		return peerAuthorization{}, nil
 	}
 	ps, err := LoadPeerShares(b.opts.PeersFile)
 	if err != nil {
-		return "", nil, errors.New("peer policy unreadable; refusing peer credentials")
+		return peerAuthorization{}, errors.New("peer policy unreadable; refusing peer credentials")
 	}
 	got := hashCredential(presented)
 	var match string
@@ -193,12 +246,34 @@ func (b *Broker) authorizePeer(presented string) (string, *PeerLimits, error) {
 		}
 	}
 	if match == "" {
-		return "", nil, nil
+		return peerAuthorization{}, nil
 	}
+	auth := peerAuthorization{principal: PeerPrincipalPrefix + match, limits: ps.Peers[match].Limits}
 	if ps.Peers[match].Share != ShareAllow {
-		return PeerPrincipalPrefix + match, nil, errPeerNotShared
+		return auth, errPeerNotShared
 	}
-	return PeerPrincipalPrefix + match, ps.Peers[match].Limits, nil
+	rec := ps.Peers[match]
+	if rec.Email == "" {
+		return auth, nil
+	}
+	if b.opts.Members == nil {
+		return auth, &peerMemberRefusal{reason: "member list unavailable; refusing member-bound peer"}
+	}
+	grants := []string{rec.Email}
+	if rec.Circle != "" {
+		grants = []string{rec.Circle}
+	}
+	decision, err := b.opts.Members.Decide(ctx, rec.Email, grants)
+	if err == nil || decision.Offline {
+		auth.member = &decision
+	}
+	if err != nil {
+		return auth, &peerMemberRefusal{reason: fmt.Sprintf("member check unavailable; refusing %s: %v", auth.principal, err)}
+	}
+	if !decision.Allowed {
+		return auth, &peerMemberRefusal{reason: fmt.Sprintf("%s is not an active mutual member allowed by this peer grant", rec.Email)}
+	}
+	return auth, nil
 }
 
 // peerRouteAllowed is the whole surface a shared peer may reach: inference

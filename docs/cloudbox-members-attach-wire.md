@@ -330,7 +330,7 @@ flag does not exist yet; its wave story builds it against the fake.
 | `GET /api/v1/member/invitations` | `bashy member invitations` | gap (W1) |
 | `POST /api/v1/member/invitations/:id/accept` | `bashy member accept ID [--circle C]` | gap (W1) |
 | `GET /api/v1/members/of` | `bashy member of` | gap (W1) |
-| members reads (mutual, circle/email filter) | `bashy llm peer --email E` / `--circle C` | gap (W3) |
+| members reads (mutual, circle/email filter) | `bashy llm peer add NAME --email E [--circle C]` / `bashy llm peer set NAME --email E [--circle C]` | implemented (W3); `--circle` constrains the bound email rather than creating a shared circle credential |
 | `POST /api/v1/hosts/invites` (master) | `bashy paired-host invite` (pairing code for your own account) | gap (W2) |
 | `POST /api/v1/hosts/pair` | `outpost register --code CODE` — identity-only when the server is the master | exists — W2 handles the `tunnel: false` response |
 | `DELETE /api/v1/hosts/self` (master) | `outpost unpair` | client method implemented; W2 wires outpost unpair to this endpoint |
@@ -361,7 +361,10 @@ no browser. Shapes (names are the W1–W3 deliverables):
 - **host leaves** — `bashy outpost satellite detach ID`; to forget the host
   entirely, `bashy outpost unpair`.
 - **share an LLM with a circle** — `bashy member ls --circle family` →
-  `bashy llm peer --circle family` (mutual members only).
+  `bashy llm peer add bob --email bob@example.com --circle family` (active,
+  mutual members only). The door checks the email and current circle on every
+  request. If the master is unreachable it may use its last known member list
+  for at most 24 hours, records that list's age in the audit line, then refuses.
 
 ## 7. Error codes
 

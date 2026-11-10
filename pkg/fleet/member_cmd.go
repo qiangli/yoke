@@ -12,6 +12,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// NewMemberClient resolves the account-level master and owner credential used
+// for membership checks. A paired host token is identity-only, so the saved
+// owner credential wins when no token was selected explicitly.
+func NewMemberClient(master, token string) (*boundary.Client, error) {
+	selected := token != "" || os.Getenv("BASHY_FLEET_TOKEN") != "" || os.Getenv("BASHY_API_KEY") != ""
+	master, token = ResolveMaster(master, token)
+	if !selected {
+		if ownerToken := masterToken(master); ownerToken != "" {
+			token = ownerToken
+		}
+	}
+	if token == "" {
+		return nil, fmt.Errorf("member: no Cloudbox owner token")
+	}
+	return &boundary.Client{BaseURL: master, Token: token, HTTP: httpClient()}, nil
+}
+
 // NewMemberCmd constructs the account member verb for a host front door.
 func NewMemberCmd() *cobra.Command {
 	var master, token string
@@ -30,20 +47,7 @@ func NewMemberCmd() *cobra.Command {
 		if err != nil {
 			return nil, err
 		}
-		selected := t != "" || os.Getenv("BASHY_FLEET_TOKEN") != "" || os.Getenv("BASHY_API_KEY") != ""
-		u, t = ResolveMaster(u, t)
-		// A paired host's token has only the host scope. Member verbs act as
-		// the account, so prefer its saved master credential when no owner
-		// token was explicitly selected.
-		if !selected {
-			if ownerToken := masterToken(u); ownerToken != "" {
-				t = ownerToken
-			}
-		}
-		if t == "" {
-			return nil, fmt.Errorf("member: no Cloudbox owner token")
-		}
-		return &boundary.Client{BaseURL: u, Token: t, HTTP: httpClient()}, nil
+		return NewMemberClient(u, t)
 	}
 	output := func(cmd *cobra.Command, value any, plain string) error {
 		if asJSON {

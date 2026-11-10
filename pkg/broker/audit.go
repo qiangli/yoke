@@ -43,6 +43,10 @@ type Record struct {
 	CachedTok     int            `json:"cached_tokens,omitempty"`
 	OutputTok     int            `json:"completion_tokens,omitempty"`
 	Error         string         `json:"error,omitempty"`
+	// MemberListAgeMS is present for every member-bound peer decision. Offline
+	// says the master was unreachable and the last known list was used.
+	MemberListAgeMS   *int64 `json:"member_list_age_ms,omitempty"`
+	MemberListOffline bool   `json:"member_list_offline,omitempty"`
 
 	// CostUSD is the estimated USD cost of this request's tokens at the
 	// llmprice table's rate for the model that served them. It is present

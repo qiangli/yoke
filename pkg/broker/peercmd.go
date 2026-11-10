@@ -1,17 +1,25 @@
 package broker
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/broker/door"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // peersPath is the peers file the CLI edits (a seam for tests).
 var peersPath = door.PeersPath
+
+// peerMemberClient is the account member client the peer CLI uses (a seam for
+// tests). The serving door keeps its own long-lived instance for offline use.
+var peerMemberClient = func() (MemberAuthorizer, error) { return fleet.NewMemberClient("", "") }
 
 func newPeerCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -28,12 +36,13 @@ UTC month and requests per minute; over a cap the door answers 429 with the
 limit, the usage and the reset time.`,
 		SilenceUsage: true,
 	}
-	cmd.AddCommand(newPeerAddCmd(), newPeerShareCmd(), newPeerRevokeCmd(), newPeerLimitCmd(), newPeerListCmd())
+	cmd.AddCommand(newPeerAddCmd(), newPeerSetCmd(), newPeerShareCmd(), newPeerRevokeCmd(), newPeerLimitCmd(), newPeerListCmd())
 	return cmd
 }
 
 func newPeerAddCmd() *cobra.Command {
-	var share string
+	var share, email, circle string
+	var asJSON, dryRun bool
 	c := &cobra.Command{
 		Use:   "add NAME",
 		Short: "mint (or rotate) a peer credential; prints it once",
@@ -43,16 +52,127 @@ func newPeerAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cred, err := MintPeerCredential(path, args[0], share, time.Now().UTC())
+			if cmd.Flags().Changed("email") || cmd.Flags().Changed("circle") {
+				if email == "" {
+					ps, loadErr := LoadPeerShares(path)
+					if loadErr != nil {
+						return loadErr
+					}
+					email = ps.Peers[args[0]].Email
+				}
+				if err := validatePeerMember(cmd.Context(), email, circle); err != nil {
+					return err
+				}
+			}
+			if dryRun {
+				preview := map[string]any{"dry_run": true, "peer": args[0], "share": share, "email": email, "circle": circle}
+				if asJSON {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(preview)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "would mint peer:%s email=%s circle=%s share=%s\n", args[0], email, circle, share)
+				return nil
+			}
+			cred, err := MintPeerCredentialFor(path, args[0], share, email, circle, time.Now().UTC())
 			if err != nil {
 				return err
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"peer": PeerPrincipalPrefix + args[0], "credential": cred, "email": email, "circle": circle})
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), cred)
 			return nil
 		},
 	}
 	c.Flags().StringVar(&share, "share", "", "initial share policy: allow or deny (default deny; a rotation keeps the current policy)")
+	c.Flags().StringVar(&email, "email", "", "bind this credential to an active mutual member email")
+	c.Flags().StringVar(&circle, "circle", "", "also require that member's current circle")
+	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the change without writing")
 	return c
+}
+
+func newPeerSetCmd() *cobra.Command {
+	var email, circle string
+	var asJSON, dryRun bool
+	c := &cobra.Command{
+		Use:   "set NAME --email EMAIL [--circle C]",
+		Short: "set or clear a peer's member binding",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !cmd.Flags().Changed("email") && !cmd.Flags().Changed("circle") {
+				return fmt.Errorf("llm peer set: give --email (use --email= to restore a legacy unbound peer) or --circle")
+			}
+			path, err := peersPath()
+			if err != nil {
+				return err
+			}
+			ps, err := LoadPeerShares(path)
+			if err != nil {
+				return err
+			}
+			rec, ok := ps.Peers[args[0]]
+			if !ok {
+				return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", args[0], args[0])
+			}
+			if !cmd.Flags().Changed("email") {
+				email = rec.Email
+			}
+			if !cmd.Flags().Changed("circle") {
+				circle = rec.Circle
+			}
+			if email != "" {
+				if err := validatePeerMember(cmd.Context(), email, circle); err != nil {
+					return err
+				}
+			}
+			result := map[string]any{"peer": PeerPrincipalPrefix + args[0], "email": email, "circle": circle}
+			if dryRun {
+				result["dry_run"] = true
+			} else if err := SetPeerMember(path, args[0], email, circle, time.Now().UTC()); err != nil {
+				return err
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+			if dryRun {
+				fmt.Fprintf(cmd.OutOrStdout(), "would set peer:%s email=%s circle=%s\n", args[0], email, circle)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&email, "email", "", "active mutual member email (empty clears the binding)")
+	c.Flags().StringVar(&circle, "circle", "", "also require the member's current circle (empty means exact email only)")
+	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the change without writing")
+	return c
+}
+
+func validatePeerMember(ctx context.Context, email, circle string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return fmt.Errorf("llm peer: --circle requires a peer bound with --email")
+	}
+	c, err := peerMemberClient()
+	if err != nil {
+		return fmt.Errorf("llm peer: cannot check member %s: %w", email, err)
+	}
+	grants := []string{email}
+	if circle = strings.TrimSpace(circle); circle != "" {
+		grants = []string{circle}
+	}
+	d, err := c.Decide(ctx, email, grants)
+	if err != nil {
+		return fmt.Errorf("llm peer: cannot check member %s: %w", email, err)
+	}
+	// Writes fail closed while offline: the 24h exception is for serving an
+	// already-issued credential, not creating a new authorization record.
+	if d.Offline {
+		return fmt.Errorf("llm peer: cannot change a member binding while the master is unreachable")
+	}
+	if !d.Allowed {
+		return fmt.Errorf("llm peer: %s is not an active mutual member allowed by this grant", email)
+	}
+	return nil
 }
 
 func newPeerShareCmd() *cobra.Command {
@@ -160,13 +280,13 @@ func newPeerListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "PEER\tSHARE\tLIMITS\tCREATED")
+			fmt.Fprintln(tw, "PEER\tSHARE\tEMAIL\tCIRCLE\tLIMITS\tCREATED")
 			for _, n := range ps.Names() {
 				lim := PeerLimits{}
 				if ps.Peers[n].Limits != nil {
 					lim = *ps.Peers[n].Limits
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", PeerPrincipalPrefix+n, ps.Peers[n].Share, lim, ps.Peers[n].Created.Format(time.RFC3339))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", PeerPrincipalPrefix+n, ps.Peers[n].Share, ps.Peers[n].Email, ps.Peers[n].Circle, lim, ps.Peers[n].Created.Format(time.RFC3339))
 			}
 			return tw.Flush()
 		},
