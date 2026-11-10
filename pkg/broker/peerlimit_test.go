@@ -251,3 +251,53 @@ func TestPeerDailyCapTwoPeers(t *testing.T) {
 		t.Errorf("peer:two usage = %+v", r)
 	}
 }
+
+// usd/month is metered on the door's A2 cost_usd, not on a price of its own:
+// a peer asking for a model the llmprice table prices (claude-opus-4-8, 2 in
+// + 1 out ≈ $0.000105) trips a $0.0001 monthly cap on its second request.
+func TestPeerUSDMonthTripsOnPricedModel(t *testing.T) {
+	h, _, peers := peerHarness(t)
+	now := time.Now().UTC()
+	cred, err := MintPeerCredential(peers, "one", ShareAllow, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPeerLimits(peers, "one", PeerLimits{USDMonth: 0.0001}, now); err != nil {
+		t.Fatal(err)
+	}
+	post := func() (int, []byte) {
+		req, _ := http.NewRequest("POST", h.server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"q"}]}`))
+		req.Header.Set("Authorization", "Bearer "+cred)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, raw
+	}
+	if code, raw := post(); code != http.StatusOK {
+		t.Fatalf("first request = %d %s", code, raw)
+	}
+	if rec := h.lastRecord(1); rec.Unpriced || rec.CostUSD <= 0 {
+		t.Fatalf("peer record not priced by llmprice: %+v", rec)
+	}
+	code, raw := post()
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("over usd cap = %d %s", code, raw)
+	}
+	var refusal struct {
+		Limit, Reset string
+		Used, Cap    float64
+	}
+	if err := json.Unmarshal(raw, &refusal); err != nil {
+		t.Fatal(err)
+	}
+	want := (2*15.0 + 1*75.0) / 1e6
+	if refusal.Limit != LimitUSDMonth || refusal.Cap != 0.0001 || refusal.Used < want-1e-12 || refusal.Used > want+1e-12 {
+		t.Fatalf("refusal = %+v, want usd_month used %.9f cap 0.0001", refusal, want)
+	}
+	if wantReset := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339); refusal.Reset != wantReset {
+		t.Errorf("reset = %s, want %s", refusal.Reset, wantReset)
+	}
+}
