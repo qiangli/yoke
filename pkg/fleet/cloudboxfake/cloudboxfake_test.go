@@ -317,7 +317,7 @@ func TestPairAttachDetach(t *testing.T) {
 	// Re-attach to sat2, then leave from the satellite side.
 	f.SetSatelliteState(sat2, "stopped")
 	m.wantErr(409, "satellite_unavailable", "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
-	f.SetSatelliteState(sat2, "running")
+	f.SetSatelliteState(sat2, "enabled")
 	at2 := m.want(201, "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
 	tok2 := str(s2.want(201, "POST", "/api/v1/hosts/attach", str(at2, "attach_token"), body), "token")
 	s2.want(204, "DELETE", "/api/v1/hosts/self", tok2, nil)

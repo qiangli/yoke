@@ -165,6 +165,17 @@ type idemEntry struct {
 	at       time.Time
 }
 
+// registration is the matrix-tunnel registration a real satellite returns
+// with an attach (wire §4): legacy /api/register/exchange fields. The fake
+// runs no tunnel; the values only have to be well-formed.
+func (s *satServer) registration(host, accessToken string) map[string]any {
+	return map[string]any{
+		"agent_name": host, "server_addr": "127.0.0.1", "server_port": 7000,
+		"protocol": "websocket", "token": "fake-matrix-token", "remote_port": 0,
+		"access_token": accessToken,
+	}
+}
+
 type satServer struct {
 	sat   *Satellite
 	srv   *httptest.Server
@@ -242,14 +253,14 @@ func (f *Fake) AddToken(email string, scopes ...string) string {
 	return tok
 }
 
-// AddSatellite seeds a running satellite owned by ownerEmail, starts its
+// AddSatellite seeds an enabled satellite owned by ownerEmail, starts its
 // httptest server, and returns its id. The record's endpoint is that server.
 func (f *Fake) AddSatellite(t testing.TB, ownerEmail, name string) string {
 	t.Helper()
 	f.mu.Lock()
 	id := f.nextID("sat")
 	s := &satServer{
-		sat:   &Satellite{ID: id, Name: name, State: "running", OwnerEmail: strings.ToLower(ownerEmail)},
+		sat:   &Satellite{ID: id, Name: name, State: "enabled", OwnerEmail: strings.ToLower(ownerEmail)},
 		hosts: map[string]*SatelliteHost{},
 		token: map[string]string{},
 	}
@@ -915,7 +926,7 @@ func (f *Fake) attach(w http.ResponseWriter, r *http.Request, id string) *apiErr
 		e.body.SatelliteID = a.SatelliteID
 		return e
 	}
-	if s.sat.State != "running" {
+	if s.sat.State != "enabled" {
 		return errf(409, "satellite_unavailable", "satellite %s is %s", id, s.sat.State)
 	}
 	// A new attach token supersedes any unredeemed earlier one.
@@ -993,7 +1004,7 @@ func (f *Fake) redeemAttach(s *satServer, w http.ResponseWriter, r *http.Request
 		if tok.used != sum || s.hosts[tok.host] == nil {
 			return errf(401, "attach_token_used", "attach token already redeemed")
 		}
-		writeJSON(w, 200, map[string]any{"host": s.hosts[tok.host], "token": s.token[tok.host], "scopes": []string{ScopeSatelliteHost}, "satellite_id": s.sat.ID})
+		writeJSON(w, 200, map[string]any{"host": s.hosts[tok.host], "token": s.token[tok.host], "scopes": []string{ScopeSatelliteHost}, "satellite_id": s.sat.ID, "registration": s.registration(tok.host, s.token[tok.host])})
 		return nil
 	}
 	if body.Host != tok.host {
@@ -1012,7 +1023,7 @@ func (f *Fake) redeemAttach(s *satServer, w http.ResponseWriter, r *http.Request
 	if a := f.assignments[tok.host]; a != nil && a.SatelliteID == s.sat.ID {
 		a.State, a.AttachedAt = "attached", &now
 	}
-	writeJSON(w, 201, map[string]any{"host": rec, "token": st, "scopes": []string{ScopeSatelliteHost}, "satellite_id": s.sat.ID})
+	writeJSON(w, 201, map[string]any{"host": rec, "token": st, "scopes": []string{ScopeSatelliteHost}, "satellite_id": s.sat.ID, "registration": s.registration(tok.host, st)})
 	return nil
 }
 

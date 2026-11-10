@@ -264,8 +264,8 @@ Natural idempotency: a repeat POST for the same satellite issues a **new**
 token and invalidates any unredeemed earlier one (`201` again); if the host
 is already `attached` here it still returns `201` (re-attach refreshes the
 satellite host token). Errors: `404 not_found`, `409 attached_elsewhere`
-(with `satellite_id` — detach first), `409 satellite_unavailable` (state is
-not `running`).
+(with `satellite_id` — detach first), `409 satellite_unavailable` (the
+satellite is not `enabled`).
 
 ### DELETE /api/v1/satellites/:id/attach — scope `host` (master)
 
@@ -278,8 +278,14 @@ Body `{"host": "studio", "hostname": "studio.local", "os": "darwin", "arch":
 "arm64"}`; `host` must equal the host named in the attach token.
 
 → `201 {"host": SatelliteHost, "token": "<satellite host token>", "scopes":
-["satellite-host"], "satellite_id": "sat_1"}`. The master assignment becomes
-`attached`.
+["satellite-host", ...], "satellite_id": "sat_1", "registration": {...}}`.
+`registration` is the matrix-tunnel registration the host dials, with the same
+fields a legacy `/api/register/exchange` returns (`agent_name`, `server_addr`,
+`server_port`, `protocol`, `token`, `remote_port`, `access_token`,
+`cloudbox_ticket_pubkey`); the outpost keeps it with the attachment and its one
+tunnel client serves the satellite exactly like a legacy pairing. `scopes`
+includes the canonical outpost scopes the satellite grants an attached host.
+The master assignment becomes `attached`.
 
 Natural idempotency: re-presenting the **same** attach token with the same
 body within its TTL returns `200` with the same record and token (safe to
