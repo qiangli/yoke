@@ -3,15 +3,18 @@ id: 2eb6733da6ad
 kind: bug
 title: 'Shared door on an attached host: no satellite login; permission is assumed once paired and shared'
 seq: 3092
-status: todo
+status: done
 priority: p1
 labels:
     - llm
     - satellite
 created: 2026-11-10T20:47:34.197205Z
+assignee: claude-opus5.5-s606
 sprint: 606
 sprint_id: ebee3343-b774-520a-9d53-b57b306f4210
 sprint_title: Streamline Cloudbox master, satellite, and outpost relationships
+closed: 2026-11-10T22:14:56.771364Z
+closed_by: claude-opus5.5-s606
 ---
 
 Design rule (operator, 2026-11-10): once an outpost is paired and access is shared, permission is assumed. The satellite puts no login gate in front of a shared app such as the llm door. The door authorizes every request itself:
