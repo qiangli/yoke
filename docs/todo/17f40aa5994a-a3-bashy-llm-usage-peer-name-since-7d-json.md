@@ -12,3 +12,4 @@ sprint_title: 'Metered shared LLM access: per-peer usage, cost and limits on the
 ---
 
 Per-principal rollup over the door audit.jsonl: requests, prompt/completion/cached tokens, cost_usd, unpriced flag; text table + --json (the one source for reports, alarms and the usage page). Expose the rollup as a Go func reused by A4. Register under the llm verb tree beside peer (pkg/broker cmd.go). Depends on A1+A2 record fields. Tests: unit over a fixture audit log. Testing (operator rule): unit tests plus at most one minimal integration test in this story; full suites only at sprint close or release.
+Manager note (A1 merged c0ff5c74): audit Record now has cached_tokens and upstream_model. A2 (in flight, branch agent/weave-issue-21 commit 36817dc0) adds cost_usd (float, omitted when unpriced) and unpriced (bool); code the rollup against those JSON names now. Commit trailers each on its own line, no blank lines between.
