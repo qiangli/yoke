@@ -3,7 +3,7 @@ id: e79fdc3ee3c9
 kind: enhancement
 title: 'F3 llm usage: split priced and unpriced tokens per principal'
 seq: 3076
-status: assigned
+status: done
 priority: p2
 created: 2026-11-10T03:47:56.108312Z
 weave: 47
@@ -11,6 +11,8 @@ assignee: genie-glm-5.3
 sprint: 607
 sprint_id: d3d7f687-3414-576c-ad29-b45dfc879257
 sprint_title: 'Metering follow-ups: one price table, honest cost and alarms, member go-live guards'
+closed: 2026-11-10T21:02:33.011595Z
+closed_by: claude-fable5.1-s607
 ---
 
 S602 known limit: PrincipalUsage.unpriced is OR-ed per principal (pkg/broker/usage.go), so a principal mixing priced and unpriced models is checked only against the token cap by the usage alarm.
