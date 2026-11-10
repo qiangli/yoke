@@ -698,8 +698,11 @@ func (t Tool) SetupScript(v LaunchVars) string {
 	return strings.NewReplacer(pairs...).Replace(s)
 }
 
-// UsesStateDir reports whether the launch env or setup refers to {state_dir}.
+// UsesStateDir reports whether the launch argv, env or setup refers to {state_dir}.
 func (t Tool) UsesStateDir() bool {
+	if strings.Contains(t.CLI.Launch.Exec, StateDirToken) {
+		return true
+	}
 	if strings.Contains(t.CLI.Launch.Setup, StateDirToken) {
 		return true
 	}
