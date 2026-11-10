@@ -3,7 +3,7 @@ id: 3e59a2b94f26
 kind: doc
 title: 'S606/S583 W0 Public wire contract: cloudbox members (circle, mutual accept, reverse view) and pair-once + satellite attach'
 seq: 3079
-status: assigned
+status: done
 priority: p0
 labels:
     - wire
@@ -11,10 +11,14 @@ labels:
     - members
     - satellite-cli
 created: 2026-11-10T04:36:32.685479Z
-assignee: claude-opus5.5
+weave: 27
+assignee: claude-opus5.5-s606w0
 sprint: 606
 sprint_id: ebee3343-b774-520a-9d53-b57b306f4210
 sprint_title: Streamline Cloudbox master, satellite, and outpost relationships
+closed: 2026-11-10T05:17:33.241297Z
+resolution: fixed
+closed_by: claude-opus5.5-s606w0-a
 ---
 
 Wave 0 of the S606/S583 plan (2026-11-09). Deliver docs/cloudbox-members-attach-wire.md (one line in the docs index if present): the PUBLIC wire contract that the private cloudbox tickets (members a99e88ac, attach 988ccd26) implement and that yoke/outpost/bashy clients code against with httptest fixtures. Request/response JSON, status codes, Bearer scopes, idempotency, error envelopes, cache/TTL and revocation timing. No private internals.
