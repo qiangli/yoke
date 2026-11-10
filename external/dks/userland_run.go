@@ -167,16 +167,22 @@ func defaultRunEnv(env *userlandEnv) *runEnv {
 	return renv
 }
 
-// defaultSecretResolver resolves a vault credential by running `bashy secret show <vault-name>`.
+// defaultSecretResolver resolves a vault credential by HANDLE use: the value
+// crosses only the `bashy secret exec` boundary into a child's environment
+// (never argv), and printenv hands it back as the child's stdout. The reveal
+// verbs (`secret show`/`secret env`) refuse non-interactive callers, so
+// plumbing must not lean on them; the bytes this returns are a secret value
+// the caller keeps on its redact list.
 func defaultSecretResolver(ctx context.Context, vaultName string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "bashy", "secret", "show", vaultName)
+	const envName = "BASHY_DKS_CREDENTIAL"
+	cmd := exec.CommandContext(ctx, "bashy", "secret", "exec", vaultName+"="+envName, "--", "bashy", "printenv", envName)
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return nil, fmt.Errorf("bashy secret show %s: %s", vaultName, bytes.TrimSpace(exitErr.Stderr))
+			return nil, fmt.Errorf("bashy secret exec %s: %s", vaultName, bytes.TrimSpace(exitErr.Stderr))
 		}
-		return nil, fmt.Errorf("bashy secret show %s: %w", vaultName, err)
+		return nil, fmt.Errorf("bashy secret exec %s: %w", vaultName, err)
 	}
 	return bytes.TrimRight(out, "\r\n"), nil
 }

@@ -1,9 +1,15 @@
 package secrets
 
 import (
+	"bytes"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty/v2"
 )
 
 // allowRevealForTest simulates the interactive owner terminal for one test:
@@ -54,9 +60,19 @@ func TestCheckReveal(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "agent") {
 		t.Fatalf("agent reveal at a tty: err = %v, want agent refusal", err)
 	}
+	for _, handle := range []string{"secret exec NAME -- CMD", "secret exec --stdin NAME -- CMD"} {
+		if !strings.Contains(err.Error(), handle) {
+			t.Fatalf("agent refusal %q does not name the handle form %q", err.Error(), handle)
+		}
+	}
 	err = CheckReveal(human, false)
 	if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("non-tty human reveal: err = %v, want interactive-terminal refusal", err)
+	}
+	for _, handle := range []string{"secret exec NAME -- CMD", "secret exec --stdin NAME -- CMD"} {
+		if !strings.Contains(err.Error(), handle) {
+			t.Fatalf("non-tty refusal %q does not name the handle form %q", err.Error(), handle)
+		}
 	}
 	if want := ErrRevealRefused.Error(); !strings.HasPrefix(err.Error(), want) {
 		t.Fatalf("refusal %q does not carry %q", err.Error(), want)
@@ -114,3 +130,63 @@ func TestEnvRefusesNonTTY(t *testing.T) {
 // Handle use needs no reveal gate: secret exec runs non-interactively by
 // design (TestSecretExecChildEnvironmentOnly exercises the whole verb without
 // a tty), so the gate above must never grow onto it.
+
+// TestSecretEnvEvalChild is the child half of the command-substitution proof
+// below: it runs `secret env` with its own stdin (a pty wired by the parent)
+// as the terminal probe, stdout captured by the parent.
+func TestSecretEnvEvalChild(t *testing.T) {
+	if os.Getenv("BASHY_SECRET_ENV_EVAL_CHILD") == "" {
+		return
+	}
+	configureSecretsTestEnv(t)
+	fv := newFakeVault(t)
+	fv.data["host-a-eval"] = "synthetic-eval-value"
+	writeDefaultTemplate(t, "EVAL_KEY=@host-a-eval\n")
+	out, _, err := executeSecrets(t, fv.cfg(), nil, "env", "--no-cache")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "child secret env:", err)
+		os.Exit(9)
+	}
+	fmt.Print(out)
+	os.Exit(0)
+}
+
+// TestEnvEvalSurvivesCommandSubstitution proves `eval "$(bashy secret env)"`
+// keeps working for a human at an interactive shell. Command substitution
+// captures STDOUT on a pipe — what stays interactive is STDIN, the user's
+// terminal — and the gate probes stdin, not stdout, so the exports print.
+// The child is exactly that shape: pty on stdin, pipe on stdout. A gate
+// keyed on stdout-is-a-tty would refuse it (red); this pins that it does not.
+func TestEnvEvalSurvivesCommandSubstitution(t *testing.T) {
+	master, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty.Open: %v", err)
+	}
+	defer master.Close()
+	defer tty.Close()
+
+	child := exec.Command(os.Args[0], "-test.run=^TestSecretEnvEvalChild$")
+	child.Stdin = tty // the user's terminal: interactive from the child's view
+	var out, errb bytes.Buffer
+	child.Stdout = &out // the command-substitution pipe
+	child.Stderr = &errb
+	// The child must look like the owner's shell, not an agent session,
+	// regardless of the markers this test harness itself carries.
+	env := []string{"BASHY_SECRET_ENV_EVAL_CHILD=1"}
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "BASHY_SECRET_ENV_EVAL_CHILD", "BASHY_PRINCIPAL", "BASHY_AGENT_ID", "BASHY_AGENT_BINDING":
+			continue
+		}
+		env = append(env, entry)
+	}
+	child.Env = env
+	if err := child.Run(); err != nil {
+		t.Fatalf("eval child: %v (stderr: %q)", err, errb.String())
+	}
+	const want = "export EVAL_KEY='synthetic-eval-value'\n"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("eval-shape output = %q, want %q in it (values must print while stdin is the terminal)", out.String(), want)
+	}
+}

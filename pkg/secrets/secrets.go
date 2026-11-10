@@ -129,8 +129,9 @@ with a non-zero exit instead of emitting exports or using the cache.
 
 Because env prints real values it passes the same reveal gate as show: it
 refuses a non-interactive stdin and any bashy-launched agent session. A
-script or agent that needs a value uses the handle form (secret exec),
-which keeps values out of argv and output.`,
+script or agent that needs a value for a command uses the handle forms
+(secret exec into the child's environment, or secret exec --stdin NAME --
+CMD onto the child's stdin), which keep values out of argv and output.`,
 		Args: cobra.RangeArgs(0, 1),
 		RunE: func(c *cobra.Command, args []string) error {
 			// Reveal gate FIRST, before any template read or network call:
@@ -439,10 +440,12 @@ interactive terminal.
 
 Plaintext values are owner-human-only: this verb refuses a non-interactive
 stdin (pipes, buffers, detached callers) and any bashy-launched agent
-session. Agents and scripts use the handle form instead, which resolves the
-value at the exec boundary into the child's environment only:
+session. Agents and scripts use the handle forms instead, which resolve the
+value at the exec boundary — into the child's environment, or onto the
+child's stdin:
 
-  bashy secret exec NAME=ENVVAR -- command args`,
+  bashy secret exec NAME=ENVVAR -- command args
+  bashy secret exec --stdin NAME -- command args`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := CheckReveal(os.Environ(), revealInteractive(c.InOrStdin())); err != nil {

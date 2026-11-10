@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,17 @@ func TestSecretExecChild(t *testing.T) {
 	}
 	if mode == "fail" {
 		os.Exit(23)
+	}
+	if mode == "stdin-hash" {
+		// The stdin handle route's fake consumer: hash ALL of stdin and
+		// print only the digest, so the test can prove the child received
+		// exactly the secret bytes without the value ever being echoed.
+		h := sha256.New()
+		if _, err := io.Copy(h, os.Stdin); err != nil {
+			os.Exit(27)
+		}
+		fmt.Printf("%x\n", h.Sum(nil))
+		os.Exit(0)
 	}
 	if os.Getenv("DO_ORBIT_AGENT") != "synthetic-agent" ||
 		os.Getenv("DOCR_DHNT_PUSH_TOKEN") != "synthetic-push" ||
@@ -100,6 +112,96 @@ func TestSecretExecChildFailure(t *testing.T) {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
 		t.Fatalf("child failure not returned: %v", err)
+	}
+}
+
+// TestSecretExecStdinHandle is the --stdin red/green pair: the fake child
+// (mode stdin-hash) echoes only a hash of its stdin, and the test proves the
+// child received EXACTLY the secret bytes. Red (no --stdin flag): the verb
+// refuses the invocation as an unknown flag, so a stdin consumer has no
+// handle route once show/env refuse non-TTY callers. Green: the digest over
+// the child's stdin equals the digest of the value, one vault fetch, and the
+// value itself never appears in any captured byte stream or argv.
+func TestSecretExecStdinHandle(t *testing.T) {
+	configureSecretsTestEnv(t)
+	fv := newFakeVault(t)
+	const value = "s3cret-stdin-pw-do-not-print"
+	fv.data["host-a/outpost/pw"] = value
+	t.Setenv("BASHY_SECRET_EXEC_TEST_CHILD", "stdin-hash")
+
+	out, stderr, err := executeSecrets(t, fv.cfg(), strings.NewReader("parent console input\n"),
+		"exec", "--stdin", "host-a/outpost/pw", "--",
+		os.Args[0], "-test.run=^TestSecretExecChild$")
+	if err != nil {
+		t.Fatalf("exec --stdin: %v", err)
+	}
+	want := fmt.Sprintf("%x\n", sha256.Sum256([]byte(value)))
+	if out != want {
+		t.Fatalf("child stdin digest = %q, want hash of the secret value (%q)", out, want)
+	}
+	if strings.Contains(out+stderr, value) {
+		t.Fatal("secret value appeared in captured output")
+	}
+	if len(fv.paths) != 1 {
+		t.Fatalf("wanted exactly one vault fetch, got %d", len(fv.paths))
+	}
+}
+
+// The child gets the value on stdin INSTEAD of the parent's stdin: the hash
+// in TestSecretExecStdinHandle is over exactly the value bytes (no parent
+// console input mixed in, EOF right after the value), and this companion
+// pins that the parent's own stdin is never forwarded in --stdin mode.
+func TestSecretExecStdinReplacesParentStdin(t *testing.T) {
+	configureSecretsTestEnv(t)
+	fv := newFakeVault(t)
+	const value = "just-the-value-nothing-else"
+	fv.data["one/name"] = value
+	t.Setenv("BASHY_SECRET_EXEC_TEST_CHILD", "stdin-hash")
+
+	out, _, err := executeSecrets(t, fv.cfg(), strings.NewReader("PARENT CONSOLE BYTES THAT MUST NOT REACH THE CHILD"),
+		"exec", "--stdin", "one/name", "--",
+		os.Args[0], "-test.run=^TestSecretExecChild$")
+	if err != nil {
+		t.Fatalf("exec --stdin: %v", err)
+	}
+	if want := fmt.Sprintf("%x\n", sha256.Sum256([]byte(value))); out != want {
+		t.Fatalf("child stdin = parent input + value or wrong bytes: %q", out)
+	}
+}
+
+func TestSecretExecStdinUnknownName(t *testing.T) {
+	configureSecretsTestEnv(t)
+	fv := newFakeVault(t)
+	fv.data["known"] = "synthetic-known"
+	t.Setenv("BASHY_SECRET_EXEC_TEST_CHILD", "fail")
+	out, stderr, err := executeSecrets(t, fv.cfg(), nil, "exec", "--stdin", "do/missing/pw", "--", os.Args[0], "-test.run=^TestSecretExecChild$")
+	if err == nil || err.Error() != "no such secret: do/missing/pw" {
+		t.Fatalf("unknown --stdin name: %v", err)
+	}
+	if out != "" || stderr != "" {
+		t.Fatal("unknown --stdin name produced output or launched the child")
+	}
+}
+
+func TestSecretExecStdinInvalidArguments(t *testing.T) {
+	configureSecretsTestEnv(t)
+	fv := newFakeVault(t)
+	fv.data["known"] = "synthetic-known"
+	t.Setenv("BASHY_SECRET_EXEC_TEST_CHILD", "fail")
+	for _, args := range [][]string{
+		{"exec", "--stdin"}, // flag needs its NAME value
+		{"exec", "--stdin", "known", "extra", "--", "command"}, // positional names alongside --stdin
+		{"exec", "--stdin", "known=VAR", "--", "command"},      // binding form refused
+		{"exec", "--stdin", "", "--", "command"},               // empty name
+		{"exec", "--stdin", "known", "--"},                     // no command
+		{"exec", "--stdin", "known", "command"},                // missing --
+	} {
+		if _, _, err := executeSecrets(t, fv.cfg(), nil, args...); err == nil {
+			t.Errorf("accepted invalid arguments %q", args)
+		}
+	}
+	if len(fv.paths) != 0 {
+		t.Fatal("invalid --stdin arguments fetched secrets")
 	}
 }
 

@@ -69,8 +69,9 @@ var revealInteractive = interactiveStdin
 //
 //   - an agent session (AgentCaller): reveal is owner-human-only, by design;
 //     an agent that needs a credential to run something uses handle use
-//     (`secret exec NAME -- CMD`), where the value is resolved at the exec
-//     boundary and injected into the child's environment only.
+//     (`secret exec NAME -- CMD` into the child's environment, or
+//     `secret exec --stdin NAME -- CMD` onto the child's stdin), where the
+//     value is resolved at the exec boundary and never printed.
 //   - anything without an interactive terminal on stdin: a piped or detached
 //     caller is by construction not a human at a keyboard, and output to a
 //     pipe is exactly the captured transcript surface the Redactor exists to
@@ -81,10 +82,10 @@ var revealInteractive = interactiveStdin
 // override an agent could forge.
 func CheckReveal(environ []string, interactive bool) error {
 	if AgentCaller(environ) {
-		return errors.New(ErrRevealRefused.Error() + ": agent callers cannot reveal secret values — use a handle (`secret exec NAME -- CMD`) or ask the operator at the terminal")
+		return errors.New(ErrRevealRefused.Error() + ": agent callers cannot reveal secret values — use a handle (`secret exec NAME -- CMD` for the command's environment, `secret exec --stdin NAME -- CMD` to feed the command's stdin) or ask the operator at the terminal")
 	}
 	if !interactive {
-		return errors.New(ErrRevealRefused.Error() + ": values print only at an interactive terminal — for commands use `secret exec NAME -- CMD` (the value stays out of argv and output)")
+		return errors.New(ErrRevealRefused.Error() + ": values print only at an interactive terminal — for commands use a handle (`secret exec NAME -- CMD` for its environment, `secret exec --stdin NAME -- CMD` for its stdin); the value stays out of argv and output")
 	}
 	return nil
 }

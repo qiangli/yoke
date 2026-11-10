@@ -314,9 +314,8 @@ Effects: exec,net,write,cred
 
 ```bash
 set -e
-CHROME_EXT_CRX_KEY=$(bashy secret show CHROME_EXT_CRX_KEY)
-export CHROME_EXT_CRX_KEY
-go run ./cmd/chrome-ext-release -out dist/chrome-ext -key-env CHROME_EXT_CRX_KEY
+bashy secret exec CHROME_EXT_CRX_KEY -- \
+  go run ./cmd/chrome-ext-release -out dist/chrome-ext -key-env CHROME_EXT_CRX_KEY
 ```
 
 ### chrome-ext-publish

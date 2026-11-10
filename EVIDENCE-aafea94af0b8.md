@@ -104,3 +104,60 @@ check (verdicts only), gen (mints, never resolves), set/import/rm (writes).
   but out of the rescope inventory (meet posts, kb/memory writes, exechist,
   stdout/stderr capture beyond weave) — output_reduce.go covers the shell's
   own capture; the rest belongs to their circle stories (S583.4-S583.15).
+
+## Steering re-run 2026-11-10 (manager review incorporation)
+
+Redaction accepted as designed; the three review items, closed:
+
+### 1. `secret exec --stdin NAME -- CMD` — ADDED (pkg/secrets/exec.go)
+
+The handle route for a stdin consumer: exactly one name, taken by the
+`--stdin` flag (`NAME=ENVVAR` and positional names are refused alongside
+it). The value is fetched BEFORE the child starts (unknown name launches
+nothing, prints nothing), then written to the child's stdin pipe and
+EOF-closed. The child never inherits our stdin; the value never appears in
+argv, on our stdout/stderr, or in any error text.
+
+Red/green: TestSecretExecStdinHandle runs a fake child (mode `stdin-hash`)
+that echoes only sha256(hex) of ALL its stdin. Red — on the pre-change tree
+the same invocation dies on `unknown flag: --stdin`, i.e. a stdin consumer
+had no handle route once show/env refuse non-TTY callers. Green — the digest
+equals the digest of exactly the value bytes, one vault fetch, value in no
+captured stream. TestSecretExecStdinReplacesParentStdin pins that the
+parent's own stdin is NOT forwarded to the child; TestSecretExecStdinUnknownName
+and TestSecretExecStdinInvalidArguments pin the refusal shapes (no fetch, no
+launch). Example from the review now real:
+`bashy secret exec --stdin HOST_SSH_PW -- outpost connect HOST --stdin`.
+
+### 2. In-repo callers migrated to handle use; refusal text names both forms
+
+- external/dks defaultSecretResolver (userland_run.go):
+  `bashy secret show <name>` → `bashy secret exec <name>=BASHY_DKS_CREDENTIAL
+  -- bashy printenv BASHY_DKS_CREDENTIAL`. The plaintext now crosses only the
+  exec boundary into a child's environment (never argv), printenv hands it
+  back as child stdout, and the returned bytes stay on the caller's existing
+  redact list. `go test ./external/dks -run TestRun` green.
+- dag.md chrome-ext-crx: `CHROME_EXT_CRX_KEY=$(bashy secret show ...)` — a
+  command substitution is exactly the non-interactive shape the gate refuses
+  for any dag-spawned body — replaced with
+  `bashy secret exec CHROME_EXT_CRX_KEY -- go run ./cmd/chrome-ext-release ...`
+  (the manager listed this example; it lives in yoke, so it is fixed here
+  rather than deferred).
+- Refusal text (reveal.go CheckReveal; show/env Long help) now names BOTH
+  handle forms: `secret exec NAME -- CMD` (environment) and
+  `secret exec --stdin NAME -- CMD` (stdin), pinned by TestCheckReveal.
+
+bashy-side callers NOT edited here — follow-up F5 (bashy run): bashy's
+examples/klatch/klatch.bsh line 19 text (per manager review) still steers
+callers at a reveal/plaintext-env form and must move to the handle forms;
+F2 (bashy's own non-interactive `secret env/show` tests) stands as recorded.
+
+### 3. `eval "$(bashy secret env)"` proven for the interactive human
+
+TestEnvEvalSurvivesCommandSubstitution: a child runs the real `secret env`
+gate path with a PTY on stdin and a PIPE on stdout — the exact
+command-substitution shape (stdout is what eval captures; stdin is what
+stays the user's terminal). The exports print. The gate keys on stdin only;
+a gate keyed on stdout would refuse this shape (that is the red). Agents and
+non-interactive callers remain refused (existing TestShowRefusesAgentAndNonTTYBeforeVault,
+TestEnvRefusesNonTTY).
