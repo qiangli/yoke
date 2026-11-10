@@ -1,7 +1,7 @@
 ---
 id: 32d4465045a0
 kind: task
-title: 'No-tracking + local OTel: started services (gitea/loom, act_runner, seaweedfs, kopia, zot, ollama, victoria stores, headlamp) - phone-home off, OTLP to bashy local collector'
+title: 'No-tracking + local OTel: started services (gitea/loom, act_runner, seaweedfs, kopia, zot, ollama, OTel stores, headlamp) - phone-home off, OTLP to bashy local collector'
 seq: 2001
 status: done
 priority: p1

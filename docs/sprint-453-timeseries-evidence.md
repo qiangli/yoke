@@ -32,7 +32,7 @@ No story acceptance is claimed from development-host tests.
   strictly decoded and applied; caller files cannot change between
   validation and apply, and any late failure rolls back so the target
   is unchanged.
-- `pkg/dbts/remote.go` — explicit-endpoint VictoriaMetrics client
+- `pkg/dbts/remote.go` — explicit-endpoint OTel metrics store client
   (`NewClient`, no default/env fallback, credentials refused):
   `ts.remote.query` (`GET /api/v1/query_range`, one bounded page, no
   cursor) and `ts.remote.ingest` (`POST /api/v1/import` Prometheus text).
@@ -58,7 +58,7 @@ No story acceptance is claimed from development-host tests.
 |---|---|---|
 | SQLite timestamped datasets, typed ingestion/range/aggregation/explicit retention; SQL analytics, not full OLAP | Series datapoints in two package-managed tables over the sqlite engine; ingest/range/agg/retain ops; package doc states the analytics (not OLAP) label | `TestTSIngestRangeRoundTrip`, `TestTSAggBuckets`, `TestTSRetainDeletesOldPoints` |
 | Reuse sqlitedb/dbsql lifecycle/admission; no second registry/lock manager | Ops register with dblifecycle; handles come from `Service.Open`/owner; claims/holds/epochs/replay reused unchanged | All tests run through `Service.RunCategory`; process tests through owner `Call` |
-| Bounded VictoriaMetrics query/ingestion with cancellation and endpoint errors; never provision/start | Explicit endpoint per request, client timeout + ctx, structured `backend_error`, limit guards | `TestTSRemoteQueryAgainstFixture`, `TestTSRemoteEndpointErrors`, `TestTSRemoteIngestRendersPrometheusText` |
+| Bounded OTel metrics store query/ingestion with cancellation and endpoint errors; never provision/start | Explicit endpoint per request, client timeout + ctx, structured `backend_error`, limit guards | `TestTSRemoteQueryAgainstFixture`, `TestTSRemoteEndpointErrors`, `TestTSRemoteIngestRendersPrometheusText` |
 | Preserve existing OTel | `pkg/otelquery` untouched | `git status` shows only `pkg/dbts` + this doc |
 | Both modes, import/export both directions, owner tests | Memory + persistent fixtures everywhere; four-direction round trips; owner process tests | `TestTSInterchangeRoundTripsAcrossModes`, process tests |
 | Revision conflicts, bounded cancellation, destructive hold/epoch invariants | Duplicate stamp → `conflict`; cancelled ctx → `cancelled`; unconfirmed exclusive → `confirmation_required`; hold/stale-epoch paths | `TestTSIngestConflicts`, `TestTSCancelledContext`, retain confirmation, process hold section |
@@ -72,7 +72,7 @@ No story acceptance is claimed from development-host tests.
   storing it would be a silent loss (probed, then the probe removed).
   ±Inf round-trips. Tagged ints are stored exactly over the full int64
   range, including the extremes — never rounded, never coerced to f64.
-  Only the VictoriaMetrics float-text backend refuses ints outside
+  Only the OTel metrics store float-text backend refuses ints outside
   ±(2^53−1), in validation before any byte is sent (`invalid_input`).
   Tables made before the typed columns migrate on the next write
   (`ensureSchema` adds `value_kind`/`value_int`; earlier rows are f64
