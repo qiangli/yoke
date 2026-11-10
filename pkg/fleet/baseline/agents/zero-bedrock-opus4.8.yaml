@@ -1,0 +1,8 @@
+agents:
+  - name: zero-bedrock-opus4.8
+    tool: zero-ycode
+    model: bedrock-opus4.8
+    display: "passthrough · Bedrock Opus 4.8"
+    ledger:
+      reliability: unmeasured
+      notes: One-shot tool-free Bedrock route for metered peer requests.

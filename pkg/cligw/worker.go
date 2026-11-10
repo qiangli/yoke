@@ -904,7 +904,7 @@ func usageFromEvent(raw []byte) Usage {
 	if json.Unmarshal(raw, &obj) != nil {
 		return Usage{}
 	}
-	for _, candidate := range []any{obj["usage"], nested(obj, "result", "usage"), obj["token_usage"]} {
+	for i, candidate := range []any{obj["usage"], nested(obj, "result", "usage"), obj["token_usage"], nested(obj, "response", "usage")} {
 		m, ok := candidate.(map[string]any)
 		if !ok {
 			continue
@@ -915,11 +915,14 @@ func usageFromEvent(raw []byte) Usage {
 			OutputTokens:      number(m, "output_tokens", "completion_tokens", "output"),
 			TotalTokens:       number(m, "total_tokens", "total"),
 		}
+		if details, ok := m["prompt_tokens_details"].(map[string]any); ok {
+			u.CachedInputTokens = number(details, "cached_tokens")
+		}
 		// Anthropic counts cache reads and cache writes apart from
 		// input_tokens; OpenAI's input_tokens already includes its cached
 		// part. InputTokens is always the whole prompt, so prompt_tokens means
 		// the same for every seat (cost per solve compares across vendors).
-		if _, anthropic := m["cache_read_input_tokens"]; anthropic || m["cache_creation_input_tokens"] != nil {
+		if _, anthropic := m["cache_read_input_tokens"]; i != 3 && (anthropic || m["cache_creation_input_tokens"] != nil) {
 			u.InputTokens += number(m, "cache_read_input_tokens") + number(m, "cache_creation_input_tokens")
 			u.TotalTokens = 0
 		}

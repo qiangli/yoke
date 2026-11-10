@@ -235,6 +235,9 @@ func TestEmbeddedSeedsBedrockProvider(t *testing.T) {
 			t.Errorf("model %q = provider %q kind %q api_key_ref %q, want aws-bedrock/api/aws-bedrock",
 				name, m.Provider, m.Kind, m.APIKeyRef)
 		}
+		if a, ok := c.Agent("zero-" + name); !ok || a.Tool != "zero-ycode" || a.Model != name {
+			t.Errorf("zero passthrough for %q = %+v, found %v", name, a, ok)
+		}
 		if m.BaseURL != bedrockURL {
 			t.Errorf("model %q base_url = %q, want %q", name, m.BaseURL, bedrockURL)
 		}

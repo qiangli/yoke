@@ -1,0 +1,8 @@
+agents:
+  - name: zero-bedrock-gpt6-sol
+    tool: zero-ycode
+    model: bedrock-gpt6-sol
+    display: "passthrough · Bedrock GPT-6 Sol"
+    ledger:
+      reliability: unmeasured
+      notes: One-shot tool-free Bedrock route for metered peer requests.

@@ -20,27 +20,29 @@ import (
 // serving backend could not honor (X-Bashy-Ignored): a recorded run's numbers
 // were not produced under them, however the request was written.
 type Record struct {
-	Time        time.Time      `json:"time"`
-	Principal   string         `json:"principal"`
-	Session     string         `json:"session,omitempty"`
-	Class       string         `json:"class"`
-	Method      string         `json:"method"`
-	Path        string         `json:"path"`
-	Backend     string         `json:"backend"`
-	Model       string         `json:"model,omitempty"`
-	ModelDigest string         `json:"model_digest,omitempty"`
-	Options     map[string]any `json:"options,omitempty"`
-	Sticky      string         `json:"sticky,omitempty"`
-	Identity    string         `json:"identity,omitempty"`
-	Use         int            `json:"use,omitempty"`
-	Routed      string         `json:"routed,omitempty"`
-	Ignored     string         `json:"ignored,omitempty"`
-	Status      int            `json:"status"`
-	WaitMS      int64          `json:"wait_ms"`
-	WallMS      int64          `json:"wall_ms"`
-	PromptTok   int            `json:"prompt_tokens,omitempty"`
-	OutputTok   int            `json:"completion_tokens,omitempty"`
-	Error       string         `json:"error,omitempty"`
+	Time          time.Time      `json:"time"`
+	Principal     string         `json:"principal"`
+	Session       string         `json:"session,omitempty"`
+	Class         string         `json:"class"`
+	Method        string         `json:"method"`
+	Path          string         `json:"path"`
+	Backend       string         `json:"backend"`
+	Model         string         `json:"model,omitempty"`
+	UpstreamModel string         `json:"upstream_model,omitempty"`
+	ModelDigest   string         `json:"model_digest,omitempty"`
+	Options       map[string]any `json:"options,omitempty"`
+	Sticky        string         `json:"sticky,omitempty"`
+	Identity      string         `json:"identity,omitempty"`
+	Use           int            `json:"use,omitempty"`
+	Routed        string         `json:"routed,omitempty"`
+	Ignored       string         `json:"ignored,omitempty"`
+	Status        int            `json:"status"`
+	WaitMS        int64          `json:"wait_ms"`
+	WallMS        int64          `json:"wall_ms"`
+	PromptTok     int            `json:"prompt_tokens,omitempty"`
+	CachedTok     int            `json:"cached_tokens,omitempty"`
+	OutputTok     int            `json:"completion_tokens,omitempty"`
+	Error         string         `json:"error,omitempty"`
 }
 
 // auditLog appends records to a JSONL file and keeps a bounded in-memory
@@ -162,7 +164,13 @@ func (c *captureWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 // prompt_tokens/completion_tokens) or Anthropic (usage.input_tokens/
 // output_tokens), JSON or SSE/NDJSON.
 func parseTokens(tail []byte) (prompt, output int) {
+	prompt, output, _ = parseUsage(tail)
+	return
+}
+
+func parseUsage(tail []byte) (prompt, output, cached int) {
 	lines := bytes.Split(tail, []byte("\n"))
+	gotPrompt, gotOutput, gotCached := false, false, false
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := bytes.TrimSpace(lines[i])
 		line = bytes.TrimPrefix(line, []byte("data:"))
@@ -171,26 +179,97 @@ func parseTokens(tail []byte) (prompt, output int) {
 			continue
 		}
 		var v struct {
-			PromptEval int `json:"prompt_eval_count"`
-			Eval       int `json:"eval_count"`
+			Type       string `json:"type"`
+			PromptEval int    `json:"prompt_eval_count"`
+			Eval       int    `json:"eval_count"`
 			Usage      *struct {
-				Prompt     int `json:"prompt_tokens"`
-				Completion int `json:"completion_tokens"`
-				Input      int `json:"input_tokens"`
-				Output     int `json:"output_tokens"`
+				Prompt     *int `json:"prompt_tokens"`
+				Completion *int `json:"completion_tokens"`
+				Input      *int `json:"input_tokens"`
+				Output     *int `json:"output_tokens"`
+				CacheRead  *int `json:"cache_read_input_tokens"`
+				CacheWrite *int `json:"cache_creation_input_tokens"`
+				Details    *struct {
+					Cached int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
+			Message *struct {
+				Usage *struct {
+					Input      *int `json:"input_tokens"`
+					CacheRead  *int `json:"cache_read_input_tokens"`
+					CacheWrite *int `json:"cache_creation_input_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
 		}
 		if json.Unmarshal(line, &v) != nil {
 			continue
 		}
-		if v.Usage != nil && (v.Usage.Prompt+v.Usage.Completion+v.Usage.Input+v.Usage.Output) > 0 {
-			return v.Usage.Prompt + v.Usage.Input, v.Usage.Completion + v.Usage.Output
+		if v.Usage != nil {
+			u := v.Usage
+			if !gotPrompt && v.Type != "message_delta" && (u.Prompt != nil || u.Input != nil || u.CacheRead != nil || u.CacheWrite != nil) {
+				if u.Prompt != nil {
+					prompt = *u.Prompt
+				} else {
+					if u.Input != nil {
+						prompt += *u.Input
+					}
+					if u.CacheRead != nil {
+						prompt += *u.CacheRead
+					}
+					if u.CacheWrite != nil {
+						prompt += *u.CacheWrite
+					}
+				}
+				gotPrompt = true
+			}
+			if !gotOutput && (u.Completion != nil || u.Output != nil) {
+				if u.Completion != nil {
+					output = *u.Completion
+				} else {
+					output = *u.Output
+				}
+				gotOutput = true
+			}
+			if !gotCached && (u.Details != nil || u.CacheRead != nil) {
+				if u.Details != nil {
+					cached = u.Details.Cached
+				} else {
+					cached = *u.CacheRead
+				}
+				gotCached = true
+			}
+		}
+		if v.Message != nil && v.Message.Usage != nil {
+			u := v.Message.Usage
+			if !gotPrompt && (u.Input != nil || u.CacheRead != nil || u.CacheWrite != nil) {
+				if u.Input != nil {
+					prompt += *u.Input
+				}
+				if u.CacheRead != nil {
+					prompt += *u.CacheRead
+				}
+				if u.CacheWrite != nil {
+					prompt += *u.CacheWrite
+				}
+				gotPrompt = true
+			}
+			if !gotCached && u.CacheRead != nil {
+				cached = *u.CacheRead
+				gotCached = true
+			}
 		}
 		if v.PromptEval+v.Eval > 0 {
-			return v.PromptEval, v.Eval
+			if !gotPrompt {
+				prompt = v.PromptEval
+				gotPrompt = true
+			}
+			if !gotOutput {
+				output = v.Eval
+				gotOutput = true
+			}
 		}
 	}
-	return 0, 0
+	return
 }
 
 // refusalReason is the error message a refused response carried, so the

@@ -19,9 +19,12 @@ const UsageTailSize = 8 << 10
 // mirrors this shape verbatim. Pointer-bool isn't needed: missing
 // fields decode as zero, and zero is a perfectly fine "unknown."
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
 }
 
 // AuditTailReader wraps a backend response body so the reverse proxy

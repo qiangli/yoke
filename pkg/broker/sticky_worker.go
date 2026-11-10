@@ -198,6 +198,8 @@ func (b *Broker) serveStickyWorker(w http.ResponseWriter, r *http.Request, ri *r
 	contentType, body := cligw.EncodeChat(deltaReq, text, finish, cligw.NewCompletionID(), deltas, result.Usage)
 	ri.rec.Model = agent
 	ri.rec.PromptTok, ri.rec.OutputTok = int(result.Usage.InputTokens), int(result.Usage.OutputTokens)
+	ri.rec.CachedTok = int(result.Usage.CachedInputTokens)
+	ri.rec.UpstreamModel = binding.Identity.VendorModel
 	b.finish(ri, http.StatusOK, 0, "")
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)

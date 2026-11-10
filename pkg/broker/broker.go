@@ -321,7 +321,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if cw.status == 0 {
 				cw.status = http.StatusOK
 			}
-			ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
+			ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok = parseUsage(cw.tail)
 			b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 		}
 		if capture && ri.principal != "" {
@@ -658,6 +658,7 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 		}
 	}
 	payload["model"], _ = json.Marshal(target)
+	ri.rec.UpstreamModel = target
 	body, _ := json.Marshal(payload)
 
 	release, wait, err := b.device.Acquire(ctx, ri.class, storeKey(ri.principal, ri.session))
@@ -697,7 +698,7 @@ func (b *Broker) serveLocal(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 		ri.rec.PromptTok, ri.rec.OutputTok = b.serveAnthropicLocal(ctx, cw, body, anthStream, clientModel)
 	} else {
 		b.proxyEngine(cw, r, body)
-		ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
+		ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok = parseUsage(cw.tail)
 	}
 	status := cw.status
 	if ctx.Err() != nil {
@@ -808,7 +809,8 @@ func (b *Broker) delegateCLI(w http.ResponseWriter, r *http.Request, ri *reqInfo
 		// Responses surface, /cligw/...) get the list from cligw itself.
 		ri.rec.Ignored = cw.Header().Get(cligw.IgnoredHeader)
 	}
-	ri.rec.PromptTok, ri.rec.OutputTok = parseTokens(cw.tail)
+	ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok = parseUsage(cw.tail)
+	ri.rec.UpstreamModel = cw.Header().Get("X-Bashy-Upstream-Model")
 	b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 }
 
