@@ -34,6 +34,7 @@ import (
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/cligw"
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
+	"github.com/qiangli/yoke/pkg/llmprice"
 	"github.com/qiangli/yoke/pkg/quotaobs"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -123,6 +124,14 @@ type Options struct {
 	LocalFirstByte time.Duration
 	// Now is the clock (tests).
 	Now func() time.Time
+
+	// Pricer prices a served request's tokens for the audit record's
+	// cost_usd/unpriced fields. Nil uses the llmprice default table; a
+	// deployment that prices models its own way (an operator overlay, a
+	// catalog-backed source) supplies its own. Whatever it is, an unknown
+	// model stays unknown: the hook's ok=false is recorded as unpriced and
+	// never as a zero cost.
+	Pricer func(model string, usage llmprice.Usage) (float64, bool)
 }
 
 // Broker is the door.
@@ -716,7 +725,74 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 	ri.rec.WaitMS = wait.Milliseconds()
 	ri.rec.WallMS = b.opts.Now().Sub(ri.started).Milliseconds()
 	ri.rec.Error = errMsg
+	b.price(ri)
 	b.audit.append(ri.rec)
+}
+
+// price stamps cost_usd and unpriced on the record the door is about to
+// append. One rule governs it, from Sprint #602 A2: the door never falls back
+// to another model's price. A model the table does not price — an unknown id,
+// a fleet agent alias, or a local engine model (ollama) that has no list
+// price — is recorded as unpriced with no cost_usd, so a usage report can tell
+// "we do not know" and "this costs the host, not a vendor" apart from a
+// measured zero.
+//
+// A record with no tokens (a refusal, a queue-full refusal before any device
+// work) carries neither field: there is nothing to price, and a $0.00 would
+// read as a free request.
+func (b *Broker) price(ri *reqInfo) {
+	rec := &ri.rec
+	if rec.PromptTok == 0 && rec.OutputTok == 0 {
+		return
+	}
+	// Price the weights that served the turn, not the name the client asked
+	// for. A fleet record's Model is the agent alias (a sticky binding names
+	// an agent, not a model); A1's UpstreamModel carries the model id the
+	// vendor actually billed. An unknown upstream id stays unknown: the door
+	// does not fall back to pricing the alias.
+	model := rec.UpstreamModel
+	if model == "" {
+		model = rec.Model
+	}
+	if model == "" {
+		// No model resolved (a malformed request). Unpriced, so the turn is
+		// still counted without inventing a price for it.
+		rec.Unpriced = true
+		return
+	}
+	// A local engine model (ollama) is unpriced even if the table prices the
+	// name: the host serves its own weights, and no vendor bills it. Backend
+	// is the fact the door knows; the local backend is never a metered route.
+	if rec.Backend == BackendLocal {
+		rec.Unpriced = true
+		return
+	}
+	// Cached tokens are part of the prompt, and a vendor bills them at the
+	// cache-read rate, not the input rate: charging the full input price for
+	// a warm turn would double-count what the cache already paid for. The
+	// record keeps PromptTok as the whole prompt (what a usage report shows);
+	// the pricer gets the uncached part and the cached part apart. A cached
+	// count larger than the prompt (a stream truncated before usage arrived,
+	// a provider counting its own way) clamps to zero rather than going
+	// negative.
+	input := int64(rec.PromptTok) - int64(rec.CachedTok)
+	if input < 0 {
+		input = 0
+	}
+	pricer := b.opts.Pricer
+	if pricer == nil {
+		pricer = llmprice.Cost
+	}
+	cost, ok := pricer(model, llmprice.Usage{
+		Input:     input,
+		Output:    int64(rec.OutputTok),
+		CacheRead: int64(rec.CachedTok),
+	})
+	if !ok {
+		rec.Unpriced = true
+		return
+	}
+	rec.CostUSD = cost
 }
 
 func gb(n uint64) float64 { return float64(n) / (1 << 30) }
