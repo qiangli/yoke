@@ -360,6 +360,7 @@ var packages = map[string]Package{
 	"ollm":      supPkg("Ollama API client wrapper, isolating the SDK from the rest of the tree"),
 	"pax":       supPkg("safe portable archive manifest and extraction-preflight kernel; deliberately has no command front door until the POSIX pax surface is complete"),
 	"pricing":   supPkg("local token price catalog consumed by pkg/llmbudget"),
+	"llmprice":  supPkg("per-model token price table the LLM door uses for cost_usd/unpriced in its audit records"),
 	"procguard": supPkg("parent-death process-group containment shared by agentpty and chat"),
 	"shape":     cmdPkg("shape"),
 	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
