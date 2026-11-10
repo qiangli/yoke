@@ -79,6 +79,132 @@ func TestFinishMarksLocalModelsUnpriced(t *testing.T) {
 	}
 }
 
+// A fleet record's Model is the agent alias the client asked for; the price
+// comes from the model the vendor actually billed, A1's UpstreamModel. A
+// sticky CLI record with an unpriced alias but a priced upstream model gets a
+// cost_usd, and an unknown upstream id stays unpriced: the door does not fall
+// back to pricing the alias, in either direction.
+func TestPriceUsesUpstreamModelOverAgentAlias(t *testing.T) {
+	priced := llmprice.Lookup("claude-opus-4-8")
+	if !priced.Known {
+		t.Fatal("claude-opus-4-8 must be priced for this test to mean anything")
+	}
+	cases := []struct {
+		name     string
+		rec      Record
+		wantCost bool
+	}{
+		{
+			// A sticky fleet turn: Model is the agent, UpstreamModel is what
+			// the vendor billed. Priced via the upstream id.
+			name:     "agent alias with priced upstream",
+			rec:      Record{Backend: BackendCLI, Model: "agent-alias", UpstreamModel: "us.anthropic.claude-opus-4-8", PromptTok: 2, OutputTok: 1},
+			wantCost: true,
+		},
+		{
+			// No upstream id (a local-ish route, or a backend that reports
+			// none): Model is what there is, and it prices as itself.
+			name:     "model only",
+			rec:      Record{Backend: BackendCLI, Model: "claude-opus-4-8", PromptTok: 2, OutputTok: 1},
+			wantCost: true,
+		},
+		{
+			// The upstream id is unknown: unpriced, NOT the alias's price
+			// (and the alias is unpriced anyway here, but the rule is the
+			// same when the alias would price).
+			name:     "unknown upstream stays unknown",
+			rec:      Record{Backend: BackendCLI, Model: "claude-opus-4-8", UpstreamModel: "mystery-upstream-v9", PromptTok: 2, OutputTok: 1},
+			wantCost: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ri := &reqInfo{rec: tc.rec}
+			h := newHarness(t, nil)
+			h.b.price(ri)
+			got := ri.rec
+			if tc.wantCost {
+				if got.Unpriced || got.CostUSD <= 0 {
+					t.Errorf("want cost_usd, got cost=%v unpriced=%v", got.CostUSD, got.Unpriced)
+				}
+				want := (2*priced.InputPerM + 1*priced.OutputPerM) / 1e6
+				if got.CostUSD != want {
+					t.Errorf("cost_usd = %.9f; want %.9f", got.CostUSD, want)
+				}
+			} else if !got.Unpriced || got.CostUSD != 0 {
+				t.Errorf("want unpriced, got cost=%v unpriced=%v", got.CostUSD, got.Unpriced)
+			}
+		})
+	}
+}
+
+// Cached tokens are billed at the cache-read rate, not the input rate, and
+// they are not billed twice: the pricer receives the uncached prompt as Input
+// and the cached part as CacheRead. PromptTok stays the whole prompt on the
+// record (what a usage report shows), so the split happens here.
+func TestPriceSplitsCachedFromUncachedInput(t *testing.T) {
+	p := llmprice.Lookup("claude-opus-4-8")
+	if !p.Known {
+		t.Fatal("claude-opus-4-8 must be priced for this test to mean anything")
+	}
+	var gotModel string
+	var gotUsage llmprice.Usage
+	h := newHarness(t, func(o *Options) {
+		o.Pricer = func(model string, u llmprice.Usage) (float64, bool) {
+			gotModel, gotUsage = model, u
+			return llmprice.Default.Cost(model, u)
+		}
+	})
+	ri := &reqInfo{rec: Record{Backend: BackendCLI, Model: "claude-opus-4-8",
+		PromptTok: 1000, CachedTok: 400, OutputTok: 10}}
+	h.b.price(ri)
+	if gotModel != "claude-opus-4-8" {
+		t.Errorf("pricer saw model %q; want claude-opus-4-8", gotModel)
+	}
+	if gotUsage.Input != 600 || gotUsage.CacheRead != 400 {
+		t.Errorf("usage = input %d cache_read %d; want 600 and 400 (prompt 1000, cached 400)",
+			gotUsage.Input, gotUsage.CacheRead)
+	}
+	if gotUsage.Output != 10 {
+		t.Errorf("usage output = %d; want 10", gotUsage.Output)
+	}
+	// And the cost reflects the split: 600 in + 400 cache-read + 10 out.
+	want := (600*p.InputPerM + 400*p.CacheReadPerM + 10*p.OutputPerM) / 1e6
+	if ri.rec.CostUSD != want {
+		t.Errorf("cost_usd = %.9f; want %.9f", ri.rec.CostUSD, want)
+	}
+	if ri.rec.Unpriced {
+		t.Errorf("priced split recorded unpriced: %+v", ri.rec)
+	}
+	// The record keeps the whole prompt: the split is for the pricer only.
+	if ri.rec.PromptTok != 1000 || ri.rec.CachedTok != 400 {
+		t.Errorf("record tokens rewritten: prompt=%d cached=%d; want 1000 and 400",
+			ri.rec.PromptTok, ri.rec.CachedTok)
+	}
+}
+
+// A cached count larger than the prompt (a stream truncated before usage
+// arrived, a provider counting its own way) clamps to a zero uncached input
+// rather than handing the pricer a negative number.
+func TestPriceClampsCachedLargerThanPrompt(t *testing.T) {
+	var gotUsage llmprice.Usage
+	h := newHarness(t, func(o *Options) {
+		o.Pricer = func(model string, u llmprice.Usage) (float64, bool) {
+			gotUsage = u
+			return 1.0, true
+		}
+	})
+	ri := &reqInfo{rec: Record{Backend: BackendCLI, Model: "claude-opus-4-8",
+		PromptTok: 100, CachedTok: 300, OutputTok: 5}}
+	h.b.price(ri)
+	if gotUsage.Input != 0 {
+		t.Errorf("input = %d; want 0 (clamped, not %d)", gotUsage.Input, 100-300)
+	}
+	if gotUsage.CacheRead != 300 {
+		t.Errorf("cache_read = %d; want 300", gotUsage.CacheRead)
+	}
+}
+
 // A refusal before any device work has no tokens to price: neither field is
 // written, so a queue-full or memory refusal never reads as a free request.
 func TestFinishWritesNoCostForTokenlessRefusal(t *testing.T) {

@@ -745,7 +745,15 @@ func (b *Broker) price(ri *reqInfo) {
 	if rec.PromptTok == 0 && rec.OutputTok == 0 {
 		return
 	}
-	model := rec.Model
+	// Price the weights that served the turn, not the name the client asked
+	// for. A fleet record's Model is the agent alias (a sticky binding names
+	// an agent, not a model); A1's UpstreamModel carries the model id the
+	// vendor actually billed. An unknown upstream id stays unknown: the door
+	// does not fall back to pricing the alias.
+	model := rec.UpstreamModel
+	if model == "" {
+		model = rec.Model
+	}
 	if model == "" {
 		// No model resolved (a malformed request). Unpriced, so the turn is
 		// still counted without inventing a price for it.
@@ -759,13 +767,26 @@ func (b *Broker) price(ri *reqInfo) {
 		rec.Unpriced = true
 		return
 	}
+	// Cached tokens are part of the prompt, and a vendor bills them at the
+	// cache-read rate, not the input rate: charging the full input price for
+	// a warm turn would double-count what the cache already paid for. The
+	// record keeps PromptTok as the whole prompt (what a usage report shows);
+	// the pricer gets the uncached part and the cached part apart. A cached
+	// count larger than the prompt (a stream truncated before usage arrived,
+	// a provider counting its own way) clamps to zero rather than going
+	// negative.
+	input := int64(rec.PromptTok) - int64(rec.CachedTok)
+	if input < 0 {
+		input = 0
+	}
 	pricer := b.opts.Pricer
 	if pricer == nil {
 		pricer = llmprice.Cost
 	}
 	cost, ok := pricer(model, llmprice.Usage{
-		Input:  int64(rec.PromptTok),
-		Output: int64(rec.OutputTok),
+		Input:     input,
+		Output:    int64(rec.OutputTok),
+		CacheRead: int64(rec.CachedTok),
 	})
 	if !ok {
 		rec.Unpriced = true
