@@ -3,9 +3,11 @@ id: 17f40aa5994a
 kind: feature
 title: A3 bashy llm usage [--peer NAME] [--since 7d] [--json]
 seq: 3070
-status: todo
+status: assigned
 priority: p1
 created: 2026-11-10T01:04:30.341071Z
+weave: 23
+assignee: codex-gpt5.6-sol
 sprint: 602
 sprint_id: 945d80da-6344-5fa1-8afb-08d6cac5d7a0
 sprint_title: 'Metered shared LLM access: per-peer usage, cost and limits on the LLM door (provider-agnostic)'
