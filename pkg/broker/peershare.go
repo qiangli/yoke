@@ -39,6 +39,8 @@ type PeerShare struct {
 	Share   string    `json:"share"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated,omitempty"`
+	// Limits caps the peer's usage (nil = unlimited); see peerlimit.go.
+	Limits *PeerLimits `json:"limits,omitempty"`
 }
 
 // PeerShares is the on-disk peers file.
@@ -173,14 +175,15 @@ var errPeerNotShared = errors.New("peer credential is valid but this door does n
 
 // authorizePeer matches presented against the stored peer hashes. It returns
 // ("", nil) when no peer matches, so the caller reports an unknown bearer.
-// The file is read per request so share/revoke take effect without restart.
-func (b *Broker) authorizePeer(presented string) (string, error) {
+// The file is read per request so share/revoke/limit take effect without
+// restart; the matched peer's limits come back with it.
+func (b *Broker) authorizePeer(presented string) (string, *PeerLimits, error) {
 	if b.opts.PeersFile == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	ps, err := LoadPeerShares(b.opts.PeersFile)
 	if err != nil {
-		return "", errors.New("peer policy unreadable; refusing peer credentials")
+		return "", nil, errors.New("peer policy unreadable; refusing peer credentials")
 	}
 	got := hashCredential(presented)
 	var match string
@@ -190,12 +193,12 @@ func (b *Broker) authorizePeer(presented string) (string, error) {
 		}
 	}
 	if match == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	if ps.Peers[match].Share != ShareAllow {
-		return PeerPrincipalPrefix + match, errPeerNotShared
+		return PeerPrincipalPrefix + match, nil, errPeerNotShared
 	}
-	return PeerPrincipalPrefix + match, nil
+	return PeerPrincipalPrefix + match, ps.Peers[match].Limits, nil
 }
 
 // peerRouteAllowed is the whole surface a shared peer may reach: inference

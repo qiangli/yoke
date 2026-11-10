@@ -146,6 +146,7 @@ type Broker struct {
 	device          *Device
 	sticky          *stickyStore
 	audit           *auditLog
+	meter           *peerMeter // per-peer limit counters (peerlimit.go)
 	tracer          trace.Tracer
 
 	// stickyW holds one warm CLI per bind=worker/reset=none binding, keyed
@@ -189,6 +190,8 @@ func New(ctx context.Context, opts Options) (*Broker, error) {
 	b.sticky = newStickyStore(stickyPath, opts.Now)
 	b.sticky.onEvict = b.evictStickyWorker
 	b.audit = newAuditLog(auditPath)
+	b.meter = newPeerMeter()
+	b.seedPeerMeter(auditPath)
 	if opts.Engine != nil {
 		base, err := opts.Engine.Start(ctx)
 		if err != nil {
@@ -280,12 +283,12 @@ func splitParams(p string) (map[string]string, string) {
 	}
 }
 
-func (b *Broker) authorize(r *http.Request, pathToken string) (string, error) {
+func (b *Broker) authorize(r *http.Request, pathToken string) (string, *PeerLimits, error) {
 	if owner, unixPeer := r.Context().Value(unixOwnerKey).(bool); unixPeer {
 		if !owner {
-			return "", errors.New("unix socket peer is not the owner")
+			return "", nil, errors.New("unix socket peer is not the owner")
 		}
-		return b.opts.Principal, nil
+		return b.opts.Principal, nil, nil
 	}
 	presented := pathToken
 	if presented == "" {
@@ -295,19 +298,19 @@ func (b *Broker) authorize(r *http.Request, pathToken string) (string, error) {
 		presented = strings.TrimSpace(r.Header.Get("x-api-key"))
 	}
 	if presented == "" {
-		return "", errors.New("missing token: use the owner-only socket, a bearer token, or the /k/<token> URL form (see `bashy llm env`)")
+		return "", nil, errors.New("missing token: use the owner-only socket, a bearer token, or the /k/<token> URL form (see `bashy llm env`)")
 	}
 	if subtle.ConstantTimeCompare([]byte(presented), []byte(b.opts.Token)) == 1 {
-		return b.opts.Principal, nil
+		return b.opts.Principal, nil, nil
 	}
-	peer, err := b.authorizePeer(presented)
+	peer, limits, err := b.authorizePeer(presented)
 	if err != nil {
-		return peer, err
+		return peer, nil, err
 	}
 	if peer == "" {
-		return "", errors.New("invalid token (see `bashy llm env`)")
+		return "", nil, errors.New("invalid token (see `bashy llm env`)")
 	}
-	return peer, nil
+	return peer, limits, nil
 }
 
 // ---- HTTP surface ----------------------------------------------------------
@@ -337,7 +340,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			b.appendCapture(ri, rest, &requestBody, cw)
 		}
 	}()
-	principal, err := b.authorize(r, params["k"])
+	principal, limits, err := b.authorize(r, params["k"])
 	if err != nil {
 		status := http.StatusUnauthorized
 		if errors.Is(err, errPeerNotShared) {
@@ -351,6 +354,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ri.rec.Principal = principal
 	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) {
 		writeErr(w, rest, http.StatusForbidden, fmt.Sprintf("%s may reach only inference routes on this door, not %s %s", principal, r.Method, rest))
+		return
+	}
+	if r.Method == http.MethodPost && isInferencePath(rest) && !b.admitPeer(w, ri, limits) {
 		return
 	}
 	ri.session = params["s"]
@@ -727,6 +733,10 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 	ri.rec.Error = errMsg
 	b.price(ri)
 	b.audit.append(ri.rec)
+	if b.meter != nil && strings.HasPrefix(ri.rec.Principal, PeerPrincipalPrefix) {
+		tokens, usd := recordUsage(ri.rec)
+		b.meter.observe(ri.rec.Principal, tokens, usd, b.opts.Now())
+	}
 }
 
 // price stamps cost_usd and unpriced on the record the door is about to
