@@ -43,6 +43,18 @@ type Record struct {
 	CachedTok     int            `json:"cached_tokens,omitempty"`
 	OutputTok     int            `json:"completion_tokens,omitempty"`
 	Error         string         `json:"error,omitempty"`
+
+	// CostUSD is the estimated USD cost of this request's tokens at the
+	// llmprice table's rate for the model that served them. It is present
+	// only when the table prices the model: an unknown or local model leaves
+	// it out rather than writing a number that looks measured.
+	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Unpriced is true when no price applies: the table has no row for the
+	// model (an id nobody has priced) or the model is a local engine model
+	// (ollama) whose cost is the host's electricity, not a list price. It is
+	// the door saying "this request has no dollar figure", which is what a
+	// usage report and an owner alarm need to tell apart from $0.
+	Unpriced bool `json:"unpriced,omitempty"`
 }
 
 // auditLog appends records to a JSONL file and keeps a bounded in-memory
