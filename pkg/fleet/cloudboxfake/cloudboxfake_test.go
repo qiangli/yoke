@@ -81,12 +81,13 @@ func TestMembersMutualAccept(t *testing.T) {
 	ro := f.AddToken("alice@example.com", ScopeMembersRead)
 	m.wantErr(403, "insufficient_scope", "POST", "/api/v1/members", ro, map[string]string{"email": "bob@example.com"})
 	m.wantErr(422, "invalid_circle", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "Bad Circle"})
+	m.wantErr(422, "invalid_circle", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "default"})
 	m.wantErr(422, "self_member", "POST", "/api/v1/members", alice, map[string]string{"email": "alice@example.com"})
 	m.wantErr(400, "bad_request", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circel": "x"})
 
 	add := m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "Bob@example.com", "circle": "family"})
 	mem, inv := obj(add, "member"), obj(add, "invitation")
-	if str(mem, "status") != "pending" || str(mem, "circle") != "family" || str(mem, "email") != "bob@example.com" {
+	if str(mem, "status") != "pending" || str(mem, "circle") != "family" || str(mem, "email") != "bob@example.com" || mem["mutual"] != false {
 		t.Fatalf("member = %v", mem)
 	}
 	// Natural idempotency: same email is 200 and does not change the circle.
@@ -96,34 +97,41 @@ func TestMembersMutualAccept(t *testing.T) {
 	}
 
 	invs := list(m.want(200, "GET", "/api/v1/member/invitations", bob, nil), "invitations")
-	if len(invs) != 1 || str(invs[0].(map[string]any), "from_email") != "alice@example.com" {
+	if len(invs) != 1 || str(invs[0].(map[string]any), "from_email") != "alice@example.com" || str(invs[0].(map[string]any), "status") != "pending" {
 		t.Fatalf("invitations = %v", invs)
+	}
+	if _, leaked := invs[0].(map[string]any)["circle"]; leaked {
+		t.Fatalf("invitation discloses the inviter's circle: %v", invs[0])
 	}
 	// Someone else cannot accept it, and cannot even see it exists.
 	carol := f.AddOwner("carol@example.com")
 	m.wantErr(404, "not_found", "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", carol, nil)
 
-	acc := m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", bob, map[string]string{"circle": "friends"})
-	if str(obj(acc, "member"), "status") != "active" {
+	acc := m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", bob, map[string]string{"circle": "friend"})
+	if fwd := obj(acc, "member"); str(fwd, "status") != "active" || fwd["mutual"] != true {
 		t.Fatalf("forward row = %v", obj(acc, "member"))
 	}
 	rev := obj(acc, "reverse")
-	if str(rev, "email") != "alice@example.com" || str(rev, "circle") != "friends" || str(rev, "status") != "active" {
+	if str(rev, "email") != "alice@example.com" || str(rev, "circle") != "friend" || str(rev, "status") != "active" || rev["mutual"] != true {
 		t.Fatalf("reverse row = %v", rev)
 	}
-	acc2 := m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", bob, map[string]string{"circle": "other"})
-	if str(obj(acc2, "reverse"), "id") != str(rev, "id") || str(obj(acc2, "reverse"), "circle") != "friends" {
+	acc2 := m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", bob, map[string]string{"circle": "team"})
+	if str(obj(acc2, "reverse"), "id") != str(rev, "id") || str(obj(acc2, "reverse"), "circle") != "friend" {
 		t.Fatalf("replayed accept changed the reverse row: %v", acc2)
 	}
 
 	_, of, hdr := m.do("GET", "/api/v1/members/of", bob, nil)
-	if rows := list(of, "of"); len(rows) != 1 || str(rows[0].(map[string]any), "owner_email") != "alice@example.com" {
+	rows := list(of, "of")
+	if len(rows) != 1 || str(rows[0].(map[string]any), "owner_email") != "alice@example.com" || rows[0].(map[string]any)["mutual"] != true {
 		t.Fatalf("members/of = %v", of)
+	}
+	if _, leaked := rows[0].(map[string]any)["circle"]; leaked {
+		t.Fatalf("members/of discloses the owner's circle: %v", rows[0])
 	}
 	if hdr.Get("Cache-Control") != "private, max-age=30" {
 		t.Fatalf("members/of Cache-Control = %q", hdr.Get("Cache-Control"))
 	}
-	if got := list(m.want(200, "GET", "/api/v1/members?circle=friends", bob, nil), "members"); len(got) != 1 {
+	if got := list(m.want(200, "GET", "/api/v1/members?circle=friend", bob, nil), "members"); len(got) != 1 {
 		t.Fatalf("bob members?circle=friends = %v", got)
 	}
 
@@ -138,10 +146,73 @@ func TestMembersMutualAccept(t *testing.T) {
 	if got := list(m.want(200, "GET", "/api/v1/members", alice, nil), "members"); len(got) != 0 {
 		t.Fatalf("alice members after delete = %v", got)
 	}
-	// Each side owns its list: bob's reverse row survives.
-	if got := list(m.want(200, "GET", "/api/v1/members", bob, nil), "members"); len(got) != 1 {
+	// Each side owns its list: bob's reverse row survives, but deleting
+	// either row ends the membership.
+	got := list(m.want(200, "GET", "/api/v1/members", bob, nil), "members")
+	if len(got) != 1 || got[0].(map[string]any)["mutual"] != false {
 		t.Fatalf("bob members after alice delete = %v", got)
 	}
+}
+
+func TestMemberLeavesByDeletingReverseRow(t *testing.T) {
+	f := New(t)
+	alice, bob := f.AddOwner("alice@example.com"), f.AddOwner("bob@example.com")
+	m := call{t, f.URL()}
+	add := m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com"})
+	if c := str(obj(add, "member"), "circle"); c != DefaultCircle {
+		t.Fatalf("default circle = %q, want %q", c, DefaultCircle)
+	}
+	rev := obj(m.want(200, "POST", "/api/v1/member/invitations/"+str(obj(add, "invitation"), "id")+"/accept", bob, nil), "reverse")
+	if str(rev, "circle") != DefaultCircle {
+		t.Fatalf("reverse row circle = %v, want guest", rev)
+	}
+	m.want(204, "DELETE", "/api/v1/members/"+str(rev, "id"), bob, nil)
+	if got := list(m.want(200, "GET", "/api/v1/members", alice, nil), "members"); len(got) != 1 || got[0].(map[string]any)["mutual"] != false {
+		t.Fatalf("alice members after bob leaves = %v", got)
+	}
+	if rows := list(m.want(200, "GET", "/api/v1/members/of", bob, nil), "of"); len(rows) != 1 || rows[0].(map[string]any)["mutual"] != false {
+		t.Fatalf("bob members/of after leaving = %v", rows)
+	}
+}
+
+// pairHost pairs a host for owner and returns its host token.
+func pairHost(m call, owner, host string) string {
+	m.t.Helper()
+	code := str(m.want(201, "POST", "/api/v1/hosts/invites", owner, nil), "code")
+	return str(m.want(201, "POST", "/api/v1/hosts/pair", "", map[string]string{"code": code, "host": host}), "token")
+}
+
+func TestCrossOwnerAttachRequiresMutual(t *testing.T) {
+	f := New(t)
+	alice, bob := f.AddOwner("alice@example.com"), f.AddOwner("bob@example.com")
+	sat := f.AddSatellite(t, "alice@example.com", "zoo")
+	m := call{t, f.URL()}
+	bobHost := pairHost(m, bob, "bobbox")
+
+	// No membership, then a pending one: the satellite does not exist for bob.
+	m.wantErr(404, "not_found", "POST", "/api/v1/satellites/"+sat+"/attach", bobHost, nil)
+	inv := obj(m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "friend"}), "invitation")
+	m.wantErr(404, "not_found", "POST", "/api/v1/satellites/"+sat+"/attach", bobHost, nil)
+	if sats := list(m.want(200, "GET", "/api/v1/satellites", bobHost, nil), "satellites"); len(sats) != 0 {
+		t.Fatalf("pending member sees satellites: %v", sats)
+	}
+
+	m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", bob, nil)
+	at := m.want(201, "POST", "/api/v1/satellites/"+sat+"/attach", bobHost, nil)
+	s := call{t, str(obj(at, "satellite"), "endpoint")}
+	s.want(201, "POST", "/api/v1/hosts/attach", str(at, "attach_token"), map[string]string{"host": "bobbox"})
+	// The satellite's owner sees the attachment of a host that is not theirs.
+	as := list(m.want(200, "GET", "/api/v1/satellites/assignment?satellite="+sat, alice, nil), "assignments")
+	if len(as) != 1 || str(as[0].(map[string]any), "host") != "bobbox" || str(as[0].(map[string]any), "state") != "attached" {
+		t.Fatalf("satellite owner's assignments = %v", as)
+	}
+	// Ending the membership (either row) detaches the cross-owner host.
+	mine := list(m.want(200, "GET", "/api/v1/members", bob, nil), "members")
+	m.want(204, "DELETE", "/api/v1/members/"+str(mine[0].(map[string]any), "id"), bob, nil)
+	if as := list(m.want(200, "GET", "/api/v1/satellites/assignment", alice, nil), "assignments"); len(as) != 0 {
+		t.Fatalf("assignments after membership ended = %v", as)
+	}
+	m.wantErr(404, "not_found", "POST", "/api/v1/satellites/"+sat+"/attach", bobHost, nil)
 }
 
 func TestInvitationExpires(t *testing.T) {

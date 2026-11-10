@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -67,6 +66,7 @@ type Member struct {
 	Email        string     `json:"email"`
 	Circle       string     `json:"circle"`
 	Status       string     `json:"status"` // pending | active
+	Mutual       bool       `json:"mutual"` // both directional rows exist and are active
 	InvitationID string     `json:"invitation_id,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	AcceptedAt   *time.Time `json:"accepted_at"`
@@ -74,11 +74,12 @@ type Member struct {
 	owner string
 }
 
-// Invitation is a pending invite as the invitee sees it.
+// Invitation is a pending invite as the invitee sees it. It never carries
+// the inviter's circle (least disclosure).
 type Invitation struct {
 	ID        string    `json:"id"`
 	FromEmail string    `json:"from_email"`
-	Circle    string    `json:"circle"`
+	Status    string    `json:"status"` // pending
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 
@@ -87,12 +88,13 @@ type Invitation struct {
 	accepted bool
 }
 
-// MemberOf is one row of the reverse view.
+// MemberOf is one row of the reverse view. It never carries the owner's
+// circle (least disclosure).
 type MemberOf struct {
 	ID         string    `json:"id"`
 	OwnerEmail string    `json:"owner_email"`
-	Circle     string    `json:"circle"`
 	Status     string    `json:"status"`
+	Mutual     bool      `json:"mutual"`
 	Since      time.Time `json:"since"`
 }
 
@@ -118,7 +120,9 @@ type Satellite struct {
 	Attached   *bool    `json:"attached,omitempty"`
 }
 
-// Assignment is the host → satellite assignment (S5).
+// Assignment is the host → satellite assignment (S5). The fake keeps one
+// per host — the CURRENT server limit (409 attached_elsewhere) — but the wire
+// is a list, so concurrent attachments need no wire change.
 type Assignment struct {
 	Host        string     `json:"host"`
 	SatelliteID string     `json:"satellite_id"`
@@ -435,7 +439,33 @@ func route(path, pattern string) ([]string, bool) {
 
 // --- master -----------------------------------------------------------------
 
-var circleRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+// Circles is the closed circle set; DefaultCircle is least privilege.
+var Circles = []string{"family", "friend", "team", "guest"}
+
+const DefaultCircle = "guest"
+
+func validCircle(c string) *apiError {
+	for _, ok := range Circles {
+		if c == ok {
+			return nil
+		}
+	}
+	return errf(422, "invalid_circle", "circle %q is not one of %s", c, strings.Join(Circles, "|"))
+}
+
+// mutual reports whether a and b each hold an active row for the other —
+// the condition every downstream membership check requires. Caller holds f.mu.
+func (f *Fake) mutual(a, b string) bool {
+	ab, ba := f.memberRow(a, b), f.memberRow(b, a)
+	return ab != nil && ba != nil && ab.Status == "active" && ba.Status == "active"
+}
+
+// view renders a member row with its derived mutual flag. Caller holds f.mu.
+func (f *Fake) view(m *Member) Member {
+	v := *m
+	v.Mutual = f.mutual(m.owner, m.Email)
+	return v
+}
 
 func (f *Fake) serveMaster(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -492,7 +522,7 @@ func (f *Fake) listMembers(w http.ResponseWriter, r *http.Request) *apiError {
 	out := []Member{}
 	for _, m := range f.members {
 		if m.owner == tok.email && (circle == "" || m.Circle == circle) {
-			out = append(out, *m)
+			out = append(out, f.view(m))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -527,25 +557,25 @@ func (f *Fake) addMember(w http.ResponseWriter, r *http.Request) *apiError {
 		return errf(422, "invalid_email", "email %q is not an address", body.Email)
 	}
 	if body.Circle == "" {
-		body.Circle = "default"
+		body.Circle = DefaultCircle
 	}
-	if !circleRE.MatchString(body.Circle) {
-		return errf(422, "invalid_circle", "circle %q must match %s", body.Circle, circleRE)
+	if e := validCircle(body.Circle); e != nil {
+		return e
 	}
 	if email == tok.email {
 		return errf(422, "self_member", "cannot add yourself as a member")
 	}
 	if m := f.memberRow(tok.email, email); m != nil {
-		writeJSON(w, 200, map[string]any{"member": m})
+		writeJSON(w, 200, map[string]any{"member": f.view(m)})
 		return nil
 	}
 	now := f.now()
-	inv := &Invitation{ID: f.nextID("inv"), FromEmail: tok.email, Circle: body.Circle, CreatedAt: now, ExpiresAt: now.Add(InvitationTTL), to: email}
+	inv := &Invitation{ID: f.nextID("inv"), FromEmail: tok.email, Status: "pending", CreatedAt: now, ExpiresAt: now.Add(InvitationTTL), to: email}
 	m := &Member{ID: f.nextID("mem"), Email: email, Circle: body.Circle, Status: "pending", InvitationID: inv.ID, CreatedAt: now, owner: tok.email}
 	inv.memberID = m.ID
 	f.members[m.ID] = m
 	f.invitations[inv.ID] = inv
-	writeJSON(w, 201, map[string]any{"member": m, "invitation": inv})
+	writeJSON(w, 201, map[string]any{"member": f.view(m), "invitation": inv})
 	return nil
 }
 
@@ -565,12 +595,12 @@ func (f *Fake) patchMember(w http.ResponseWriter, r *http.Request, id string) *a
 		return errf(404, "not_found", "member %s not found", id)
 	}
 	if body.Circle != nil {
-		if !circleRE.MatchString(*body.Circle) {
-			return errf(422, "invalid_circle", "circle %q must match %s", *body.Circle, circleRE)
+		if e := validCircle(*body.Circle); e != nil {
+			return e
 		}
 		m.Circle = *body.Circle
 	}
-	writeJSON(w, 200, map[string]any{"member": m})
+	writeJSON(w, 200, map[string]any{"member": f.view(m)})
 	return nil
 }
 
@@ -582,6 +612,7 @@ func (f *Fake) deleteMember(w http.ResponseWriter, r *http.Request, id string) *
 	if m := f.members[id]; m != nil && m.owner == tok.email {
 		delete(f.members, id)
 		delete(f.invitations, m.InvitationID)
+		f.dropCrossOwnerAttachments(m.owner, m.Email)
 	}
 	w.WriteHeader(204)
 	return nil
@@ -622,10 +653,10 @@ func (f *Fake) accept(w http.ResponseWriter, r *http.Request, id string) *apiErr
 		return errf(410, "invitation_expired", "invitation %s expired at %s", id, inv.ExpiresAt.Format(time.RFC3339))
 	}
 	if body.Circle == "" {
-		body.Circle = "default"
+		body.Circle = DefaultCircle
 	}
-	if !circleRE.MatchString(body.Circle) {
-		return errf(422, "invalid_circle", "circle %q must match %s", body.Circle, circleRE)
+	if e := validCircle(body.Circle); e != nil {
+		return e
 	}
 	now := f.now()
 	fwd := f.members[inv.memberID]
@@ -641,7 +672,7 @@ func (f *Fake) accept(w http.ResponseWriter, r *http.Request, id string) *apiErr
 	if rev.Status != "active" {
 		rev.Status, rev.AcceptedAt = "active", &now
 	}
-	writeJSON(w, 200, map[string]any{"member": fwd, "reverse": rev})
+	writeJSON(w, 200, map[string]any{"member": f.view(fwd), "reverse": f.view(rev)})
 	return nil
 }
 
@@ -659,7 +690,7 @@ func (f *Fake) membersOf(w http.ResponseWriter, r *http.Request) *apiError {
 		if m.AcceptedAt != nil {
 			since = *m.AcceptedAt
 		}
-		out = append(out, MemberOf{ID: m.ID, OwnerEmail: m.owner, Circle: m.Circle, Status: m.Status, Since: since})
+		out = append(out, MemberOf{ID: m.ID, OwnerEmail: m.owner, Status: m.Status, Mutual: f.mutual(m.owner, m.Email), Since: since})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(MembershipTTL.Seconds())))
@@ -741,6 +772,23 @@ func (f *Fake) unpair(w http.ResponseWriter, r *http.Request) *apiError {
 	return nil
 }
 
+// dropCrossOwnerAttachments detaches every host of a from a satellite of b,
+// and vice versa, once a and b are no longer mutual members.
+func (f *Fake) dropCrossOwnerAttachments(a, b string) {
+	if f.mutual(a, b) {
+		return
+	}
+	for h, as := range f.assignments {
+		s := f.sats[as.SatelliteID]
+		if s == nil {
+			continue
+		}
+		if (as.owner == a && s.sat.OwnerEmail == b) || (as.owner == b && s.sat.OwnerEmail == a) {
+			f.dropAttachment(h, as.SatelliteID)
+		}
+	}
+}
+
 // dropAttachment removes host's assignment to satID, invalidates its
 // attach tokens and revokes its satellite host token. The fake revokes
 // immediately; the contract allows up to 60s at the satellite.
@@ -777,9 +825,18 @@ func (f *Fake) satelliteView(s *satServer, tok *token) Satellite {
 	return v
 }
 
+// mayUse reports whether tok may see/attach to s: its owner's own satellite,
+// or — for a host token — one owned by a MUTUAL member of the host's owner.
+func (f *Fake) mayUse(s *satServer, tok *token) bool {
+	if s.sat.OwnerEmail == tok.email {
+		return true
+	}
+	return hasScope(tok, ScopeHost) && f.mutual(s.sat.OwnerEmail, tok.email)
+}
+
 func (f *Fake) visibleSatellite(id string, tok *token) *satServer {
 	s := f.sats[id]
-	if s == nil || s.sat.OwnerEmail != tok.email {
+	if s == nil || !f.mayUse(s, tok) {
 		return nil
 	}
 	return s
@@ -792,7 +849,7 @@ func (f *Fake) listSatellites(w http.ResponseWriter, r *http.Request) *apiError 
 	}
 	out := []Satellite{}
 	for _, s := range f.sats {
-		if s.sat.OwnerEmail == tok.email {
+		if f.mayUse(s, tok) {
 			v := f.satelliteView(s, tok)
 			if !hasScope(tok, ScopeHost) {
 				// The owner list keeps its existing {id,name,endpoint,state} shape.
@@ -827,7 +884,11 @@ func (f *Fake) listAssignments(w http.ResponseWriter, r *http.Request) *apiError
 	sat := r.URL.Query().Get("satellite")
 	out := []Assignment{}
 	for h, a := range f.assignments {
-		if a.owner != tok.email || (hasScope(tok, ScopeHost) && h != tok.host) || (sat != "" && a.SatelliteID != sat) {
+		satOwner := ""
+		if s := f.sats[a.SatelliteID]; s != nil {
+			satOwner = s.sat.OwnerEmail
+		}
+		if (a.owner != tok.email && satOwner != tok.email) || (hasScope(tok, ScopeHost) && h != tok.host) || (sat != "" && a.SatelliteID != sat) {
 			continue
 		}
 		out = append(out, *a)

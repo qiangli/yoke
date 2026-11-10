@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Prune dry runs must use read-only room membership — WHEN building a cleanup preview, room.Members reconciles stale cards and creates the members directory, so it mutates state. Use room.PeekMembers for candidate scans and recheck under the member-claims guard before applying deletion.  (kb:prune-dry-runs-must-use-read-only-room-membership)
+- [repo/page] Seed effects must cover the atlas effects of every command they run — A usage-probe seed's Effects: line becomes advice.WithCap in the snippet runner, and every command the body dispatches is classified by atlas.Lookup — fetch is read+net, so a [net]-only balance seed died 126 (effect cap denied). WHEN authori  (kb:seed-effects-must-cover-the-atlas-effects-of-every-command-they)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
