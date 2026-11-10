@@ -904,8 +904,16 @@ func usageFromEvent(raw []byte) Usage {
 	if json.Unmarshal(raw, &obj) != nil {
 		return Usage{}
 	}
-	for i, candidate := range []any{obj["usage"], nested(obj, "result", "usage"), obj["token_usage"], nested(obj, "response", "usage")} {
-		m, ok := candidate.(map[string]any)
+	for _, source := range []struct {
+		usage        any
+		fromResponse bool
+	}{
+		{usage: obj["usage"]},
+		{usage: nested(obj, "result", "usage")},
+		{usage: obj["token_usage"]},
+		{usage: nested(obj, "response", "usage"), fromResponse: true},
+	} {
+		m, ok := source.usage.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -922,7 +930,8 @@ func usageFromEvent(raw []byte) Usage {
 		// input_tokens; OpenAI's input_tokens already includes its cached
 		// part. InputTokens is always the whole prompt, so prompt_tokens means
 		// the same for every seat (cost per solve compares across vendors).
-		if _, anthropic := m["cache_read_input_tokens"]; i != 3 && (anthropic || m["cache_creation_input_tokens"] != nil) {
+		// Ycode's response.usage already includes cached tokens in its prompt count.
+		if _, anthropic := m["cache_read_input_tokens"]; !source.fromResponse && (anthropic || m["cache_creation_input_tokens"] != nil) {
 			u.InputTokens += number(m, "cache_read_input_tokens") + number(m, "cache_creation_input_tokens")
 			u.TotalTokens = 0
 		}

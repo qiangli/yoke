@@ -5,6 +5,13 @@
 name: zero-ycode
 kind: cli
 display: ycode one-shot passthrough
+integration:
+  detect: ~/.agents
+  skills:
+    user: [~/.agents/skills]
+    project: [.agents/skills]
+  instructions:
+    - {file: AGENTS.md, scope: project}
 cli:
   binary: bashy
   launch:
