@@ -16,11 +16,7 @@ package fleet
 // cloudbox client walks (see cloudbox.go; the same resolution `bashy token`
 // uses). Nothing is printed but the records; credentials never are.
 //
-// What this verb deliberately does NOT do: attribute a host to its
-// satellite. The host→satellite assignment lives behind the session-only
-// GET /api/satellites/assignment — there is no Bearer [REDACTED] for it —
-// so `ls --satellite ID` fails loudly naming the missing endpoint instead
-// of guessing. See reproduce.go for the full missing-endpoint list.
+// --satellite uses the Bearer assignment endpoint to filter both catalogs.
 
 import (
 	"encoding/json"
@@ -60,8 +56,7 @@ type PeerEntry struct {
 }
 
 // PairedHost is the joined view: the hosts row enriched with the peers
-// row of the same name. Satellite is absent on purpose — the wire carries
-// no host→satellite mapping (see the file doc).
+// row of the same name.
 type PairedHost struct {
 	Host     string `json:"host"`
 	OsUser   string `json:"os_user,omitempty"`
@@ -200,13 +195,6 @@ func joinPaired(hosts []HostEntry, peers []PeerEntry) []PairedHost {
 	return out
 }
 
-// errNoSatelliteFilter is the loud refusal for `host ls --satellite`: the
-// filter names a dimension the Bearer [REDACTED] cannot serve, so filtering
-// client-side would silently misreport.
-func errNoSatelliteFilter() error {
-	return fmt.Errorf("fleet: host ls --satellite needs the host→satellite mapping, which the master exposes only as the session-only GET /api/satellites/assignment (missing over Bearer: GET /api/v1/satellites/assignment)")
-}
-
 // NewPairedHostCmd builds the `host` verb tree: the paired hosts the
 // master sees. Read-only; the only verb in this run is `ls`.
 func NewPairedHostCmd() *cobra.Command {
@@ -218,8 +206,7 @@ func NewPairedHostCmd() *cobra.Command {
 		Short: "Paired hosts from the master (read-only)",
 		Long: "Paired hosts from the master (read-only).\n\n" +
 			"Reads GET /api/v1/hosts and GET /api/v1/peers and joins them by\n" +
-			"host name. --satellite is accepted but refused: the master has\n" +
-			"no Bearer host→satellite mapping, so filtering would lie.",
+			"host name. --satellite filters through GET /api/v1/satellites/assignment.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -233,9 +220,6 @@ func NewPairedHostCmd() *cobra.Command {
 		Short: "List the paired hosts visible to the caller",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(satellite) != "" {
-				return errNoSatelliteFilter()
-			}
 			client, err := newPairedHostsClientFor(cmd.Context(), &acct, master, token)
 			if err != nil {
 				return err
@@ -247,6 +231,31 @@ func NewPairedHostCmd() *cobra.Command {
 			peers, _, err := client.ListPeers()
 			if err != nil {
 				return err
+			}
+			if id := strings.TrimSpace(satellite); id != "" {
+				assignments, err := (OwnerClient{BaseURL: client.BaseURL, Token: client.Token, HTTP: client.HTTP}).SatelliteAssignments(cmd.Context(), id)
+				if err != nil {
+					return err
+				}
+				allowed := make(map[string]bool, len(assignments))
+				for _, a := range assignments {
+					if a.SatelliteID == id {
+						allowed[a.Host] = true
+					}
+				}
+				filteredHosts := make([]HostEntry, 0)
+				for _, h := range hosts {
+					if allowed[h.Host] {
+						filteredHosts = append(filteredHosts, h)
+					}
+				}
+				filteredPeers := make([]PeerEntry, 0)
+				for _, p := range peers {
+					if allowed[p.Host] {
+						filteredPeers = append(filteredPeers, p)
+					}
+				}
+				hosts, peers = filteredHosts, filteredPeers
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
@@ -276,7 +285,7 @@ func NewPairedHostCmd() *cobra.Command {
 		},
 	}
 	ls.Aliases = []string{"list"}
-	ls.Flags().StringVar(&satellite, "satellite", "", "refused: filter by satellite (needs a Bearer host→satellite mapping the master does not expose)")
+	ls.Flags().StringVar(&satellite, "satellite", "", "filter by satellite ID")
 	c.AddCommand(ls)
 	return c
 }

@@ -137,15 +137,15 @@ func TestHostLsTableAndJSON(t *testing.T) {
 	}
 }
 
-func TestHostLsSatelliteRefused(t *testing.T) {
+func TestHostLsSatelliteEndpointUnavailable(t *testing.T) {
 	setupReproFake(t)
 
 	_, err := runHostLs(t, "ls", "--satellite", "zoo")
 	if err == nil {
-		t.Fatalf("ls --satellite succeeded; want the missing-mapping refusal")
+		t.Fatalf("ls --satellite succeeded; want an unavailable-endpoint error")
 	}
 	if !strings.Contains(err.Error(), "/api/v1/satellites/assignment") {
-		t.Fatalf("refusal does not name the missing endpoint: %v", err)
+		t.Fatalf("error does not name the missing endpoint: %v", err)
 	}
 }
 

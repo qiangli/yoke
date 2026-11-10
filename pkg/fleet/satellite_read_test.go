@@ -34,7 +34,7 @@ func (f *fakeSatelliteMaster) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 		return
 	}
-	if r.Method != http.MethodGet || r.URL.Path != "/api/v1/satellites" {
+	if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/api/v1/satellites") {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
@@ -61,6 +61,16 @@ func (f *fakeSatelliteMaster) serve(w http.ResponseWriter, r *http.Request) {
 	rows := f.rows
 	if rows == nil {
 		rows = []map[string]any{}
+	}
+	if r.URL.Path != "/api/v1/satellites" {
+		for _, row := range rows {
+			if row["id"] == strings.TrimPrefix(r.URL.Path, "/api/v1/satellites/") {
+				_ = json.NewEncoder(w).Encode(map[string]any{"satellite": row})
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
