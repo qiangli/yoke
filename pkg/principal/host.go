@@ -3,6 +3,7 @@ package principal
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -46,6 +47,8 @@ type Env struct {
 	Paired bool
 	// PairedName is the name the control plane knows this host by.
 	PairedName string
+	// PairedEmail is the account that owns this paired host.
+	PairedEmail string
 
 	// The observation stores — where agents on this host leave traces
 	// whether or not anyone cataloged them. Read-only here; an empty path
@@ -87,6 +90,7 @@ func DefaultEnv() Env {
 		for _, f := range fleet.OutpostAgentFiles() {
 			if name, ok := readOutpostAgentName(f); ok {
 				e.Paired, e.PairedName = true, name
+				e.PairedEmail = readOutpostOwnerEmail(f)
 				break
 			}
 		}
@@ -108,6 +112,20 @@ func DefaultEnv() Env {
 	}
 	e.Hostname, _ = os.Hostname()
 	return e
+}
+
+func readOutpostOwnerEmail(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		OwnerEmail string `json:"owner_email"`
+	}
+	if json.Unmarshal(data, &record) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(record.OwnerEmail))
 }
 
 func firstEnv(keys ...string) string {

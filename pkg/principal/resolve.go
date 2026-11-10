@@ -21,7 +21,11 @@ type Resolver struct {
 
 // NewResolver builds a resolver over a fleet catalog and the ambient host.
 func NewResolver(cat *fleet.Catalog, env Env) *Resolver {
-	return &Resolver{cat: cat, env: env, probe: spacetime.DefaultProbes(nil), owner: LocalOwner}
+	owner := LocalOwner
+	if env.Paired && env.PairedEmail != "" {
+		owner = env.PairedEmail
+	}
+	return &Resolver{cat: cat, env: env, probe: spacetime.DefaultProbes(nil), owner: owner}
 }
 
 // Self reports the principal this process is running as.
