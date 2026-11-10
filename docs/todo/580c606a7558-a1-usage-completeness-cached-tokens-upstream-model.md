@@ -3,9 +3,11 @@ id: 580c606a7558
 kind: feature
 title: 'A1 usage completeness: cached tokens + upstream model in the LLM door audit record'
 seq: 3068
-status: todo
+status: assigned
 priority: p1
 created: 2026-11-10T01:04:30.065973Z
+weave: 22
+assignee: codex-gpt6-sol
 sprint: 602
 sprint_id: 945d80da-6344-5fa1-8afb-08d6cac5d7a0
 sprint_title: 'Metered shared LLM access: per-peer usage, cost and limits on the LLM door (provider-agnostic)'
