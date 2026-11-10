@@ -3,7 +3,7 @@ id: c18ec0cbdab5
 kind: enhancement
 title: F2 price cache writes at the cache-write rate
 seq: 3075
-status: assigned
+status: done
 priority: p3
 created: 2026-11-10T03:47:55.971778Z
 weave: 48
@@ -11,6 +11,8 @@ assignee: codex-gpt6-sol
 sprint: 607
 sprint_id: d3d7f687-3414-576c-ad29-b45dfc879257
 sprint_title: 'Metering follow-ups: one price table, honest cost and alarms, member go-live guards'
+closed: 2026-11-10T21:04:29.549691Z
+closed_by: claude-fable5.1-s607
 ---
 
 S602 known limit: the audit record folds Anthropic cache_creation_input_tokens into prompt_tokens and Broker.price bills them at the input rate, although llmprice.Pricing already carries CacheWritePerM (Claude rows have it; OpenAI rows declare 0).
