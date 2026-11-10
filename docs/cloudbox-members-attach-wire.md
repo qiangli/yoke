@@ -325,8 +325,8 @@ flag does not exist yet; its wave story builds it against the fake.
 |---|---|---|
 | `GET /api/v1/members` | `bashy member ls [--circle C]` | implemented (bashy member, S583.2) |
 | `POST /api/v1/members` | `bashy member invite EMAIL [--circle C]` | implemented (bashy member, S583.2) |
-| `PATCH /api/v1/members/:id` | `bashy member set ID\|EMAIL --circle C` | gap (W1) |
-| `DELETE /api/v1/members/:id` | `bashy member rm ID\|EMAIL` (also how a member leaves: remove your reverse row) | gap (W1) |
+| `PATCH /api/v1/members/:id` | `bashy member set ID\|EMAIL --circle C` | implemented (bashy member, S583.2) |
+| `DELETE /api/v1/members/:id` | `bashy member rm ID\|EMAIL` (also how a member leaves: remove your reverse row) | implemented (bashy member, S583.2) |
 | `GET /api/v1/member/invitations` | `bashy member invitations` | implemented (bashy member, S583.2) |
 | `POST /api/v1/member/invitations/:id/accept` | `bashy member accept ID [--circle C]` | implemented (bashy member, S583.2) |
 | `GET /api/v1/members/of` | `bashy member of` | implemented (bashy member, S583.2) |
