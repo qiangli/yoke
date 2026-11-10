@@ -147,7 +147,13 @@ func WithoutLocalStore() Option { return func(c *Config) { c.noLocal = true } }
 func WithoutCloudOverlay() Option { return func(c *Config) { c.noCloud = true } }
 
 // Catalog reads the merged fleet across every ring.
-type Catalog struct{ cfg Config }
+type Catalog struct {
+	cfg Config
+	// memo holds parsed rows per noun, keyed by the rings' fingerprint
+	// (see catalog_memo.go). nil disables memoization: a Catalog built as
+	// a bare literal reads disk on every call, as it always did.
+	memo *catalogMemo
+}
 
 // New builds a Catalog.
 func New(opts ...Option) *Catalog {
@@ -155,7 +161,7 @@ func New(opts ...Option) *Catalog {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &Catalog{cfg: cfg}
+	return &Catalog{cfg: cfg, memo: newCatalogMemo()}
 }
 
 // Root reports the local store's parent directory.
@@ -249,6 +255,15 @@ func (s *builtinOnlySource) Names() ([]string, error) {
 	return append([]string(nil), s.names...), nil
 }
 
+// Fingerprint forwards to the wrapped source: the builtin subset is a pure
+// function of its entries.
+func (s *builtinOnlySource) Fingerprint() (string, bool) {
+	if f, ok := s.Source.(assetring.Fingerprinter); ok {
+		return f.Fingerprint()
+	}
+	return "", false
+}
+
 func (s *builtinOnlySource) Body(name string) ([]byte, bool) {
 	if !s.set[name] {
 		return nil, false
@@ -285,6 +300,15 @@ func (e parseErr) Error() string { return e.Name + ": " + e.Err.Error() }
 // kits (kind func/web/system). Those are not fleet tools and are omitted;
 // pass all=true to see them.
 func (c *Catalog) Tools(all bool) ([]Tool, []error) {
+	key := "tools:cli"
+	if all {
+		key = "tools:all"
+	}
+	return memoized(c, key, []string{dirTools}, func() ([]Tool, []error) { return c.loadTools(all) })
+}
+
+// loadTools reads the tool rings. Tools memoizes it per ring fingerprint.
+func (c *Catalog) loadTools(all bool) ([]Tool, []error) {
 	var errs []error
 	cat := &assetring.Catalog[Tool]{
 		Sources: c.sources(dirTools),
@@ -343,6 +367,11 @@ func (c *Catalog) Tool(name string) (Tool, bool) {
 
 // Models returns every model, name-sorted.
 func (c *Catalog) Models() ([]Model, []error) {
+	return memoized(c, "models", []string{dirModels}, c.loadModels)
+}
+
+// loadModels reads the model rings. Models memoizes it per ring fingerprint.
+func (c *Catalog) loadModels() ([]Model, []error) {
 	var errs []error
 	cat := &assetring.Catalog[Model]{
 		Sources: c.sources(dirModels),
@@ -387,6 +416,13 @@ func (c *Catalog) Model(name string) (Model, bool) {
 // it can fail closed; Agents applies the user-facing one-row-per-NAME policy on
 // top of it.
 func (c *Catalog) agentEntries() ([]Agent, []error) {
+	// Decorations and the retired-dependency check read models and tools,
+	// so the memo key covers all three rings.
+	return memoized(c, "agents", []string{dirAgents, dirModels, dirTools}, c.loadAgentEntries)
+}
+
+// loadAgentEntries reads the agent rings. agentEntries memoizes it.
+func (c *Catalog) loadAgentEntries() ([]Agent, []error) {
 	var errs []error
 	cat := &assetring.Catalog[AgentFile]{
 		Sources: c.sources(dirAgents),

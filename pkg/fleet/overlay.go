@@ -18,6 +18,16 @@ type overlaySource struct {
 	noun  string
 }
 
+// Fingerprint forwards to the wrapped local source. The lower rings an
+// overlay merges into are listed as sources of their own, so the catalog's
+// combined fingerprint already covers them.
+func (s overlaySource) Fingerprint() (string, bool) {
+	if f, ok := s.Source.(assetring.Fingerprinter); ok {
+		return f.Fingerprint()
+	}
+	return "", false
+}
+
 func (s overlaySource) Body(name string) ([]byte, bool) {
 	body, ok := s.Source.Body(name)
 	if !ok || !isOverlay(body) {

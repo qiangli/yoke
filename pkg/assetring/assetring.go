@@ -24,10 +24,12 @@ package assetring
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -288,6 +290,79 @@ func (s fileDir) Files(name string) ([]string, error) {
 		return nil, nil
 	}
 	return s.inner().Files(name)
+}
+
+// --- fingerprints ------------------------------------------------------
+
+// Fingerprinter is implemented by a source that can say cheaply whether its
+// entries may have changed. The token changes whenever any entry of the
+// source is added, removed, renamed or rewritten; ok=false means the source
+// cannot tell, and a caller must then re-read rather than trust a memo.
+//
+// This is what lets a catalog memoize parsed rows without an invalidation
+// protocol: a write through this package, a direct os.WriteFile, or another
+// process editing the ring all change the token, because it is derived from
+// the directory listing (every entry's name, size and modification time),
+// not from who wrote it.
+type Fingerprinter interface {
+	Fingerprint() (token string, ok bool)
+}
+
+// dirFingerprint hashes a directory listing: one line per entry with its
+// name, size and modification time. Every entry counts, whatever its
+// extension, so a sibling record format sharing the directory (fleet's .bsh
+// bodies) is covered by the same token. A missing directory is a stable
+// empty token, matching Names() treating it as an empty ring.
+func dirFingerprint(fsys fs.FS) (string, bool) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if errors.Is(err, fs.ErrNotExist) {
+		return "absent", true
+	}
+	if err != nil {
+		return "", false
+	}
+	h := fnv.New64a()
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			// An entry that vanished between the listing and the stat:
+			// the listing is in flux, so refuse to vouch for it.
+			return "", false
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00%d\x00%d\n", e.Name(), info.Size(), info.ModTime().UnixNano(), info.Mode())
+	}
+	return strconv.FormatUint(h.Sum64(), 16), true
+}
+
+// Fingerprint reports whether a single-file source's entries may have
+// changed. A compiled-in fs yields a constant token; a real directory
+// yields one derived from its listing.
+func (s fileFS) Fingerprint() (string, bool) { return dirFingerprint(s.fsys) }
+
+func (s fileDir) Fingerprint() (string, bool) {
+	if _, err := os.Stat(s.dir); err != nil {
+		return "absent", true
+	}
+	return dirFingerprint(os.DirFS(s.dir))
+}
+
+// Fingerprint combines the tokens of every source in precedence order. It
+// reports ok=false as soon as one source cannot vouch for itself, so a
+// catalog built from an unknown source shape is simply never memoized.
+func Fingerprint(sources []Source) (string, bool) {
+	var b strings.Builder
+	for i, src := range sources {
+		f, ok := src.(Fingerprinter)
+		if !ok {
+			return "", false
+		}
+		tok, ok := f.Fingerprint()
+		if !ok {
+			return "", false
+		}
+		fmt.Fprintf(&b, "%d:%d:%s;", i, src.Ring(), tok)
+	}
+	return b.String(), true
 }
 
 // --- catalog -----------------------------------------------------------

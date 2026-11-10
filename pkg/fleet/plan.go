@@ -176,6 +176,11 @@ func ParsePlan(name string, body []byte, src assetring.Source) (Plan, error) {
 
 // Plans returns every subscription plan, name-sorted.
 func (c *Catalog) Plans() ([]Plan, []error) {
+	return memoized(c, "plans", []string{dirPlans}, c.loadPlans)
+}
+
+// loadPlans reads the plan rings. Plans memoizes it per ring fingerprint.
+func (c *Catalog) loadPlans() ([]Plan, []error) {
 	var errs []error
 	cat := &assetring.Catalog[Plan]{
 		Sources: c.sources(dirPlans),

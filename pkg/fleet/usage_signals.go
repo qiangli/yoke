@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -107,7 +108,7 @@ var (
 func MatchSignals(signals []UsageSignal, excerpt string, headers map[string]string, now time.Time) []ParsedSignal {
 	var out []ParsedSignal
 	for _, s := range signals {
-		re, err := regexp.Compile(s.Match)
+		re, err := compileUsageSignal(s.Match)
 		if err != nil {
 			continue
 		}
@@ -346,6 +347,24 @@ func signalHour24(hour int, meridiem string) int {
 	return hour
 }
 
+// usageSignalRE caches compiled signal patterns by source text. A tool's
+// signals are validated on every parse of its record, and the same dozen
+// patterns recur across tools; compiling each once per process is what
+// keeps validation off the profile. A *regexp.Regexp is safe to share.
+var usageSignalRE sync.Map
+
+func compileUsageSignal(pattern string) (*regexp.Regexp, error) {
+	if v, ok := usageSignalRE.Load(pattern); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	usageSignalRE.Store(pattern, re)
+	return re, nil
+}
+
 // validateUsageSignals checks a record's signal declarations: ids unique, the
 // regex compiles and names its declared groups, kinds and windows are in the
 // vocabulary, and a reset names its layout (a layout without a reset, or a
@@ -360,7 +379,7 @@ func validateUsageSignals(rec string, signals []UsageSignal) error {
 		if s.Match == "" {
 			return fmt.Errorf("%s: usage signal %q: empty match", rec, s.ID)
 		}
-		re, err := regexp.Compile(s.Match)
+		re, err := compileUsageSignal(s.Match)
 		if err != nil {
 			return fmt.Errorf("%s: usage signal %q: bad regexp: %w", rec, s.ID, err)
 		}

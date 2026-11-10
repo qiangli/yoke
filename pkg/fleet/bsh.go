@@ -46,6 +46,16 @@ func (s *bshSource) warn(err error) {
 	s.warns = append(s.warns, err)
 }
 
+// Fingerprint forwards to the wrapped directory source. Its token hashes
+// every entry of the directory whatever the extension, so the .bsh bodies
+// this wrapper adds are covered by the same listing.
+func (s *bshSource) Fingerprint() (string, bool) {
+	if f, ok := s.Source.(assetring.Fingerprinter); ok {
+		return f.Fingerprint()
+	}
+	return "", false
+}
+
 // Warnings drains deferred warnings (a shadowed or refused .bsh record)
 // so the catalog parse path can report them.
 func (s *bshSource) Warnings() []error {
