@@ -730,6 +730,9 @@ func (s *Server) route(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set(RoutedHeader, decision.HeaderValue())
+		if agent, ok := s.catalog.Agent(decision.Agent); ok {
+			w.Header().Set("X-Bashy-Upstream-Model", s.VendorModel(agent))
+		}
 
 		ctx := context.WithValue(r.Context(), routeStateKey{}, &routeState{
 			Model: model, Decision: decision, Band: bandNumber(decision.Band),

@@ -1,0 +1,191 @@
+# Adapted from github.com/qiangli/ycode/examples/agent-zero.yaml at
+# 5e1538ce6281 (MIT, Copyright (c) 2026 Qiang Li). The fleet supplies the
+# provider endpoint, key and model, and the one-shot wrapper emits ycode's
+# provider usage as a terminal event for cligw. See THIRD_PARTY_LICENSES.md.
+name: zero-ycode
+kind: cli
+display: ycode one-shot passthrough
+integration:
+  detect: ~/.agents
+  skills:
+    user: [~/.agents/skills]
+    project: [.agents/skills]
+  instructions:
+    - {file: AGENTS.md, scope: project}
+cli:
+  binary: bashy
+  launch:
+    exec: bashy {state_dir}/run.sh {prompt}
+    prompt_position: last
+    key_env: [OPENAI_API_KEY]
+    env:
+      - OPENAI_BASE_URL={base_url}
+    setup: |
+      mkdir -p {state_dir}
+      cat > {state_dir}/agent.yaml.in <<'ZERO_HARNESS'
+      apiVersion: ycode.dev/v1alpha1
+      kind: Harness
+      metadata:
+        name: zero-passthrough
+        version: 1
+      spec:
+        interfaces:
+          cli:
+            identity: {name: zero-passthrough, version: build, compatibility: "One-shot benchmark baseline"}
+            bootstrap: {configFlags: [--file, -f], defaultFile: agent.yaml}
+            presentation:
+              formats: [text, json]
+              defaultFormat: text
+              color: never
+              quiet: false
+              redact: compiled
+              help: {flag: help, shorthand: h, flagUsage: Show help, template: "{{.UsageString}}", usageTemplate: "Usage: {{.UseLine}}"}
+              errors: {prefix: "error: ", usage: false}
+            exitCodes: {success: 0, usage: 2, configuration: 3, runtime: 1, unsupported: 4, interrupted: 130}
+            root:
+              name: zero-passthrough
+              usage: zero-passthrough [prompt]
+              short: Run the zero-capability baseline
+              args: {min: 0, max: -1}
+              flags:
+                - {name: file, shorthand: f, type: string, default: agent.yaml, usage: Harness YAML file, scope: inherited}
+              dispatch:
+                operation: input
+                frontendRef: one-shot
+                triggerRef: input
+                agentRef: zero
+                input: {mode: auto, stdin: true, empty: reject, payloadKey: request}
+              commands:
+                - {name: validate, short: Validate the harness, args: {min: 0, max: 0}, dispatch: {operation: validate}}
+                - {name: help, usage: "help [command]", short: Show help, args: {min: 0, max: -1}, dispatch: {operation: help}}
+        runtime:
+          defaultAgentRef: zero
+          workspace: .
+          readableRoots: [.]
+          writableRoots: [.]
+          controlRoot: {platformDataDir: ycode/zero-agent}
+          rootOverlap: deny
+        providers:
+          mock:
+            protocol: openai-compatible
+            endpoint: {valueFrom: {env: OPENAI_BASE_URL, default: ""}}
+            credentials: {apiKey: {secretRef: {provider: env, name: OPENAI_API_KEY}}}
+            transport: {connectTimeoutMs: 10000, requestTimeoutMs: 120000, maxResponseBytes: 1048576}
+        models:
+          no-tools:
+            providerRef: mock
+            id: __UPSTREAM_MODEL__
+            limits: {contextTokens: 400000, maxOutputTokens: 16384}
+            capabilities: {streaming: true, toolCalls: false, parallelToolCalls: false, structuredOutput: false}
+        routes:
+          main:
+            attempts:
+              - modelRef: no-tools
+                transportRetry: {maxAttempts: 1, backoff: {initialMs: 1, multiplier: 1, maxMs: 1, jitter: none}, retryOn: []}
+                timeoutMs: 120000
+            fallbackOn: []
+            providerSession: turn
+            budget: {maxInputTokens: 400000, maxOutputTokens: 16384, maxCostUSD: 1000}
+            quotaPool: {strategy: ordered, onExhausted: fail}
+        bashy:
+          contract: bashy-run-v1
+          requestType: ycode.bashy-call/v1
+          resultType: ycode.bashy-result/v1
+          operations: [execute]
+          execution: {cwdRoot: ., environment: {inherit: allowlist, names: []}, commandResolution: embedded-only, timeoutMs: 1000, jobLifetimeMs: 1000, maxOutputChars: 4096, maxSpillBytes: 8192, maxParallel: 1, permissionCeiling: read-only, effectsCeiling: [read], preflight: required, incompletePreflight: deny, hostFallback: deny}
+        pipelines:
+          one-shot:
+            inputs: {request: ycode.input/v1}
+            state:
+              input: {type: ycode.input/v1, writer: single}
+              messages: {type: ycode.messages/v1, writer: single}
+              providerSession: {type: ycode.provider-session/v1, writer: single}
+              response: {type: ycode.provider-response/v1, writer: single}
+              finalMessages: {type: ycode.messages/v1, writer: single}
+              output: {type: ycode.output/v1, writer: single}
+            outputs: {output: ycode.output/v1}
+            concurrency: 1
+            failFast: true
+            nodes:
+              - id: input
+                needs: []
+                run: {stage: input.normalize, in: {request: request}, out: {input: input}}
+              - id: assemble
+                needs: [input]
+                run: {stage: prompt.assemble, with: {order: [input]}, in: {input: input}, out: {state: messages}}
+              - id: provider-session
+                needs: [input]
+                run: {stage: state.forward, in: {value: input}, out: {value: providerSession}}
+              - id: answer
+                needs: [assemble, provider-session]
+                run: {stage: llm.call, with: {routeRef: main}, in: {messages: messages.messages, providerSession: providerSession}, out: {response: response, providerSession: providerSession}}
+              - id: append-answer
+                needs: [answer]
+                run: {stage: messages.append-assistant, in: {state: messages, response: response}, out: {state: finalMessages}}
+              - id: emit
+                needs: [append-answer]
+                run: {stage: output.emit, with: {sinkRefs: [primary-output]}, in: {messages: finalMessages.messages}, out: {output: output}}
+        agents:
+          zero:
+            displayName: Zero baseline
+            description: Independent one-shot requests; no context, conversation history, persistent memory, repeat loop, or model-visible tool.
+            inputSchema: {type: object}
+            outputSchema: {type: object}
+            modelRouteRef: main
+            pipelineRef: one-shot
+            permissionCeiling: read-only
+            effectsCeiling: [read]
+            delegations: []
+            presentation: {icon: terminal, category: benchmark}
+        frontends:
+          one-shot: {kind: one-shot, trust: local-user, limits: {maxInputBytes: 1048576}}
+        triggers:
+          input:
+            kind: frontend
+            frontendRefs: [one-shot]
+            route: {agentRef: zero}
+            inputMapping: canonical-v1
+            idempotency: required
+            admission: {maxPendingPerPrincipal: 1, onLimit: reject}
+        sinks:
+          primary-output:
+            kind: frontend-response
+            frontendRefs: [one-shot]
+            destinationAllowlist: [originating-frontend]
+            redact: secrets-and-control-paths
+            delivery:
+              mode: at-least-once
+              deduplicateBy: event-id
+              retry: {maxAttempts: 1, backoffMs: 1, maxBackoffMs: 1}
+              deadLetter: {controlPath: dead-letter}
+        observability: {enabled: false, exporter: none, endpoint: {valueFrom: {env: OTEL_EXPORTER_OTLP_ENDPOINT, default: ""}}, recordContent: false, attributes: {}}
+      ZERO_HARNESS
+      model={model}
+      awk -v model="$model" '{gsub(/__UPSTREAM_MODEL__/, model); print}' {state_dir}/agent.yaml.in > {state_dir}/agent.yaml
+      cat > {state_dir}/run.sh <<'ZERO_RUN'
+      set -e
+      run_root=$(mktemp -d)
+      trap 'rm -rf "$run_root"' EXIT
+      export BASHY_HOME="$run_root"
+      bashy ycode -f __HARNESS_FILE__ "$@" > "$run_root/answer"
+      events="$run_root/ycode/zero-agent/sessions/events.jsonl"
+      ref=$(jq -r 'select(.type == "llm.completed") | .data.payload_ref' "$events" | tail -n 1)
+      test -n "$ref"
+      digest=$(printf '%s' "$ref" | cut -d : -f 2)
+      payload="$run_root/ycode/zero-agent/payloads/$digest"
+      jq -c '{type:"result",result:.response.text,response:.response}' "$payload"
+      ZERO_RUN
+      harness={state_dir}/agent.yaml
+      awk -v harness="$harness" '{gsub(/__HARNESS_FILE__/, harness); print}' {state_dir}/run.sh > {state_dir}/run.tmp
+      mv {state_dir}/run.tmp {state_dir}/run.sh
+    events_done:
+      field: type
+      values: [result]
+    watchdog:
+      max_runtime: 3m
+      mem_limit: 2g
+harness:
+  operability: 0.8
+  shell: 0
+  tool-use: 0
+  isolation: 1

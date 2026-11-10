@@ -904,8 +904,16 @@ func usageFromEvent(raw []byte) Usage {
 	if json.Unmarshal(raw, &obj) != nil {
 		return Usage{}
 	}
-	for _, candidate := range []any{obj["usage"], nested(obj, "result", "usage"), obj["token_usage"]} {
-		m, ok := candidate.(map[string]any)
+	for _, source := range []struct {
+		usage        any
+		fromResponse bool
+	}{
+		{usage: obj["usage"]},
+		{usage: nested(obj, "result", "usage")},
+		{usage: obj["token_usage"]},
+		{usage: nested(obj, "response", "usage"), fromResponse: true},
+	} {
+		m, ok := source.usage.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -915,11 +923,15 @@ func usageFromEvent(raw []byte) Usage {
 			OutputTokens:      number(m, "output_tokens", "completion_tokens", "output"),
 			TotalTokens:       number(m, "total_tokens", "total"),
 		}
+		if details, ok := m["prompt_tokens_details"].(map[string]any); ok {
+			u.CachedInputTokens = number(details, "cached_tokens")
+		}
 		// Anthropic counts cache reads and cache writes apart from
 		// input_tokens; OpenAI's input_tokens already includes its cached
 		// part. InputTokens is always the whole prompt, so prompt_tokens means
 		// the same for every seat (cost per solve compares across vendors).
-		if _, anthropic := m["cache_read_input_tokens"]; anthropic || m["cache_creation_input_tokens"] != nil {
+		// Ycode's response.usage already includes cached tokens in its prompt count.
+		if _, anthropic := m["cache_read_input_tokens"]; !source.fromResponse && (anthropic || m["cache_creation_input_tokens"] != nil) {
 			u.InputTokens += number(m, "cache_read_input_tokens") + number(m, "cache_creation_input_tokens")
 			u.TotalTokens = 0
 		}

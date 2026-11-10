@@ -164,6 +164,11 @@ func EncodeChat(req openai.ChatRequest, answer, finish, id string, deltas []stri
 		PromptTokens: int(usage.InputTokens), CompletionTokens: int(usage.OutputTokens),
 		TotalTokens: int(usage.TotalTokens),
 	}
+	if usage.CachedInputTokens > 0 {
+		ou.PromptTokensDetails = &struct {
+			CachedTokens int `json:"cached_tokens"`
+		}{CachedTokens: int(usage.CachedInputTokens)}
+	}
 	if req.Stream {
 		return "text/event-stream", streamBody(id, req.Model, deltas, answer, finish, ou)
 	}

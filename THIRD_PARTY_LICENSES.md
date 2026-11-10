@@ -25,6 +25,7 @@ that patch nor GNU m4 source is linked into the Go multicall binary.
 | [odvcencio/gotreesitter](https://github.com/odvcencio/gotreesitter) | MIT (runtime) + per-grammar licenses, see `THIRD_PARTY_GRAMMARS.md` | pkg/treesitter, cmds/ast (linked dependency; embeds 201 permissive grammar parse tables, attributed in `THIRD_PARTY_GRAMMARS.md`) |
 | [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.1; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
 | [openclaw/openclaw](https://github.com/openclaw/openclaw) | MIT | pkg/feed/adapters (reference adapter logic adapted to Go per `docs/feed-adapter-contract.md`; pinned v2026.10.2) |
+| [qiangli/ycode](https://github.com/qiangli/ycode/blob/5e1538ce6281/examples/agent-zero.yaml) | MIT | `pkg/fleet/baseline/tools/zero-ycode.yaml` (one-shot harness adapted for fleet model routing and terminal usage reporting) |
 | [coder/websocket](https://github.com/coder/websocket) | ISC | pkg/sshclient (linked dependency v1.8.14; WebSocket SSH transport) |
 | [go-git/go-billy](https://github.com/go-git/go-billy) | Apache-2.0 | external/go-billy (managed vendored copy of v5.9.0: fs.go, memfs, osfs, util, helper/* verbatim; `*_test.go` and `test/` helpers omitted; osfs/os_bound.go modified per its provenance header to call clean-room boundjoin.go instead of MPL-2.0 filepath-securejoin) |
 
@@ -539,4 +540,32 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+## Ycode zero harness (`pkg/fleet/baseline/tools/zero-ycode.yaml`)
+
+Adapted from `examples/agent-zero.yaml` at ycode commit `5e1538ce6281`.
+
+```text
+MIT License
+
+Copyright (c) 2026 Qiang Li
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```

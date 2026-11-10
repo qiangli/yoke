@@ -1,0 +1,8 @@
+agents:
+  - name: zero-bedrock-glm-5
+    tool: zero-ycode
+    model: bedrock-glm-5
+    display: "passthrough · Bedrock GLM-5"
+    ledger:
+      reliability: unmeasured
+      notes: One-shot tool-free Bedrock route for metered peer requests.
