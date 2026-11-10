@@ -296,13 +296,13 @@ func cloudOverrides(ctx context.Context, flag *accountFlag, urlOverride, tokenOv
 
 // ResolveCloudAccount is ResolveCloud under an explicit account selection.
 //
-// With no selection it IS ResolveCloud, ladder and all. With one, the ladder
+// With no selection it IS ResolveMaster, ladder and all. With one, the ladder
 // is gone on purpose: the account names the endpoint and the bearer, and
 // nothing else may answer. An explicit --url/--token/--master alongside
 // `--account` is a conflict, not a precedence question.
 func ResolveCloudAccount(sel *AccountSelection, urlOverride, tokenOverride string) (base, token string, err error) {
 	if sel == nil {
-		base, token = ResolveCloud(urlOverride, tokenOverride)
+		base, token = ResolveMaster(urlOverride, tokenOverride)
 		return base, token, nil
 	}
 	if strings.TrimSpace(urlOverride) != "" || strings.TrimSpace(tokenOverride) != "" {

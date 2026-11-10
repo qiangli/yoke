@@ -17,13 +17,18 @@ import (
 
 // Pairing target vs coordination base.
 //
-// A host's Outpost pairing can move from the master control plane to a
-// satellite, but bashy's coordination calls (cross-host mb, inbox, the fleet
-// registry) still go to the coordination base. The pairing token then belongs
-// to a DIFFERENT server, and sending it there is both a 401 and a credential
-// leaked to the wrong host. So the paired token is only offered when the
-// pairing points at the base; otherwise a saved master credential is used,
-// or nothing.
+// A host pairs ONCE with the cloudbox portal (agent.json `cloudbox`, identity
+// only) and reaches satellites as attachments of its account (agent.json
+// `attachments`, docs/cloudbox-members-attach-wire.md). The coordination
+// calls (cross-host mb, inbox, sprint, the fleet registry) are served by a
+// satellite, so their default base is the attached satellite; account reads
+// default to the portal. Either way a credential is only sent to the server
+// that issued it: the attachment token to its satellite, the cloudbox host
+// token to the portal.
+//
+// Pre-migration hosts whose top-level pairing points at a satellite keep
+// working: the paired token goes only to that server, and the read-only
+// legacy ~/.config/bashy/master-token answers for the base otherwise.
 
 // configHome is $XDG_CONFIG_HOME, else <home>/.config (USERPROFILE on Windows
 // via os.UserHomeDir).
@@ -60,11 +65,15 @@ func OutpostAgentFiles() []string {
 	return out
 }
 
-// outpostAgent is the subset of agent.json this package reads.
+// outpostAgent is the subset of agent.json this package reads: the legacy
+// top-level (tunnel) pairing, the canonical cloudbox identity and the
+// satellite attachments.
 type outpostAgent struct {
-	ServerAddr  string `json:"server_addr"`
-	PortalURL   string `json:"portal_url"`
-	AccessToken string `json:"access_token"`
+	ServerAddr  string                    `json:"server_addr"`
+	PortalURL   string                    `json:"portal_url"`
+	AccessToken string                    `json:"access_token"`
+	Cloudbox    *outpostagent.Cloudbox    `json:"cloudbox,omitempty"`
+	Attachments []outpostagent.Attachment `json:"attachments,omitempty"`
 }
 
 func readOutpostAgent(path string) (outpostAgent, bool) {
@@ -77,6 +86,44 @@ func readOutpostAgent(path string) (outpostAgent, bool) {
 		return outpostAgent{}, false
 	}
 	return a, true
+}
+
+// pairingRecord is the first readable agent.json in OutpostAgentFiles order.
+func pairingRecord() (outpostAgent, bool) {
+	for _, p := range OutpostAgentFiles() {
+		if a, ok := readOutpostAgent(p); ok {
+			return a, true
+		}
+	}
+	return outpostAgent{}, false
+}
+
+// PortalBase is the cloudbox portal this host is paired with (agent.json
+// `cloudbox.portal_url`), or "" when it holds no cloudbox identity. It is the
+// default base for account reads.
+func PortalBase() string {
+	a, ok := pairingRecord()
+	if !ok || !a.Cloudbox.Paired() {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(a.Cloudbox.PortalURL), "/")
+}
+
+// CoordinationBase is the server the coordination verbs default to: the
+// first attached satellite's endpoint (one attachment per host is the
+// current server limit; the list is read in config order), else the portal,
+// else "" (no canonical config — the legacy default applies).
+func CoordinationBase() string {
+	a, ok := pairingRecord()
+	if !ok {
+		return ""
+	}
+	for _, at := range a.Attachments {
+		if ep := strings.TrimRight(strings.TrimSpace(at.Endpoint), "/"); ep != "" && strings.TrimSpace(at.Token) != "" {
+			return ep
+		}
+	}
+	return PortalBase()
 }
 
 // PairedServer is the canonical portal URL the Outpost pairing points at. For
@@ -140,11 +187,36 @@ func masterToken(base string) string {
 	return tok
 }
 
-// pairedToken is the paired-host rung of ResolveCloud: the Outpost token when
-// the pairing points at base (or its target is unknown — the pre-migration
-// behavior), else the master credential, else "".
+// pairedToken is the paired-host rung of ResolveCloud: the credential the
+// server at base issued to this host, else the legacy master credential.
+//
+//  1. an attachment whose endpoint is base → its satellite host token;
+//  2. the cloudbox pairing when its portal is base → the host token;
+//  3. the legacy top-level pairing when it points at base (or its target is
+//     unknown — the pre-migration behavior) → the Outpost token;
+//  4. otherwise the read-only legacy master-token file, else "".
 func pairedToken(base string) string {
-	if srv := PairedServer(); srv != "" && hostOf(srv) != hostOf(base) {
+	a, ok := pairingRecord()
+	if !ok {
+		return outpostToken()
+	}
+	origin := outpostagent.Origin(base)
+	for _, at := range a.Attachments {
+		if tok := strings.TrimSpace(at.Token); tok != "" && origin != "" && outpostagent.Origin(at.Endpoint) == origin {
+			return tok
+		}
+	}
+	if a.Cloudbox.Paired() && origin != "" && outpostagent.Origin(a.Cloudbox.PortalURL) == origin {
+		return strings.TrimSpace(a.Cloudbox.Token)
+	}
+	if srv := outpostagent.PortalURL(a.PortalURL, a.ServerAddr); srv != "" {
+		if hostOf(srv) == hostOf(base) {
+			return outpostToken()
+		}
+		return masterToken(base)
+	}
+	if a.Cloudbox.Paired() || len(a.Attachments) > 0 {
+		// Canonical config, but nothing here was issued by base.
 		return masterToken(base)
 	}
 	return outpostToken()
@@ -202,20 +274,33 @@ func SaveMasterToken(fromAgentJSON string) (string, error) {
 	return writeMasterTokenFile(a.AccessToken, a.ServerAddr)
 }
 
+// masterTokenDeprecation is printed (stderr) by every master-token writer. A
+// host pairs once with the cloudbox portal and reaches satellites as
+// attachments, so the coordination base needs no saved master credential;
+// the file is still READ as a legacy fallback for hosts not yet migrated.
+const masterTokenDeprecation = "deprecated: a host pairs once with cloudbox (`outpost register --code CODE`) and reaches a satellite as an attachment (`outpost satellite attach ID`); the master-token file is read only as a legacy fallback and will be removed"
+
+func warnMasterTokenDeprecated(cmd *cobra.Command) {
+	fmt.Fprintf(cmd.ErrOrStderr(), "bashy fleet %s: %s\n", cmd.Name(), masterTokenDeprecation)
+}
+
 // NewMasterTokenCmd is `master-token save --from <agent.json>`, the writer a
-// pairing migration runs BEFORE re-pairing to a satellite. Hosts mount it
-// under their fleet verb (`bashy fleet master-token`).
+// pairing migration ran BEFORE re-pairing to a satellite. Deprecated (S606):
+// pair once with cloudbox and attach instead; both writers still work and
+// print the deprecation. Hosts mount it under their fleet verb (`bashy fleet
+// master-token`).
 func NewMasterTokenCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "master-token",
-		Short: "Manage the saved coordination-base credential used after a satellite migration",
+		Short: "(deprecated) Manage the saved legacy coordination credential; pair once with cloudbox and attach a satellite instead",
 	}
 	var from string
 	save := &cobra.Command{
 		Use:   "save --from <agent.json>",
-		Short: "Save the access_token of a pre-migration Outpost agent.json (0600; never printed)",
+		Short: "(deprecated) Save the access_token of a pre-migration Outpost agent.json (0600; never printed)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			warnMasterTokenDeprecated(cmd)
 			if from == "" {
 				return fmt.Errorf("--from is required")
 			}
@@ -276,8 +361,11 @@ func newMasterTokenMintCmd() *cobra.Command {
 	var from, hostName, ttl string
 	mint := &cobra.Command{
 		Use:   "mint",
-		Short: "Mint this host's own coordination token and save it as the master credential (0600; never printed)",
+		Short: "(deprecated) Mint this host's own coordination token and save it as the master credential (0600; never printed)",
 		Long: "Mint this host's own coordination token and save it as the master credential.\n\n" +
+			"Deprecated: a host pairs once with cloudbox and reaches a satellite as an\n" +
+			"attachment, so coordination needs no master credential. The file is\n" +
+			"read only as a legacy fallback for hosts not yet migrated.\n\n" +
 			"Moving a host to a satellite mints its own tasks:read,tasks:write\n" +
 			"coordination token — name coord-<host> — from the host's existing\n" +
 			"coordination-base credential, and writes ~/.config/bashy/master-token\n" +
@@ -289,6 +377,7 @@ func newMasterTokenMintCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			warnMasterTokenDeprecated(cmd)
 			if err := validateTokenTTL(ttl); err != nil {
 				return err
 			}
@@ -321,7 +410,7 @@ func newMasterTokenMintCmd() *cobra.Command {
 				base = mintBaseURL(a.ServerAddr)
 				caller = strings.TrimSpace(a.AccessToken)
 			} else {
-				base, caller = ResolveCloud("", "")
+				base, caller = ResolveMaster("", "")
 			}
 			if caller == "" {
 				return fmt.Errorf("fleet: no coordination-base credential (pass --from <agent.json> or pair to the base first)")

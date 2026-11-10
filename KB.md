@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Account observation hook: where it can and cannot live — WHEN wiring an automatic account-collection hook (pkg/accounts) into a provider or budget path in yoke — pkg/provider is a stdlib-only nested module and pkg/llmbudget is imported BY accounts, so neither can call the hook directly pkg/accounts.ObserveSuccess cannot  (kb:account-observation-hook-where-it-can-and-cannot-live)
+- [repo/page] Gitea's 401 on a push mirror is an address refusal, not auth — WHEN a Gitea push mirror to a LAN/loopback replica answers 401 Permission denied (POST /repos/{o}/{r}/push_mirrors): it is not a credential problem — HandleRemoteAddressError maps ErrInvalidCloneAddr{IsPermissionDenied} to 401 and a correct all-scoped  (kb:gitea-s-401-on-a-push-mirror-is-an-address-refusal-not-auth)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

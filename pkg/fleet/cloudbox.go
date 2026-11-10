@@ -50,20 +50,34 @@ func (c CloudConfig) Resolve() (CloudClient, error) {
 	return CloudClient{BaseURL: base, Token: tok, HTTP: &http.Client{Timeout: 20 * time.Second}}, nil
 }
 
-// ResolveCloud is the ONE ladder every bashy-side cloudbox client walks, so a
-// paired host needs no per-feature token setup:
+// ResolveCloud is the ONE ladder every bashy-side coordination client walks
+// (cross-host mb, inbox, sprint, the fleet registry), so a paired host needs
+// no per-feature token setup:
 //
-//	URL:   override > $BASHY_CLOUDBOX_URL > https://ai.dhnt.io
+//	URL:   override > $BASHY_CLOUDBOX_URL > the attached satellite
+//	       (CoordinationBase) > the cloudbox portal > https://ai.dhnt.io
 //	Token: override > $BASHY_FLEET_TOKEN > $BASHY_API_KEY >
-//	       paired outpost token, ONLY when the pairing points at base >
-//	       master credential (MasterTokenPath) when it points elsewhere
+//	       the credential the server at base issued this host (pairedToken:
+//	       attachment token, cloudbox host token, or the legacy Outpost
+//	       pairing token) > the read-only legacy master credential
 //
-// The paired outpost's token is the derived credential — pairing is the only
-// setup a developer does. A host migrated to a satellite holds a pairing token
-// for THAT server; it is never sent to a different host (S490.5). An empty token means "not paired and nothing set";
-// the caller words the refusal for its own feature.
+// A credential is never sent to a server that did not issue it (S490.5). An
+// empty token means "not paired and nothing set"; the caller words the
+// refusal for its own feature. Account reads use ResolveMaster.
 func ResolveCloud(urlOverride, tokenOverride string) (base, token string) {
-	base = strings.TrimRight(firstNonEmptyStr(urlOverride, os.Getenv("BASHY_CLOUDBOX_URL"), "https://ai.dhnt.io"), "/")
+	return resolveCloud(urlOverride, tokenOverride, CoordinationBase())
+}
+
+// ResolveMaster is ResolveCloud for account reads and owner writes (members,
+// satellites, paired hosts, tokens, provisioning): the default base is the
+// cloudbox portal this host paired with rather than the attached satellite.
+// With no canonical cloudbox pairing it is exactly ResolveCloud.
+func ResolveMaster(urlOverride, tokenOverride string) (base, token string) {
+	return resolveCloud(urlOverride, tokenOverride, PortalBase())
+}
+
+func resolveCloud(urlOverride, tokenOverride, configBase string) (base, token string) {
+	base = strings.TrimRight(firstNonEmptyStr(urlOverride, os.Getenv("BASHY_CLOUDBOX_URL"), configBase, "https://ai.dhnt.io"), "/")
 	token = firstNonEmptyStr(tokenOverride, os.Getenv("BASHY_FLEET_TOKEN"), os.Getenv("BASHY_API_KEY"))
 	if token == "" {
 		token = pairedToken(base)

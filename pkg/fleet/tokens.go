@@ -66,12 +66,12 @@ type TokenClient struct {
 // httpClient is the shared timeout posture for token and vault calls.
 func httpClient() *http.Client { return &http.Client{Timeout: 20 * time.Second} }
 
-// NewTokenClient resolves base + caller token through ResolveCloud, the
+// NewTokenClient resolves base + caller token through ResolveMaster, the
 // ONE ladder every bashy-side cloudbox client walks (so a host still
 // paired to the base needs no extra setup, and a migrated host uses its
 // saved master credential).
 func NewTokenClient(urlOverride, tokenOverride string) (TokenClient, error) {
-	base, tok := ResolveCloud(urlOverride, tokenOverride)
+	base, tok := ResolveMaster(urlOverride, tokenOverride)
 	if tok == "" {
 		return TokenClient{}, fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token)")
 	}

@@ -109,7 +109,7 @@ func newInfraProvision(opts []Option) *cobra.Command {
 					CredentialRef: credentialRef, Builtin: isBuiltin,
 				}, openOpts, asJSON)
 			}
-			base, session := ResolveCloud(master, token)
+			base, session := ResolveMaster(master, token)
 			if session == "" {
 				return fmt.Errorf("fleet: no master session (pair with `bashy login`, set $BASHY_FLEET_TOKEN / $BASHY_API_KEY, or pass --token)")
 			}
