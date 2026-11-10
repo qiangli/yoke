@@ -152,3 +152,14 @@ func TestRepairPipeline(t *testing.T) {
 		})
 	}
 }
+
+// A repair is for a version that worked: the delegate must explain the
+// failure and fix it where the cause lives, never patch a symptom.
+func TestRepairBriefRequiresRootCauseFirst(t *testing.T) {
+	brief := repairBrief("app", Incident{ID: "i1", Path: "/"}, "")
+	for _, want := range []string{"Root cause before any fix", "app code, a test, or the environment", "change no app code"} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("repair brief lacks %q:\n%s", want, brief)
+		}
+	}
+}
