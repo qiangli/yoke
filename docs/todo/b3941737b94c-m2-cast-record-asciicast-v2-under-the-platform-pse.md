@@ -3,7 +3,7 @@ id: b3941737b94c
 kind: feature
 title: 'M2 cast record: asciicast v2 under the platform pseudo-terminal (Unix pty + Windows ConPTY)'
 seq: 3095
-status: todo
+status: wontfix
 priority: p1
 labels:
     - media
@@ -12,6 +12,7 @@ created: 2026-11-11T02:40:04.880951Z
 sprint: 603
 sprint_id: c808e55d-6ce2-5525-8829-96499861c90e
 sprint_title: 'Agent-assisted PDF and video: small verbs, a media skill-script and kb pages any agent can follow'
+closed: 2026-11-11T03:52:26.628712Z
 ---
 
 Spec: dhnt-docs docs/sprint-603-master-execution-plan.md (M2). New story.
@@ -25,3 +26,5 @@ Prior art (MIT, read only, do not vendor): github.com/gvcgo/asciinema, github.co
 TEST: `go test` for the new package: record `printf '\033[31mred\033[0m\n'` and a short sleep, parse the cast, check header width/height, monotonic timestamps, the colour bytes preserved; on Windows the same test must run (no build tags that skip it). Targeted tests only, no full suite.
 
 Agent plan: raced — several vendors each build one; the manager compares and keeps the best.
+
+Withdrawn from core 2026-11-10 before push (operator: custom command unless core is necessary). Delivery moves to bashy story M2b (examples/cast). Code kept at refs/salvage/s603-m2-core in this checkout.
