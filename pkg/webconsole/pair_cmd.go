@@ -15,7 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	qrcode "github.com/skip2/go-qrcode"
+	"github.com/qiangli/yoke/pkg/qrterm"
 	"github.com/spf13/cobra"
 )
 
@@ -188,7 +188,7 @@ func runPair(ctx context.Context, out io.Writer, opt pairOptions) error {
 
 	fmt.Fprintf(out, "bashy app pair — scan with the phone's camera\n\n")
 	if !opt.NoQR {
-		block, qerr := terminalQR(primary)
+		block, qerr := qrterm.Terminal(primary)
 		if qerr != nil {
 			fmt.Fprintf(out, "  (could not render a QR: %v)\n", qerr)
 		} else {
@@ -267,16 +267,6 @@ func redeemURL(host string, port int, secret string) string {
 		RawQuery: url.Values{"v": {pairQRVersion}, "t": {secret}}.Encode(),
 	}
 	return u.String()
-}
-
-// terminalQR renders a QR as half-block characters.
-func terminalQR(payload string) (string, error) {
-	q, err := qrcode.New(payload, qrcode.Medium)
-	if err != nil {
-		return "", err
-	}
-	q.DisableBorder = false
-	return q.ToSmallString(false), nil
 }
 
 // primaryLANAddr finds this host's outward-facing address WITHOUT sending a

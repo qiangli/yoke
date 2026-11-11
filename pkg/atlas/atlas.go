@@ -1354,6 +1354,13 @@ func init() {
 		Caps: []string{CapDaemon, CapJSON, CapSpawnsProcesses},
 		Web: &WebSurface{Label: "Apps", Mode: WebSelf, Port: 22749,
 			Start: []string{"app"}, DefaultOn: true}})
+	// `share` hands a link to someone on another device: `share qr URL` prints
+	// the URL and a terminal QR code for ANY URL (optionally a PNG). It
+	// publishes nothing and talks to no service — a bashy app URL simply opens
+	// as the owner's shapeable app page on the phone. Platform, next to `app`:
+	// it is the hand-off edge of the same web surface.
+	addVerb("share", Entry{Stage: StageCross, Group: GroupPlatform, Tier: TierUserland,
+		Caps: []string{CapJSON}})
 	addVerb("curl", staged(StageCross, provisioner(GroupNet, CapNeedsNetwork)))
 
 	// toolchains (self-provisioning, agent-mode shims)
@@ -1590,6 +1597,8 @@ func init() {
 		"llm",
 		// app WRITES through its terminal (a real shell) and its session key.
 		"app",
+		// share WRITES one PNG file, only when asked with --png.
+		"share",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
 		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
 		// anything but a torn final append, and quarantines the exact bytes it discards
@@ -1837,6 +1846,8 @@ func init() {
 		"podman", "docker", "sandbox", "ollama", "llm", "peer", "git",
 		"git-scm", "gh", "loom", "app", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "dks", "commands", "pair", "judge", "gate",
+		// share qr --png overwrites an existing file at that path.
+		"share",
 		"conform", "verify", "run", "tessaro", "login", "sota",
 		// toolchain provisioners: download + run arbitrary code (mod runs go)
 		"go", "mod", "cmake", "clang", "zig", "node", "npm", "npx", "pnpm", "yarn",
@@ -1888,7 +1899,7 @@ func init() {
 		"lexicon", "sota", "check", "conform", "verify", "run", "podman", "docker", "self",
 		"bootstrap", "upgrade", "web",
 		// v1.0.0 list, consumer or envelope still missing on the bar
-		"ping", "bus", "notify", "app", "model", "tool", "chat", "invoke",
+		"ping", "bus", "notify", "app", "share", "model", "tool", "chat", "invoke",
 		"llm", "kb", "graph", "craft", "ask", "oci", "sandbox", "loom", "ycode", "feed",
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
 		"agentic", "capability", "claim", "coach", "define", "delegate", "dks", "db",

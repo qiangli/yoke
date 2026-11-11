@@ -178,6 +178,9 @@ var packages = map[string]Package{
 	"lexicon":    cmdPkg("lexicon"),
 	"meet":       cmdPkg("meet"),
 	"webconsole": cmdPkg("app"),
+	"share":      cmdPkg("share"),
+	"qrterm": libPkg("share", "the QR renderer (terminal half-blocks, PNG) behind `share qr` and the "+
+		"`app pair` ticket; a renderer is not a verb — the two doors that print a code own the meaning of it."),
 	"webterm": libPkg("app", "the browser terminal: one pty per websocket, running bashy itself. "+
 		"Separate from webconsole so the platform-conditional pty code is one small package — "+
 		"and so outpost's /shell can later collapse onto it instead of keeping a second implementation"),

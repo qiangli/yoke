@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/qrterm"
 	"github.com/qiangli/yoke/pkg/websession"
 )
 
@@ -528,7 +529,7 @@ func TestDevicesJSONIsTypedData(t *testing.T) {
 // TestTerminalQRRenders: the code has to be scannable, and a QR that fails to
 // render must say so rather than print an empty block.
 func TestTerminalQRRenders(t *testing.T) {
-	block, err := terminalQR(redeemURL("192.168.1.20", 8639, strings.Repeat("a", 43)))
+	block, err := qrterm.Terminal(redeemURL("192.168.1.20", 8639, strings.Repeat("a", 43)))
 	if err != nil {
 		t.Fatal(err)
 	}
