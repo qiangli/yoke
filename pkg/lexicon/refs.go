@@ -55,6 +55,8 @@ func defineRef(out io.Writer, term string, asJSON bool) error {
 	case errors.Is(err, ref.ErrEmptyID):
 		return fmt.Errorf("%s: a ref needs an id after the kind — <kind>:<id>, as in %s:<id> "+
 			"(`define --list-kinds` shows the kinds)", strings.TrimSpace(term), r.Kind)
+	case errors.Is(err, ref.ErrInvalidAppID):
+		return fmt.Errorf("%s: %w", strings.TrimSpace(term), err)
 	case err != nil:
 		return err
 	}

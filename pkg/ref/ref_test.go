@@ -17,12 +17,12 @@ import (
 // reviewed decision and the atlas/docs row lands with it.
 func TestKindsIsTheVocabulary(t *testing.T) {
 	want := []Kind{"kb", "todo", "sprint", "run", "meet", "mb", "bus",
-		"agent", "person", "host", "tool", "model", "skill", "episode", "role", "out", "chat"}
+		"agent", "person", "host", "tool", "model", "skill", "episode", "role", "out", "chat", "app"}
 	if got := Kinds(); !slices.Equal(got, want) {
 		t.Fatalf("vocabulary drifted:\n got %v\nwant %v\n(a new kind needs a table row here, a resolver in its store, and an atlas row)", got, want)
 	}
-	if len(Kinds()) != 17 {
-		t.Fatalf("15 kinds, got %d", len(Kinds()))
+	if len(Kinds()) != 18 {
+		t.Fatalf("18 kinds, got %d", len(Kinds()))
 	}
 	for _, k := range Kinds() {
 		if !Known(k) {
@@ -77,10 +77,13 @@ func TestParseSpellings(t *testing.T) {
 		{"out:9c2d4f1a", Out, "9c2d4f1a", ""},
 		{"out:sha256:9c2d4f1a", Out, "sha256:9c2d4f1a", ""}, // verbatim: the store strips the scheme
 		{"chat:elif", Chat, "elif", ""},
+		{"app:desk-notepad/A_1", App, "desk-notepad/A_1", ""},
+		{"urn:dhnt:app:session/weekly-board", App, "session/weekly-board", ""},
 		{"urn:dhnt:out:9c2d4f1a", Out, "9c2d4f1a", ""},
 		{"urn:dhnt:chat:elif", Chat, "elif", ""},
 		{"dhnt:out/9c2d4f1a", Out, "9c2d4f1a", ""},
 		{"dhnt:chat/elif", Chat, "elif", ""},
+		{"dhnt:app/desk-form/board_1", App, "desk-form/board_1", ""},
 		{"role:conductor:22", Role, "conductor:22", ""}, // the id may itself carry a colon
 		// fully qualified
 		{"urn:dhnt:kb:deploy-runbook", KB, "deploy-runbook", ""},
@@ -159,6 +162,19 @@ func TestParseEmptyID(t *testing.T) {
 		if _, err := Parse(in); !errors.Is(err, ErrEmptyID) {
 			t.Errorf("Parse(%q) err = %v, want ErrEmptyID", in, err)
 		}
+	}
+}
+
+func TestAppRefValidation(t *testing.T) {
+	for _, in := range []string{"app:", "app:desk", "app:/id", "app:desk/", "app:Desk/id", "app:desk/../secret", "app:desk/..", "app:desk/.", "app:desk/id/extra", "app:desk/..\\secret", "app:desk/id space", "app:desk/%2e%2e", "app:desk/id%2fextra", "urn:dhnt:app:desk/../secret", "dhnt:app/desk/../secret"} {
+		_, err := Parse(in)
+		if !errors.Is(err, ErrInvalidAppID) && !errors.Is(err, ErrEmptyID) {
+			t.Errorf("Parse(%q) = %v, want invalid app id", in, err)
+		}
+	}
+	g := NewRegistry()
+	if !slices.Contains(g.Missing(), App) {
+		t.Fatal("unwired app kind is missing from registry coverage")
 	}
 }
 
