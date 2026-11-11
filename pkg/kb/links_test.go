@@ -47,8 +47,15 @@ Ignore [external](https://example.com/x.md) and [anchor](#section) and [non-md](
 // classified (LinkUnknown) rather than dropped or filed as a kb slug.
 func TestParseLinksEveryKind(t *testing.T) {
 	var b strings.Builder
+	// Each kind's ids follow its own grammar: an app item is <command>/<id>.
+	idFor := func(k ref.Kind, p string) string {
+		if k == ref.App {
+			return "notepad/" + p + "-app"
+		}
+		return p + "-" + string(k)
+	}
 	for _, k := range ref.Kinds() {
-		fmt.Fprintf(&b, "see [[%s:x-%s]] and [[urn:dhnt:%s:y-%s]]\n", k, k, k, k)
+		fmt.Fprintf(&b, "see [[%s:%s]] and [[urn:dhnt:%s:%s]]\n", k, idFor(k, "x"), k, idFor(k, "y"))
 	}
 	got := ParseLinks(b.String())
 	byRef := map[string]Link{}
@@ -56,7 +63,7 @@ func TestParseLinksEveryKind(t *testing.T) {
 		byRef[l.Ref()] = l
 	}
 	for _, k := range ref.Kinds() {
-		for _, id := range []string{"x-" + string(k), "y-" + string(k)} {
+		for _, id := range []string{idFor(k, "x"), idFor(k, "y")} {
 			l, ok := byRef[string(k)+":"+id]
 			if !ok {
 				t.Errorf("kind %q: link %s:%s not parsed (have %v)", k, k, id, keys(byRef))
