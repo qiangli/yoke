@@ -109,3 +109,61 @@ func TestMemberCustomCircleRoundTrip(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSuiteVerbsAgainstWire(t *testing.T) {
+	f := cloudboxfake.New(t)
+	alice := f.AddOwner("alice@example.com")
+	other := f.AddOwner("other@example.com")
+	// Pair through the public endpoints, then exercise CLI set/add/share/unshare/rm.
+	c, err := NewSuiteClient(f.URL(), alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := c.Do(t.Context(), "POST", "/api/v1/hosts/invites", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invite map[string]string
+	if err = json.Unmarshal(raw, &invite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.Do(t.Context(), "POST", "/api/v1/hosts/pair", map[string]string{"code": invite["code"], "host": "studio"}); err != nil {
+		t.Fatal(err)
+	}
+	run := func(tok string, args ...string) map[string]any {
+		t.Helper()
+		cmd := NewSuiteCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(append([]string{"--master", f.URL(), "--token", tok}, args...))
+		if e := cmd.Execute(); e != nil {
+			t.Fatalf("suite %v: %v", args, e)
+		}
+		var v map[string]any
+		if e := json.Unmarshal(out.Bytes(), &v); e != nil {
+			t.Fatalf("suite output %q: %v", out.String(), e)
+		}
+		return v
+	}
+	run(alice, "set", "bundle", "studio/chat")
+	run(alice, "add", "bundle", "studio/mail")
+	if len(run(alice, "show", "bundle")["suite"].(map[string]any)["apps"].([]any)) != 2 {
+		t.Fatal("suite set/add failed")
+	}
+	run(alice, "remove", "bundle", "studio/mail")
+	if len(run(alice, "show", "bundle")["suite"].(map[string]any)["apps"].([]any)) != 1 {
+		t.Fatal("suite remove failed")
+	}
+	grant := run(alice, "share", "bundle", "--circle", "team")["share"].(map[string]any)
+	if len(run(alice, "shares", "bundle")["shares"].([]any)) != 1 {
+		t.Fatal("suite shares failed")
+	}
+	run(alice, "unshare", "bundle", grant["id"].(string))
+	run(alice, "rm", "bundle")
+	cmd := NewSuiteCmd()
+	cmd.SetArgs([]string{"--master", f.URL(), "--token", other, "show", "bundle"})
+	if e := cmd.Execute(); e == nil {
+		t.Fatal("other owner unexpectedly accessed suite")
+	}
+}

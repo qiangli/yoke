@@ -108,6 +108,37 @@ type Host struct {
 	PairedAt   time.Time `json:"paired_at"`
 }
 
+// Share is an owner grant for one host/app, addressed to an email or circle.
+type Share struct {
+	ID        string    `json:"id"`
+	Host      string    `json:"host"`
+	App       string    `json:"app"`
+	Email     string    `json:"email"`
+	Circle    string    `json:"circle"`
+	CreatedAt time.Time `json:"created_at"`
+	owner     string
+}
+
+type SuiteApp struct {
+	Host string `json:"host"`
+	App  string `json:"app"`
+}
+type Suite struct {
+	Name      string     `json:"name"`
+	Apps      []SuiteApp `json:"apps"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	owner     string
+}
+type SuiteShare struct {
+	ID        string    `json:"id"`
+	Suite     string    `json:"suite"`
+	Email     string    `json:"email"`
+	Circle    string    `json:"circle"`
+	CreatedAt time.Time `json:"created_at"`
+	owner     string
+}
+
 // Satellite is the master's satellite record. Attached and Hosts are
 // per-caller views: Hosts for owner tokens, Attached for host tokens.
 type Satellite struct {
@@ -199,6 +230,9 @@ type Fake struct {
 	hosts       map[string]*Host // host name -> record
 	sats        map[string]*satServer
 	assignments map[string]*Assignment // host -> assignment
+	shares      map[string]*Share
+	suites      map[string]*Suite
+	suiteShares map[string]*SuiteShare
 	idem        map[string]*idemEntry
 }
 
@@ -214,7 +248,8 @@ func New(t testing.TB) *Fake {
 		hosts:       map[string]*Host{},
 		sats:        map[string]*satServer{},
 		assignments: map[string]*Assignment{},
-		idem:        map[string]*idemEntry{},
+		shares:      map[string]*Share{}, suites: map[string]*Suite{}, suiteShares: map[string]*SuiteShare{},
+		idem: map[string]*idemEntry{},
 	}
 	f.Master = httptest.NewServer(f.withIdempotency(http.HandlerFunc(f.serveMaster)))
 	t.Cleanup(func() {
@@ -513,12 +548,41 @@ func (f *Fake) serveMaster(w http.ResponseWriter, r *http.Request) {
 		e = f.pair(w, r)
 	case p == "/api/v1/hosts/self" && m == http.MethodDelete:
 		e = f.unpair(w, r)
+	case p == "/api/v1/suites" && m == http.MethodGet:
+		e = f.listSuites(w, r)
+	case func() bool { _, ok := route(p, "api/v1/hosts/:host/shares"); return ok }():
+		ps, _ := route(p, "api/v1/hosts/:host/shares")
+		if m == http.MethodGet {
+			e = f.listHostShares(w, r, ps[0])
+		} else if m == http.MethodPost {
+			e = f.addHostShare(w, r, ps[0])
+		} else {
+			e = errf(404, "not_found", "no route")
+		}
 	case p == "/api/v1/satellites" && m == http.MethodGet:
 		e = f.listSatellites(w, r)
 	case p == "/api/v1/satellites/assignment" && m == http.MethodGet:
 		e = f.listAssignments(w, r)
 	default:
-		if ps, ok := route(p, "api/v1/members/:id"); ok && m == http.MethodPatch {
+		if ps, ok := route(p, "api/v1/suites/:name"); ok && m == http.MethodGet {
+			e = f.showSuite(w, r, ps[0])
+		} else if ok && m == http.MethodPut {
+			e = f.putSuite(w, r, ps[0])
+		} else if ok && m == http.MethodDelete {
+			e = f.deleteSuite(w, r, ps[0])
+		} else if ps, ok := route(p, "api/v1/suites/:name/apps"); ok && m == http.MethodPost {
+			e = f.addSuiteApp(w, r, ps[0])
+		} else if ps, ok := route(p, "api/v1/suites/:name/apps/:host/:app"); ok && m == http.MethodDelete {
+			e = f.removeSuiteApp(w, r, ps[0], ps[1], ps[2])
+		} else if ps, ok := route(p, "api/v1/suites/:name/shares"); ok && m == http.MethodGet {
+			e = f.listSuiteShares(w, r, ps[0])
+		} else if ok && m == http.MethodPost {
+			e = f.addSuiteShare(w, r, ps[0])
+		} else if ps, ok := route(p, "api/v1/suites/:name/shares/:id"); ok && m == http.MethodDelete {
+			e = f.deleteSuiteShare(w, r, ps[0], ps[1])
+		} else if ps, ok := route(p, "api/v1/hosts/:host/shares/:id"); ok && m == http.MethodDelete {
+			e = f.deleteHostShare(w, r, ps[0], ps[1])
+		} else if ps, ok := route(p, "api/v1/members/:id"); ok && m == http.MethodPatch {
 			e = f.patchMember(w, r, ps[0])
 		} else if ok && m == http.MethodDelete {
 			e = f.deleteMember(w, r, ps[0])
