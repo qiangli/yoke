@@ -61,7 +61,13 @@ func NewSuiteCmd() *cobra.Command {
 			return e
 		}
 		if len(raw) == 0 {
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"removed": true})
+			// 204 is the server's answer to every successful write without
+			// a body (add, remove, rm): report what was done, not "removed".
+			done := "ok"
+			if method == http.MethodDelete {
+				done = "removed"
+			}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{done: true})
 		}
 		_, e = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
 		return e
