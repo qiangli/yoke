@@ -181,6 +181,24 @@ func TestDefineCmd_RefEmptyID(t *testing.T) {
 	}
 }
 
+func TestDefineCmd_AppRef(t *testing.T) {
+	g := fakeRegistry(t)
+	g.Register(ref.App, ref.NewAppResolver([]string{"session"}, func(command, id string) ([]byte, error) {
+		return []byte(`{"title":"Weekly board"}`), nil
+	}))
+	out, err := runDefine(t, "app:session/weekly-board", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n ref.Node
+	if err := json.Unmarshal([]byte(out), &n); err != nil || n.Ref != "app:session/weekly-board" || n.Title != "Weekly board" {
+		t.Fatalf("app define = %+v, %v", n, err)
+	}
+	if _, err := runDefine(t, "app:Session/weekly-board"); !errors.Is(err, ref.ErrInvalidAppID) {
+		t.Fatalf("invalid app command = %v", err)
+	}
+}
+
 // A bare word and a tool:model binding are NOT refs: they take the existing
 // term path, exit 0, and never reach a resolver.
 func TestDefineCmd_NonRefsTakeTheTermPath(t *testing.T) {
@@ -221,12 +239,16 @@ func TestDefineCmd_URNSpellingEveryKind(t *testing.T) {
 		t.Fatalf("fake registry misses %v", missing)
 	}
 	for _, k := range ref.Kinds() {
-		term := ref.URN(k, "x1")
+		id := "x1"
+		if k == ref.App {
+			id = "session/x1"
+		}
+		term := ref.URN(k, id)
 		out, err := runDefine(t, term)
 		if err != nil {
 			t.Fatalf("define %s: %v\n%s", term, err, out)
 		}
-		if want := ref.Format(k, "x1") + "  a " + string(k) + "\n"; !strings.HasPrefix(out, want) {
+		if want := ref.Format(k, id) + "  a " + string(k) + "\n"; !strings.HasPrefix(out, want) {
 			t.Errorf("define %s printed:\n%s\nwant prefix %q", term, out, want)
 		}
 	}

@@ -5,7 +5,7 @@
 //
 // Every addressable record — a kb page, a todo, a sprint, a weave run, a meet
 // room, a board post, a bus event, an agent, a person, a host, a tool, a model,
-// a skill, an episode, a role seat — has one canonical ref, `<kind>:<id>`, that
+// a skill, an episode, a role seat, an app item — has one canonical ref, `<kind>:<id>`, that
 // is the same string in prose (`[[kb:deploy-runbook]]`), on the command line
 // (`bashy define kb:deploy-runbook`), in JSON (`"ref": "kb:deploy-runbook"`)
 // and in telemetry. `urn:dhnt:<kind>:<id>` is the fully-qualified spelling for
@@ -32,8 +32,9 @@
 // emitted as a ref. Sprint 202: docs/uniform-ref-addressing.md D10–D13.
 //
 // The vocabulary is CLOSED and ratcheted (TestKindsIsTheVocabulary): adding a
-// kind is one table row here plus the owning store's resolver, and nothing
-// else. A token whose prefix is not in the table is not a ref — it is a word,
+// kind is one table row here plus an owning resolver, and nothing
+// else. App is the generic kind for registered app commands and uses the
+// injected AppResolver. A token whose prefix is not in the table is not a ref — it is a word,
 // or a `tool:model` binding such as `codex:gpt5.6-sol`, and the caller keeps
 // treating it as one.
 package ref
@@ -69,6 +70,7 @@ const (
 	Role    Kind = "role"    // an addressable seat (steward, conductor:22), not its holder
 	Out     Kind = "out"     // spilled command output, by digest-prefix handle (verbatim id)
 	Chat    Kind = "chat"    // a chat session transcript, by chat session id
+	App     Kind = "app"     // an item owned by a registered app command, by <command>/<id>
 
 	// Unknown is what a parser files a `<scheme>:<rest>` under when the scheme
 	// is not in the vocabulary. It is NEVER a member of Kinds() and never
@@ -82,7 +84,7 @@ const (
 // reachable through `kb show` is a vocabulary kind with an owning resolver.
 // cleanID leaves both ids verbatim — an out handle is a digest prefix (never
 // `#`-stripped) and a chat id is a session id.
-var kinds = []Kind{KB, Todo, Sprint, Run, Meet, MB, Bus, Agent, Person, Host, Tool, Model, Skill, Episode, Role, Out, Chat}
+var kinds = []Kind{KB, Todo, Sprint, Run, Meet, MB, Bus, Agent, Person, Host, Tool, Model, Skill, Episode, Role, Out, Chat, App}
 
 var known = func() map[Kind]bool {
 	m := make(map[Kind]bool, len(kinds))
@@ -160,6 +162,9 @@ var (
 	ErrUnknownKind = errors.New("ref: unknown kind")
 	// ErrEmptyID: a known kind with nothing after the colon.
 	ErrEmptyID = errors.New("ref: empty id")
+	// ErrInvalidAppID: an app ref must contain a registered-command-shaped
+	// command and one opaque, path-safe item id.
+	ErrInvalidAppID = errors.New("ref: invalid app id")
 )
 
 // Parse reads one of the three accepted spellings:
@@ -206,6 +211,11 @@ func parseCanonical(s, raw string, qualified bool) (Ref, error) {
 	if id == "" {
 		return Ref{Kind: k, Raw: raw}, ErrEmptyID
 	}
+	if k == App {
+		if _, _, err := SplitAppID(id); err != nil {
+			return Ref{Kind: k, ID: id, Raw: raw}, err
+		}
+	}
 	return Ref{Kind: k, ID: id, Raw: raw}, nil
 }
 
@@ -220,6 +230,11 @@ func parseLegacy(s, raw string) (Ref, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Ref{Kind: k, Raw: raw}, ErrEmptyID
+	}
+	if k == App {
+		if _, _, err := SplitAppID(name); err != nil {
+			return Ref{Kind: k, ID: name, Raw: raw}, err
+		}
 	}
 	return Ref{Kind: k, ID: name, Qualifier: strings.TrimSpace(owner), Raw: raw}, nil
 }
