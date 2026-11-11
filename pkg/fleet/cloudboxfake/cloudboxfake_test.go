@@ -72,6 +72,44 @@ func obj(m map[string]any, k string) map[string]any { v, _ := m[k].(map[string]a
 func list(m map[string]any, k string) []any         { v, _ := m[k].([]any); return v }
 func str(m map[string]any, k string) string         { v, _ := m[k].(string); return v }
 
+func TestCircleNamesOwnerDefined(t *testing.T) {
+	f := New(t)
+	alice, bob := f.AddOwner("alice@example.com"), f.AddOwner("bob@example.com")
+	m := call{t, f.URL()}
+
+	// Reserved and malformed names fail closed with an actionable reason.
+	for _, circle := range []string{"public", "owner", "Bad Circle", "team:ops", "UPPER", "under_score", "a23456789012345678901234567890123"} {
+		m.wantErr(422, "invalid_circle", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": circle})
+	}
+	got := m.want(422, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "public"})
+	if msg := str(got, "error"); !strings.Contains(msg, "reserved") || !strings.Contains(msg, "family") {
+		t.Fatalf("reserved error not actionable: %q", msg)
+	}
+
+	// A custom circle round-trips: invite, set, ls filter.
+	add := m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "hiking-club"})
+	mem := obj(add, "member")
+	if str(mem, "circle") != "hiking-club" {
+		t.Fatalf("custom circle member = %v", mem)
+	}
+	if got := list(m.want(200, "GET", "/api/v1/members?circle=hiking-club", alice, nil), "members"); len(got) != 1 {
+		t.Fatalf("ls circle=hiking-club = %v", got)
+	}
+	p := m.want(200, "PATCH", "/api/v1/members/"+str(mem, "id"), alice, map[string]string{"circle": "x1"})
+	if str(obj(p, "member"), "circle") != "x1" {
+		t.Fatalf("patch to custom circle = %v", p)
+	}
+	if got := list(m.want(200, "GET", "/api/v1/members?circle=hiking-club", alice, nil), "members"); len(got) != 0 {
+		t.Fatalf("ls old circle after set = %v", got)
+	}
+	// The invitee files the reverse row under their own custom circle.
+	acc := m.want(200, "POST", "/api/v1/member/invitations/"+str(obj(add, "invitation"), "id")+"/accept", bob, map[string]string{"circle": "work-2026"})
+	if rev := obj(acc, "reverse"); str(rev, "circle") != "work-2026" {
+		t.Fatalf("reverse row custom circle = %v", rev)
+	}
+	m.wantErr(422, "invalid_circle", "PATCH", "/api/v1/members/"+str(mem, "id"), alice, map[string]string{"circle": "owner"})
+}
+
 func TestMembersMutualAccept(t *testing.T) {
 	f := New(t)
 	alice, bob := f.AddOwner("alice@example.com"), f.AddOwner("bob@example.com")
@@ -81,7 +119,7 @@ func TestMembersMutualAccept(t *testing.T) {
 	ro := f.AddToken("alice@example.com", ScopeMembersRead)
 	m.wantErr(403, "insufficient_scope", "POST", "/api/v1/members", ro, map[string]string{"email": "bob@example.com"})
 	m.wantErr(422, "invalid_circle", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "Bad Circle"})
-	m.wantErr(422, "invalid_circle", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "default"})
+	m.wantErr(422, "invalid_circle", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "team:ops"})
 	m.wantErr(422, "self_member", "POST", "/api/v1/members", alice, map[string]string{"email": "alice@example.com"})
 	m.wantErr(400, "bad_request", "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circel": "x"})
 

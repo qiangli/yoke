@@ -222,6 +222,44 @@ func TestPeerAddRefusesNonMember(t *testing.T) {
 	}
 }
 
+// A circle is any owner-defined name: llm peer add --circle with a custom
+// slug is accepted when the mutual member currently carries that circle.
+func TestPeerAddAcceptsCustomCircle(t *testing.T) {
+	row := boundary.Member{Email: "bob@example.com", Circle: "hiking-club", Status: "active", Mutual: true}
+	fixture := &memberFixture{}
+	fixture.set(row)
+	server := httptest.NewServer(fixture)
+	t.Cleanup(server.Close)
+
+	oldPath, oldClient := peersPath, peerMemberClient
+	path := filepath.Join(t.TempDir(), "peers.json")
+	peersPath = func() (string, error) { return path, nil }
+	peerMemberClient = func() (MemberAuthorizer, error) {
+		return &boundary.Client{BaseURL: server.URL, Token: "owner", HTTP: server.Client()}, nil
+	}
+	t.Cleanup(func() { peersPath, peerMemberClient = oldPath, oldClient })
+
+	cmd := newPeerAddCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"bob", "--email", "bob@example.com", "--circle", "hiking-club", "--share", "allow"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := LoadPeerShares(path)
+	if err != nil || ps.Peers["bob"].Circle != "hiking-club" {
+		t.Fatalf("custom circle peer = %+v err=%v", ps.Peers["bob"], err)
+	}
+
+	fixture.set(boundary.Member{Email: row.Email, Circle: "team", Status: "active", Mutual: true})
+	cmd = newPeerAddCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"carol", "--email", "bob@example.com", "--circle", "hiking-club", "--share", "allow"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "not an active mutual member") {
+		t.Fatalf("stale custom circle add err = %v", err)
+	}
+}
+
 func peerPost(t *testing.T, h *harness, path, cred string, hdr map[string]string) (int, string) {
 	t.Helper()
 	req, _ := http.NewRequest("POST", h.server.URL+path, strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"q"}]}`))

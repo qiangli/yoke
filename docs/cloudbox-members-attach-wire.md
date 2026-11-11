@@ -86,11 +86,14 @@ may cache those for up to 30 s; nothing else is cacheable.
 ## 2. Members (master)
 
 A member row is directional: **owner → member email, filed under a circle**.
-`circle` is the owner's private label for that person, from the **closed set
-`family` | `friend` | `team` | `guest`**, default `guest` (least privilege).
-Any other value is `422 invalid_circle`. (Named teams such as `team:<name>`
-are a later follow-up and are not part of this contract.) Circles scope
-sharing decisions downstream (e.g. `bashy llm peer --circle`, S583.8 catalog
+`circle` is the owner's private label for that person: **any owner-chosen
+lowercase slug `[a-z0-9-]` of 1–32 characters**, default `guest` (least
+privilege). `family` | `friend` | `team` | `guest` are the **default
+suggestions**, not a closed set; `public` and `owner` are reserved. A
+malformed or reserved value is `422 invalid_circle` with an actionable
+reason. There is no circle table: a circle exists while some member carries
+it; listings offer the defaults plus names in use. Circles scope sharing
+decisions downstream (e.g. `bashy llm peer --circle`, S583.8 catalog
 circles).
 
 ```json
@@ -406,7 +409,10 @@ no browser. Shapes (names are the W1–W3 deliverables):
 3. **Circle visibility** — least disclosure: `members/of` rows and
    invitations carry the owner/from email, status, mutual and since, never
    the owner's circle.
-4. **Circles** — closed set `family|friend|team|guest`, default `guest`;
-   `team:<name>` is a later follow-up.
+4. **Circles** — owner-defined names: a lowercase slug `[a-z0-9-]` of 1–32
+   chars; `public` and `owner` are reserved. `family|friend|team|guest` are
+   default suggestions; default for a new member is `guest`. (Supersedes the
+   earlier closed-set ruling; `team:<name>` syntax is dropped in favor of
+   plain slugs.)
 5. **One satellite per host** — current server limit, not an invariant; the
    assignment stays a list.
