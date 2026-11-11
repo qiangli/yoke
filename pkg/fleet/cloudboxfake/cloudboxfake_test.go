@@ -387,3 +387,41 @@ func TestErrorEnvelopeOnUnknownRoute(t *testing.T) {
 		t.Fatalf("headers = %v", hdr)
 	}
 }
+
+func TestHostCircleSharesAndSuiteAccessAreLive(t *testing.T) {
+	f := New(t)
+	alice, bob := f.AddOwner("alice@example.com"), f.AddOwner("bob@example.com")
+	m := call{t, f.URL()}
+	hostTok := pairHost(m, alice, "studio")
+	// Host tokens are identity-only and cannot administer account shares.
+	m.wantErr(403, "insufficient_scope", "GET", "/api/v1/hosts/studio/shares", hostTok, nil)
+	invite := obj(m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "team"}), "invitation")
+	m.want(200, "POST", "/api/v1/member/invitations/"+str(invite, "id")+"/accept", bob, nil)
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]string{"app": "chat", "circle": "team"})
+	m.wantErr(400, "invalid_share", "POST", "/api/v1/hosts/studio/shares", alice, map[string]string{"app": "chat"})
+	m.wantErr(400, "invalid_share", "POST", "/api/v1/hosts/studio/shares", alice, map[string]string{"app": "chat", "email": "bob@example.com", "circle": "team"})
+	if !f.CanReach("bob@example.com", "studio", "chat") {
+		t.Fatal("circle share did not grant")
+	}
+	mem := list(m.want(200, "GET", "/api/v1/members", alice, nil), "members")[0].(map[string]any)
+	m.want(200, "PATCH", "/api/v1/members/"+str(mem, "id"), alice, map[string]string{"circle": "other"})
+	if f.CanReach("bob@example.com", "studio", "chat") {
+		t.Fatal("circle edit did not revoke live access")
+	}
+	// Suite CLI and the fake wire share one live state.
+	m.want(200, "PUT", "/api/v1/suites/work", alice, map[string]any{"apps": []any{map[string]string{"host": "studio", "app": "chat"}}})
+	m.want(201, "POST", "/api/v1/suites/work/shares", alice, map[string]string{"circle": "other"})
+	if !f.CanReach("bob@example.com", "studio", "chat") {
+		t.Fatal("suite circle grant did not grant")
+	}
+	m.want(204, "DELETE", "/api/v1/suites/work/apps/studio/chat", alice, nil)
+	if f.CanReach("bob@example.com", "studio", "chat") {
+		t.Fatal("suite app removal did not revoke live access")
+	}
+	m.wantErr(400, "invalid_suite", "PUT", "/api/v1/suites/Bad", alice, map[string]any{"apps": []any{}})
+	m.wantErr(403, "not_owner", "PUT", "/api/v1/suites/foreign", bob, map[string]any{"apps": []any{map[string]string{"host": "studio", "app": "chat"}}})
+	hostOnly := f.AddToken("alice@example.com", ScopeHost)
+	m.wantErr(403, "insufficient_scope", "GET", "/api/v1/suites", hostOnly, nil)
+	memberToken := f.AddToken("alice@example.com", ScopeMembersRead, ScopeMembersWrite)
+	m.wantErr(403, "insufficient_scope", "GET", "/api/v1/suites", memberToken, nil)
+}

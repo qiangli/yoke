@@ -416,3 +416,44 @@ no browser. Shapes (names are the W1–W3 deliverables):
    plain slugs.)
 5. **One satellite per host** — current server limit, not an invariant; the
    assignment stays a list.
+
+## 8. Circles and app suites (master)
+
+This section is the S9 public wire contract shared by the cloudbox server,
+this fake and its clients.
+
+### Circle audience on single-app shares
+
+`POST /api/v1/hosts/{host}/shares` body `{"app": A, "email": E}` OR
+`{"app": A, "circle": C}` (exactly one of email|circle; both or neither
+-> 400 invalid_share).
+
+Row JSON: `{"id","host","app","email","circle","created_at"}` —
+email `""` for a circle row, circle `""` for an email row.
+
+`GET` lists both kinds; `DELETE /api/v1/hosts/{host}/shares/{id}` unchanged.
+
+### Suites (owner-account level named set of host/app)
+
+- `GET /api/v1/suites` -> `{"suites":[{"name","apps":[{"host","app"}],"created_at","updated_at"}]}`
+- `GET /api/v1/suites/{name}` -> `{"suite":{...}}` 404 not_found
+- `PUT /api/v1/suites/{name}` `{"apps":[{"host","app"}]}` create or replace; every host must be owned by the caller (else 403 not_owner)
+- `POST /api/v1/suites/{name}/apps` `{"host","app"}` add (idempotent)
+- `DELETE /api/v1/suites/{name}/apps/{host}/{app}` remove (idempotent)
+- `DELETE /api/v1/suites/{name}` delete suite and its grants
+- `GET /api/v1/suites/{name}/shares` -> `{"shares":[{"id","suite","email","circle","created_at"}]}`
+- `POST /api/v1/suites/{name}/shares` `{"email":E}` OR `{"circle":C}`
+- `DELETE /api/v1/suites/{name}/shares/{id}`
+
+Errors: `{"error": "<code>"}` with codes invalid_suite, invalid_circle,
+invalid_share, not_found, not_owner.
+
+### Access semantics
+
+CanReach(member, host, app) is true when an existing email row matches OR
+the member is an active, mutual member of the host owner whose CURRENT circle
+equals a circle on a matching single-app row, OR on a grant of a suite that
+contains (host, app). Evaluate live: membership/circle/suite edits change
+access with no re-share. Implementation may materialize rows
+(Source=suite/circle, rebuilt on change like scopedpairing.Sync) or evaluate
+at check time - result must be identical.
