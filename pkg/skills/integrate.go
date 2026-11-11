@@ -189,12 +189,49 @@ func UpsertInstructionBlock(path, skill, body string) (bool, error) {
 // --- MCP registration ---------------------------------------------------------
 
 // mcpServerName and the entry below are the bashy MCP server every tool is
-// offered: `bashy mcp serve`, speaking MCP over stdio.
+// offered: `bashy mcp serve`, speaking MCP over stdio. The command is the
+// absolute path of the running binary (see mcpServerCommand), never the bare
+// name a fresh session's PATH may not resolve.
 const mcpServerName = "bashy"
 
-var mcpServerEntry = map[string]any{
-	"command": "bashy",
-	"args":    []string{"mcp", "serve"},
+func mcpServerEntry() map[string]any {
+	return map[string]any{
+		"command": mcpServerCommand(),
+		"args":    []string{"mcp", "serve"},
+	}
+}
+
+// bashyExecutable is the running binary's path; a seam for tests.
+var bashyExecutable = os.Executable
+
+// mcpServerCommand is the server command written into a tool's config: the
+// absolute path of the running bashy with symlinks resolved, so a session
+// whose PATH lacks the install dir still starts the server. The bare name is
+// the fallback only when the path cannot be read.
+func mcpServerCommand() string {
+	exe, err := bashyExecutable()
+	if err != nil || exe == "" {
+		return mcpServerName
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	return exe
+}
+
+// mcpServerArgv substitutes the absolute server command into a tool's
+// declared registration argv at registration time: the bare `bashy` after
+// the `--` separator (the seeded YAMLs keep the portable name; the token
+// before `--` is the server NAME and stays).
+func mcpServerArgv(cli []string) []string {
+	out := append([]string{}, cli...)
+	for i := range out {
+		if out[i] == "--" && i+1 < len(out) && out[i+1] == mcpServerName {
+			out[i+1] = mcpServerCommand()
+			break
+		}
+	}
+	return out
 }
 
 // runMCPRegistration execs a tool's OWN MCP-registration command, the argv
@@ -217,14 +254,15 @@ func registerToolMCP(w, errw io.Writer, tool string, mcp *fleet.IntegrationMCP, 
 		return fmt.Errorf("skills: tool %q declares no MCP registration (add integration.mcp.cli, or integration.mcp.config and .key for the entry to print)", tool)
 	}
 	if len(mcp.CLI) > 0 {
+		argv := mcpServerArgv(mcp.CLI)
 		if dryRun {
-			fmt.Fprintf(w, "mcp (dry run): %s\n", displayArgv(mcp.CLI))
+			fmt.Fprintf(w, "mcp (dry run): %s\n", displayArgv(argv))
 			return nil
 		}
-		if err := runMCPRegistration(mcp.CLI, w, errw); err != nil {
+		if err := runMCPRegistration(argv, w, errw); err != nil {
 			return fmt.Errorf("skills: %s's own registration command failed: %w", tool, err)
 		}
-		fmt.Fprintf(w, "mcp: registered the %s server with %s via its own command (%s)\n", mcpServerName, tool, displayArgv(mcp.CLI))
+		fmt.Fprintf(w, "mcp: registered the %s server with %s via its own command (%s)\n", mcpServerName, tool, displayArgv(argv))
 		return nil
 	}
 	doc, err := mcpEntryDoc(mcp)
@@ -246,10 +284,7 @@ func registerToolMCP(w, errw io.Writer, tool string, mcp *fleet.IntegrationMCP, 
 // default). The tool's declared Entry fields merge into the server entry and
 // its Root keys sit beside the server map.
 func mcpEntryDoc(mcp *fleet.IntegrationMCP) (string, error) {
-	entry := map[string]any{}
-	for k, v := range mcpServerEntry {
-		entry[k] = v
-	}
+	entry := mcpServerEntry()
 	for k, v := range mcp.Entry {
 		entry[k] = v
 	}

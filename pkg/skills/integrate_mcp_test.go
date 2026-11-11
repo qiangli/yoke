@@ -41,14 +41,48 @@ func mcpTools() []fleet.Tool {
 func swapMCPSeams(t *testing.T, tools func() []fleet.Tool) *[][]string {
 	t.Helper()
 	var ran [][]string
-	origTools, origRun := fleetTools, runMCPRegistration
+	origTools, origRun, origExe := fleetTools, runMCPRegistration, bashyExecutable
 	fleetTools = tools
 	runMCPRegistration = func(argv []string, stdout, stderr io.Writer) error {
 		ran = append(ran, argv)
 		return nil
 	}
-	t.Cleanup(func() { fleetTools, runMCPRegistration = origTools, origRun })
+	bashyExecutable = func() (string, error) { return fakeBashyExe, nil }
+	t.Cleanup(func() { fleetTools, runMCPRegistration, bashyExecutable = origTools, origRun, origExe })
 	return &ran
+}
+
+// fakeBashyExe stands in for the running binary: registrations must carry
+// its absolute path, not the bare name.
+const fakeBashyExe = "/opt/bashy/bin/bashy"
+
+// The registered command is the running binary's absolute path with symlinks
+// resolved; the bare name only when the path cannot be read.
+func TestMCPServerCommandIsAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "bashy-real")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "bashy")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	orig := bashyExecutable
+	t.Cleanup(func() { bashyExecutable = orig })
+	bashyExecutable = func() (string, error) { return link, nil }
+	want, _ := filepath.EvalSymlinks(real)
+	if got := mcpServerCommand(); got != want {
+		t.Fatalf("mcpServerCommand() = %q, want %q", got, want)
+	}
+	bashyExecutable = func() (string, error) { return "", os.ErrNotExist }
+	if got := mcpServerCommand(); got != "bashy" {
+		t.Fatalf("fallback = %q", got)
+	}
+	got := mcpServerArgv([]string{"claw", "mcp", "add", "bashy", "--", "bashy", "mcp", "serve"})
+	if !slices.Equal(got, []string{"claw", "mcp", "add", "bashy", "--", "bashy", "mcp", "serve"}) {
+		t.Fatalf("fallback argv = %v", got)
+	}
 }
 
 // --mcp registers the bashy MCP server by running the tool's OWN declared
@@ -66,7 +100,9 @@ func TestExportMCPRunsToolsOwnCommand(t *testing.T) {
 	if err := runExport(cmd, cfg, "guide", "", []string{"claw"}, false, false, false, true, false); err != nil {
 		t.Fatalf("export: %v\n%s", err, errb.String())
 	}
-	if len(*ran) != 1 || !slices.Equal((*ran)[0], []string{"claw", "mcp", "add", "-s", "user", "bashy", "--", "bashy", "mcp", "serve"}) {
+	// The server NAME before `--` stays `bashy`; the command after it is the
+	// running binary's absolute path.
+	if len(*ran) != 1 || !slices.Equal((*ran)[0], []string{"claw", "mcp", "add", "-s", "user", "bashy", "--", fakeBashyExe, "mcp", "serve"}) {
 		t.Fatalf("registration ran %v", *ran)
 	}
 	// The skill export itself still happened into the tool's declared roots.
@@ -92,7 +128,7 @@ func TestExportMCPDryRunPrintsCommandWithoutRunningIt(t *testing.T) {
 	if len(*ran) != 0 {
 		t.Fatalf("dry run executed %v", *ran)
 	}
-	if !strings.Contains(out.String(), "claw mcp add -s user bashy -- bashy mcp serve") {
+	if !strings.Contains(out.String(), "claw mcp add -s user bashy -- "+fakeBashyExe+" mcp serve") {
 		t.Fatalf("dry-run output = %q", out.String())
 	}
 }
@@ -120,7 +156,7 @@ func TestExportMCPWithoutCLIPrintsEntryInsteadOfEditing(t *testing.T) {
 		filepath.Join(home, ".quiet", "servers.toml"),
 		"mcp_servers",
 		"bashy",
-		`command = "bashy"`,
+		`command = "` + fakeBashyExe + `"`,
 		`args = ["mcp", "serve"]`,
 	} {
 		if !strings.Contains(s, want) {
@@ -179,7 +215,7 @@ func TestCLIExportMCPDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "claw mcp add -s user bashy -- bashy mcp serve") {
+	if !strings.Contains(stdout, "claw mcp add -s user bashy -- "+fakeBashyExe+" mcp serve") {
 		t.Fatalf("stdout = %q", stdout)
 	}
 }
@@ -188,6 +224,7 @@ func TestCLIExportMCPDryRun(t *testing.T) {
 // type/mode per server, schema_version at the root) gets them in the printed
 // entry, and the bashy command stays intact.
 func TestMCPEntryDocCarriesToolSchemaExtras(t *testing.T) {
+	swapMCPSeams(t, mcpTools)
 	doc, err := mcpEntryDoc(&fleet.IntegrationMCP{
 		Format: "json",
 		Key:    "mcpServers",
@@ -205,7 +242,7 @@ func TestMCPEntryDocCarriesToolSchemaExtras(t *testing.T) {
 		t.Fatalf("entry is not JSON: %v\n%s", err, doc)
 	}
 	e := got.Servers[mcpServerName]
-	if got.Schema != 1 || e["type"] != "stdio" || e["mode"] != "optional" || e["command"] != "bashy" {
+	if got.Schema != 1 || e["type"] != "stdio" || e["mode"] != "optional" || e["command"] != fakeBashyExe {
 		t.Fatalf("entry lost the tool's schema extras or the command:\n%s", doc)
 	}
 }

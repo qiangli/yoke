@@ -198,7 +198,7 @@ func TestExportDryRunWritesNothing(t *testing.T) {
 		"would write " + filepath.Join(to, "guide"),
 		"would write " + filepath.Join(home, ".claw", "skills", "guide"),
 		"block to " + filepath.Join(home, ".claw", "AGENTS.md"),
-		"claw mcp add bashy -- bashy mcp serve",
+		"claw mcp add bashy -- " + fakeBashyExe + " mcp serve",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("preview missing %q:\n%s", want, out.String())
