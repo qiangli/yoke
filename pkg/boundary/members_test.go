@@ -19,6 +19,7 @@ func TestAllowed(t *testing.T) {
 	}{
 		{"email", &active, []string{"bob@example.com"}, true},
 		{"circle", &active, []string{"family"}, true},
+		{"custom circle", &Member{Email: active.Email, Circle: "hiking-club", Status: "active", Mutual: true}, []string{"hiking-club"}, true},
 		{"wrong circle", &active, []string{"team"}, false},
 		{"inactive", &Member{Email: active.Email, Circle: "family", Status: "pending", Mutual: true}, []string{"family"}, false},
 		{"one sided", &Member{Email: active.Email, Circle: "family", Status: "active"}, []string{"family"}, false},
@@ -35,6 +36,18 @@ func TestAllowed(t *testing.T) {
 				t.Fatalf("Allowed=%t, want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAllowedCustomCircle: a circle is any owner-defined name — Allowed
+// matches a custom circle slug exactly like a default one.
+func TestAllowedCustomCircle(t *testing.T) {
+	row := Member{Email: "bob@example.com", Circle: "hiking-club", Status: "active", Mutual: true}
+	if !Allowed(row.Email, []string{"hiking-club"}, []Member{row}) {
+		t.Fatal("custom circle not allowed for an active mutual member in it")
+	}
+	if Allowed(row.Email, []string{"family"}, []Member{row}) {
+		t.Fatal("default circle allowed for a member filed under a custom circle")
 	}
 }
 

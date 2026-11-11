@@ -66,10 +66,46 @@ func TestMemberVerbsAgainstWire(t *testing.T) {
 }
 
 func TestMemberRejectsBadCircleBeforeNetwork(t *testing.T) {
-	cmd := NewMemberCmd()
-	cmd.SetArgs([]string{"invite", "bob@example.com", "--circle", "stranger"})
-	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "invalid circle") {
-		t.Fatal(err)
+	for _, circle := range []string{"Bad Circle", "owner", "public"} {
+		cmd := NewMemberCmd()
+		cmd.SetArgs([]string{"invite", "bob@example.com", "--circle", circle})
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "invalid circle") && !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("circle %q: %v", circle, err)
+		}
+	}
+}
+
+func TestMemberCustomCircleRoundTrip(t *testing.T) {
+	f := cloudboxfake.New(t)
+	alice := f.AddOwner("alice@example.com")
+	bob := f.AddOwner("bob@example.com")
+	run := func(token string, args ...string) map[string]any {
+		t.Helper()
+		cmd := NewMemberCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(append([]string{"--master", f.URL(), "--token", token, "--json"}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("member %v: %v", args, err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("member %v output %q: %v", args, out.String(), err)
+		}
+		return result
+	}
+	invitation := run(alice, "invite", "bob@example.com", "--circle", "hiking-club")["invitation"].(map[string]any)["id"].(string)
+	run(bob, "accept", invitation, "--circle", "work-2026")
+	if got := run(alice, "ls", "--circle", "hiking-club"); len(got["members"].([]any)) != 1 {
+		t.Fatal(got)
+	}
+	run(alice, "set", "bob@example.com", "--circle", "x1")
+	if got := run(alice, "check", "bob@example.com"); got["allowed"] != true || got["circle"] != "x1" {
+		t.Fatal(got)
+	}
+	if got := run(alice, "ls", "--circle", "hiking-club"); len(got["members"].([]any)) != 0 {
+		t.Fatal(got)
 	}
 }

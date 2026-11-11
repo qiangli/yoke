@@ -450,18 +450,33 @@ func route(path, pattern string) ([]string, bool) {
 
 // --- master -----------------------------------------------------------------
 
-// Circles is the closed circle set; DefaultCircle is least privilege.
+// Circles is the default circle suggestions; DefaultCircle is least
+// privilege. A circle is any owner-chosen name passing validCircle.
 var Circles = []string{"family", "friend", "team", "guest"}
 
 const DefaultCircle = "guest"
 
+// reservedCircles name built-in audiences that may not be member circles.
+var reservedCircles = []string{"public", "owner"}
+
+// validCircle enforces the circle rule: a lowercase slug [a-z0-9-] of 1-32
+// characters; reserved names refused. The error text is actionable.
 func validCircle(c string) *apiError {
-	for _, ok := range Circles {
-		if c == ok {
-			return nil
+	const rule = "a lowercase slug [a-z0-9-] of 1-32 chars, e.g. family, friend, team, guest or your own name"
+	for _, r := range reservedCircles {
+		if c == r {
+			return errf(422, "invalid_circle", "circle %q is reserved; pick %s", c, rule)
 		}
 	}
-	return errf(422, "invalid_circle", "circle %q is not one of %s", c, strings.Join(Circles, "|"))
+	if len(c) < 1 || len(c) > 32 {
+		return errf(422, "invalid_circle", "circle %q is %d chars; want %s", c, len(c), rule)
+	}
+	for _, r := range c {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return errf(422, "invalid_circle", "circle %q: use %s", c, rule)
+		}
+	}
+	return nil
 }
 
 // mutual reports whether a and b each hold an active row for the other —

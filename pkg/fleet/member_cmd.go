@@ -280,13 +280,24 @@ func NewMemberCmd() *cobra.Command {
 	return root
 }
 
+// memberCircle checks the client side of the circle rule (the master
+// re-checks): a lowercase slug [a-z0-9-] of 1-32 chars; public and owner are
+// reserved. family, friend, team and guest are only the defaults.
 func memberCircle(s string, required bool) (string, error) {
 	if s == "" && !required {
 		return "guest", nil
 	}
-	switch s {
-	case "family", "friend", "team", "guest":
-		return s, nil
+	const rule = "a lowercase slug [a-z0-9-] of 1-32 chars, e.g. family, friend, team, guest or your own name"
+	if s == "public" || s == "owner" {
+		return "", fmt.Errorf("member: circle %q is reserved; pick %s", s, rule)
 	}
-	return "", fmt.Errorf("member: invalid circle %q (family, friend, team, guest)", s)
+	if len(s) < 1 || len(s) > 32 {
+		return "", fmt.Errorf("member: invalid circle %q (%d chars; want %s)", s, len(s), rule)
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return "", fmt.Errorf("member: invalid circle %q (use %s)", s, rule)
+		}
+	}
+	return s, nil
 }
