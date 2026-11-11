@@ -588,7 +588,8 @@ after a share rotation; no model YAML or secrets.map is needed.
 }
 
 // grantPeerDoor is the toolcmd peer entry for g: the mesh forward when the
-// door shares over the mesh, else its cloudbox app keyed in the path.
+// door shares over the mesh, else its cloudbox app (the credential is sent as
+// the client's API key, never in the URL).
 func grantPeerDoor(ctx context.Context, g DoorGrant) (toolcmd.PeerDoor, error) {
 	if g.MeshPeerID != "" {
 		addr, err := ensureMeshForward(ctx, g, meshBindHost())
@@ -596,7 +597,7 @@ func grantPeerDoor(ctx context.Context, g DoorGrant) (toolcmd.PeerDoor, error) {
 			return toolcmd.PeerDoor{URL: "http://" + addr, Credential: g.Credential}, err
 		}
 	}
-	return toolcmd.PeerDoor{URL: g.CloudboxURL + "/k/" + g.Credential, Credential: g.Credential}, nil
+	return toolcmd.PeerDoor{URL: g.CloudboxURL, Credential: g.Credential}, nil
 }
 
 // meshBindHost is where a new mesh forward listens by default: loopback,
@@ -685,20 +686,16 @@ func meshAddrFrom(out []byte, addr string) string {
 	return addr
 }
 
-// peerEnvVars is the client environment for a peer: base already carries
-// the key in the path when keyInPath (the cloudbox front strips
-// Authorization); the *_API_KEY values are the credential either way.
-func peerEnvVars(base, cred string, keyInPath bool) map[string]string {
-	ollama := base + "/k/" + cred
-	if keyInPath {
-		ollama = base
-	}
+// peerEnvVars is the client environment for a peer. The credential travels
+// only as the client's API key (an Authorization or x-api-key header), never in
+// a URL: URLs land in logs, shell history and browser bars. Native Ollama
+// clients send no credential header, so a peer gets no OLLAMA_HOST.
+func peerEnvVars(base, cred string) map[string]string {
 	return map[string]string{
 		"OPENAI_BASE_URL":    base + "/v1",
 		"OPENAI_API_KEY":     cred,
 		"ANTHROPIC_BASE_URL": base + "/anthropic",
 		"ANTHROPIC_API_KEY":  cred,
-		"OLLAMA_HOST":        ollama,
 	}
 }
 
@@ -734,13 +731,12 @@ func envFrom(ctx context.Context, from, via, bindHost string) (string, map[strin
 			return "", nil, "", fmt.Errorf("llm env: mesh forward to %s: %w", g.Door, err)
 		}
 		base := "http://" + addr
-		return base, peerEnvVars(base, g.Credential, false), via, nil
+		return base, peerEnvVars(base, g.Credential), via, nil
 	case "cloudbox":
 		if g.CloudboxURL == "" {
 			return "", nil, "", fmt.Errorf("llm env: %s did not share its door over cloudbox; run `bashy llm share %s --via both` on %s", g.Door, thisHostName(), g.Door)
 		}
-		base := g.CloudboxURL + "/k/" + g.Credential
-		return g.CloudboxURL, peerEnvVars(base, g.Credential, true), via, nil
+		return g.CloudboxURL, peerEnvVars(g.CloudboxURL, g.Credential), via, nil
 	}
 	return "", nil, "", fmt.Errorf("llm env: unknown route %q with --from (want mesh or cloudbox)", via)
 }

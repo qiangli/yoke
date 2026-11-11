@@ -34,7 +34,7 @@ func TestDoorModelImportAndRotation(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("resolve %s: %v %v", name, ok, err)
 			}
-			if m.ModelID != "codex-gpt6-sol" || m.Key != key || m.BaseURL != g.CloudboxURL+"/k/"+key+"/v1" {
+			if m.ModelID != "codex-gpt6-sol" || m.Key != key || m.BaseURL != g.CloudboxURL+"/v1" {
 				t.Fatalf("incorrect model or stale credential for %s", name)
 			}
 		}

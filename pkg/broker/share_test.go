@@ -331,7 +331,6 @@ func TestEnvFromRendersMeshAndCloudbox(t *testing.T) {
 		"OPENAI_API_KEY=" + g.Credential + "\n",
 		"ANTHROPIC_BASE_URL=http://127.0.0.1:40123/anthropic\n",
 		"ANTHROPIC_API_KEY=" + g.Credential + "\n",
-		"OLLAMA_HOST=http://127.0.0.1:40123/k/" + g.Credential + "\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("mesh env missing %q:\n%s", want, out)
@@ -339,6 +338,9 @@ func TestEnvFromRendersMeshAndCloudbox(t *testing.T) {
 	}
 	if strings.Contains(out, owner) {
 		t.Fatal("peer env carries the owner token")
+	}
+	if strings.Contains(out, "/k/") || strings.Contains(out, "OLLAMA_HOST") {
+		t.Fatalf("peer env puts the credential in a URL:\n%s", out)
 	}
 	if f.count("mesh consume add") != 0 {
 		t.Fatal("existing forward not reused")
@@ -357,9 +359,9 @@ func TestEnvFromRendersMeshAndCloudbox(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &env); err != nil {
 		t.Fatal(err)
 	}
-	kbase := g.CloudboxURL + "/k/" + g.Credential
-	if env.SchemaVersion != EnvSchemaVersion || env.BaseURL != g.CloudboxURL || env.Via != "cloudbox" || env.Env["OPENAI_BASE_URL"] != kbase+"/v1" ||
-		env.Env["ANTHROPIC_BASE_URL"] != kbase+"/anthropic" || env.Env["OPENAI_API_KEY"] != g.Credential || env.Env["OLLAMA_HOST"] != kbase {
+	// The credential is the API key (a header), never part of the URL.
+	if env.SchemaVersion != EnvSchemaVersion || env.BaseURL != g.CloudboxURL || env.Via != "cloudbox" || env.Env["OPENAI_BASE_URL"] != g.CloudboxURL+"/v1" ||
+		env.Env["ANTHROPIC_BASE_URL"] != g.CloudboxURL+"/anthropic" || env.Env["OPENAI_API_KEY"] != g.Credential || env.Env["OLLAMA_HOST"] != "" {
 		t.Fatalf("cloudbox env = %+v", env)
 	}
 
@@ -403,7 +405,7 @@ func TestEnvFromWSLUsesWindowsGrant(t *testing.T) {
 	wslInterop = func(_ context.Context, args ...string) ([]byte, error) {
 		got = args
 		return json.Marshal(map[string]any{"schema_version": EnvSchemaVersion, "base_url": "http://172.20.0.1:40123", "via": "mesh",
-			"env": peerEnvVars("http://172.20.0.1:40123", "bpeer_x", false)})
+			"env": peerEnvVars("http://172.20.0.1:40123", "bpeer_x")})
 	}
 	out, err := runShareLLM(t, "", "env", "--from", "dooor")
 	if err != nil {

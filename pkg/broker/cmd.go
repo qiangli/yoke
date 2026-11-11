@@ -265,6 +265,9 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 	if members, memberErr := fleet.NewMemberClient("", ""); memberErr == nil {
 		opts.Members = members
 	}
+	// Fleet API models (kind api: base_url + api_key_ref) are served by plain
+	// passthrough, so tool-calling clients reach them unchanged.
+	opts.API = &FleetAPI{}
 	var cli *cligw.Server
 	if !o.NoCLI {
 		cliOpts, err := cliServerOptions(token, o)
@@ -829,10 +832,15 @@ func writeClientEnv(out io.Writer, client, via string, env map[string]string) er
 		if via == "mesh" {
 			fmt.Fprintf(out, "# mesh dial: %s\n", strings.TrimSuffix(env["OPENAI_BASE_URL"], "/v1"))
 		}
+		var names []string
 		for _, k := range envVarOrder {
+			if _, ok := env[k]; !ok {
+				continue
+			}
 			fmt.Fprintf(out, "%s=%s\n", k, env[k])
+			names = append(names, k)
 		}
-		fmt.Fprintln(out, "export "+strings.Join(envVarOrder, " "))
+		fmt.Fprintln(out, "export "+strings.Join(names, " "))
 		fmt.Fprintln(out, "# OpenAI routes: /v1/chat/completions /v1/responses /v1/models")
 		return nil
 	case "openclaw":

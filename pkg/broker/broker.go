@@ -59,6 +59,9 @@ const (
 const (
 	BackendLocal = "ollama-local"
 	BackendCLI   = "cligw"
+	// BackendAPI forwards an OpenAI-compatible request unchanged to the
+	// upstream an API model names (Options.API).
+	BackendAPI = "api"
 )
 
 // AgentInfo is what the broker needs to know about a fleet agent to freeze it.
@@ -96,6 +99,10 @@ type Options struct {
 	Engine Engine
 	// CLI serves fleet agents. Nil = no vendor seats.
 	CLI CLIBackend
+	// API resolves a requested model to an OpenAI-compatible upstream the
+	// door forwards to unchanged (tool calls, streaming and all). Nil = none;
+	// unresolved models fall through to the fleet agents.
+	API APIResolver
 	// Token is the owner's bearer token (required).
 	Token string
 	// Principal names the owner (default "owner").
@@ -515,6 +522,7 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 		Method: r.Method, Path: r.URL.Path}
 
 	backend := BackendLocal
+	var api *APIUpstream
 	if binding != nil {
 		backend = binding.Identity.Backend
 		model = binding.Identity.Model
@@ -523,6 +531,16 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 		}
 	} else if _, ok := b.localModel(ctx, model); !ok {
 		backend = BackendCLI
+		if slash == "" && !native && b.opts.API != nil && apiPassthroughPath(r.URL.Path) {
+			up, found, err := b.opts.API.ResolveAPI(ctx, model)
+			if err != nil {
+				writeErr(w, r.URL.Path, http.StatusBadGateway, err.Error())
+				return
+			}
+			if found {
+				backend, api = BackendAPI, &up
+			}
+		}
 	}
 	if slash != "" && backend == BackendLocal {
 		writeErr(w, r.URL.Path, http.StatusBadRequest, fmt.Sprintf(
@@ -565,6 +583,10 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 	ri.rec.Backend = backend
 	span.SetAttributes(attribute.String("bashy.backend", backend), attribute.String("bashy.class", class.String()))
 
+	if api != nil {
+		b.serveAPI(w, r, ri, payload, model, *api)
+		return
+	}
 	if backend == BackendCLI {
 		if b.opts.CLI == nil {
 			writeErr(w, r.URL.Path, http.StatusNotFound, fmt.Sprintf("model %q is not a local model and this broker serves no fleet agents", model))
