@@ -1,12 +1,17 @@
 package skills
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/spf13/cobra"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 func TestDetectAgent(t *testing.T) {
@@ -158,4 +163,45 @@ func TestProvision(t *testing.T) {
 	// Idempotent re-provision.
 	Provision(ws, []string{"guide"}, io.Discard,
 		WithSource(EmbedSource(embedded, RingEmbedded)), WithConfigDir(t.TempDir()))
+}
+
+// --dry-run previews every write — skill folders, instruction blocks and the
+// MCP registration — and performs none of them.
+func TestExportDryRunWritesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ran := swapMCPSeams(t, func() []fleet.Tool {
+		return []fleet.Tool{{Name: "claw", Integration: fleet.ToolIntegration{
+			Skills:       fleet.IntegrationSkills{User: []string{"~/.claw/skills"}},
+			Instructions: []fleet.IntegrationFile{{File: "~/.claw/AGENTS.md"}},
+			MCP:          &fleet.IntegrationMCP{CLI: []string{"claw", "mcp", "add", "bashy", "--", "bashy", "mcp", "serve"}},
+		}}}
+	})
+	cfg, _, _ := exportFixture(t)
+	to := filepath.Join(t.TempDir(), "catalog")
+	var out, errb bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	cmd.SetErr(&errb)
+	if err := runExport(cmd, cfg, "guide", to, []string{"claw"}, false, false, false, true, true); err != nil {
+		t.Fatalf("export: %v\n%s", err, errb.String())
+	}
+	for _, p := range []string{to, filepath.Join(home, ".claw")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("dry run wrote %s (stat err=%v)", p, err)
+		}
+	}
+	if len(*ran) != 0 {
+		t.Errorf("dry run ran %v", *ran)
+	}
+	for _, want := range []string{
+		"would write " + filepath.Join(to, "guide"),
+		"would write " + filepath.Join(home, ".claw", "skills", "guide"),
+		"block to " + filepath.Join(home, ".claw", "AGENTS.md"),
+		"claw mcp add bashy -- bashy mcp serve",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("preview missing %q:\n%s", want, out.String())
+		}
+	}
 }

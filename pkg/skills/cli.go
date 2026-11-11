@@ -268,7 +268,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	export := &cobra.Command{
 		Use:   "export <name>",
 		Short: "install a catalog skill into agent skill directories (user scope, a dir, or --repo)",
-		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\n  --tool  a named tool's own skill roots and instruction files, from its\n          integration: block (any tool, built in or custom; with --repo, its\n          project roots); --user also covers every DETECTED tool that\n          declares one\n  --mcp   with --tool: also register the bashy MCP server (bashy mcp serve)\n          with each named tool, by running the tool's OWN declared command\n          (integration.mcp.cli) — its config file is never rewritten; a tool\n          with no command gets the exact entry, config path and key printed\n          to add itself; --dry-run prints the command instead of running it\nInstruction files get one bashy-managed block between markers, replaced in\nplace on re-export; the rest of the file is never touched.\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.\nWith --yaml (--to only) the skill is written as ONE record document,\n<dir>/<name>.yaml, instead of a folder — the shape `add` imports back.",
+		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\n  --tool  a named tool's own skill roots and instruction files, from its\n          integration: block (any tool, built in or custom; with --repo, its\n          project roots); --user also covers every DETECTED tool that\n          declares one\n  --mcp   with --tool: also register the bashy MCP server (bashy mcp serve)\n          with each named tool, by running the tool's OWN declared command\n          (integration.mcp.cli) — its config file is never rewritten; a tool\n          with no command gets the exact entry, config path and key printed\n          to add itself\n--dry-run previews everything and writes nothing: the skill folders and\n          instruction files that would be written, and the MCP command\nInstruction files get one bashy-managed block between markers, replaced in\nplace on re-export; the rest of the file is never touched.\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.\nWith --yaml (--to only) the skill is written as ONE record document,\n<dir>/<name>.yaml, instead of a folder — the shape `add` imports back.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if expYAML {
@@ -284,7 +284,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	export.Flags().BoolVar(&expYAML, "yaml", false, "write the record (<dir>/<name>.yaml) instead of the folder; --to only")
 	export.Flags().StringSliceVar(&expTools, "tool", nil, "install into this tool's declared skill roots and instruction files (its integration: block); repeatable")
 	export.Flags().BoolVar(&expMCP, "mcp", false, "with --tool: register the bashy MCP server with each named tool via its own declared command")
-	export.Flags().BoolVar(&expDry, "dry-run", false, "with --mcp: print the tool's registration command instead of running it")
+	export.Flags().BoolVar(&expDry, "dry-run", false, "preview: print the paths that would be written and the MCP command; write and run nothing")
 
 	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
 	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
@@ -724,6 +724,10 @@ func runExport(cmd *cobra.Command, cfg *config, name, to string, tools []string,
 		}
 	}
 	for _, path := range instructions {
+		if dryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "instructions (dry run): would write the %s block to %s\n", sk.Name, path)
+			continue
+		}
 		changed, err := UpsertInstructionBlock(path, sk.Name, instructionBody(sk.Name, sk.Description))
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "skills: %v\n", err)
@@ -739,6 +743,10 @@ func runExport(cmd *cobra.Command, cfg *config, name, to string, tools []string,
 		fmt.Fprintf(cmd.OutOrStdout(), "instructions %s: %s\n", verb, path)
 	}
 	for _, root := range roots {
+		if dryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "export (dry run): would write %s\n", filepath.Join(root, sk.Name))
+			continue
+		}
 		dst, err := ExportTo(sk, src, root, force)
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "skills: %v\n", err)
