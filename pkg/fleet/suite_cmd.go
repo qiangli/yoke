@@ -70,7 +70,7 @@ func NewSuiteCmd() *cobra.Command {
 	root.AddCommand(&cobra.Command{Use: "show NAME", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
 		return call(cmd, http.MethodGet, "/api/v1/suites/"+url.PathEscape(a[0]), nil)
 	}})
-	root.AddCommand(&cobra.Command{Use: "set NAME HOST/APP...", Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, a []string) error {
+	root.AddCommand(&cobra.Command{Use: "set NAME APP|HOST/APP...", Short: "replace a suite's apps (APP = wherever you serve it; HOST/APP = one host)", Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, a []string) error {
 		apps, e := suiteAppArgs(a[1:])
 		if e != nil {
 			return e
@@ -79,7 +79,7 @@ func NewSuiteCmd() *cobra.Command {
 	}})
 	for _, spec := range []struct{ name, method string }{{"add", http.MethodPost}, {"remove", http.MethodDelete}} {
 		sp := spec
-		root.AddCommand(&cobra.Command{Use: sp.name + " NAME HOST/APP", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, a []string) error {
+		root.AddCommand(&cobra.Command{Use: sp.name + " NAME APP|HOST/APP", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, a []string) error {
 			app, e := suiteAppArgs(a[1:])
 			if e != nil {
 				return e
@@ -124,12 +124,21 @@ type suiteAppArg struct {
 	App  string `json:"app"`
 }
 
+// suiteAnyHost marks a logical suite entry: the app is granted wherever its
+// owner serves it; the serving node binds it to its hosts.
+const suiteAnyHost = "*"
+
+// suiteAppArgs parses APP (logical: any host the owner serves it from) or
+// HOST/APP (one host).
 func suiteAppArgs(args []string) ([]suiteAppArg, error) {
 	out := make([]suiteAppArg, 0, len(args))
 	for _, arg := range args {
 		host, name, ok := strings.Cut(arg, "/")
-		if !ok || host == "" || name == "" || strings.Contains(name, "/") {
-			return nil, fmt.Errorf("suite: app must be HOST/APP: %q", arg)
+		if !ok {
+			host, name = suiteAnyHost, arg
+		}
+		if host == "" || name == "" || strings.Contains(name, "/") {
+			return nil, fmt.Errorf("suite: app must be APP or HOST/APP: %q", arg)
 		}
 		out = append(out, suiteAppArg{host, name})
 	}

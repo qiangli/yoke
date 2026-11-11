@@ -419,7 +419,19 @@ func TestHostCircleSharesAndSuiteAccessAreLive(t *testing.T) {
 		t.Fatal("suite app removal did not revoke live access")
 	}
 	m.wantErr(400, "invalid_suite", "PUT", "/api/v1/suites/Bad", alice, map[string]any{"apps": []any{}})
-	m.wantErr(403, "not_owner", "PUT", "/api/v1/suites/foreign", bob, map[string]any{"apps": []any{map[string]string{"host": "studio", "app": "chat"}}})
+	// Suites are plain owner data: Bob may name Alice's host, but his suite
+	// grants nothing there (the host's owner is Alice).
+	m.want(200, "PUT", "/api/v1/suites/foreign", bob, map[string]any{"apps": []any{map[string]string{"host": "studio", "app": "chat"}}})
+	m.want(201, "POST", "/api/v1/suites/foreign/shares", bob, map[string]any{"circle": "family"})
+	// A logical entry ("*") grants the app on the owner's hosts only.
+	m.want(200, "PUT", "/api/v1/suites/any", alice, map[string]any{"apps": []any{map[string]string{"host": "*", "app": "chat"}}})
+	m.want(201, "POST", "/api/v1/suites/any/shares", alice, map[string]string{"circle": "other"})
+	if !f.CanReach("bob@example.com", "studio", "chat") {
+		t.Fatal("logical suite entry did not grant on the owner's host")
+	}
+	if f.CanReach("bob@example.com", "studio", "shell") {
+		t.Fatal("logical suite entry granted another app")
+	}
 	hostOnly := f.AddToken("alice@example.com", ScopeHost)
 	m.wantErr(403, "insufficient_scope", "GET", "/api/v1/suites", hostOnly, nil)
 	memberToken := f.AddToken("alice@example.com", ScopeMembersRead, ScopeMembersWrite)

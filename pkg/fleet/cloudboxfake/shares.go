@@ -130,13 +130,11 @@ func (f *Fake) suiteApps(r *http.Request, owner string) ([]SuiteApp, *apiError) 
 	out := []SuiteApp{}
 	seen := map[string]bool{}
 	for _, a := range b.Apps {
-		if validSlug(a.App, "invalid_suite") != nil {
+		if validSlug(a.App, "invalid_suite") != nil || a.Host == "" {
 			return nil, errf(400, "invalid_suite", "invalid app")
 		}
-		h := f.hosts[a.Host]
-		if h == nil || h.OwnerEmail != owner {
-			return nil, errf(403, "not_owner", "host is not owned by caller")
-		}
+		// Plain strings: "*" (any host the owner serves the app from) or a
+		// host name; the serving node binds them to its hosts.
 		k := a.Host + "\x00" + a.App
 		if !seen[k] {
 			out = append(out, a)
@@ -165,7 +163,7 @@ func (f *Fake) putSuite(w http.ResponseWriter, r *http.Request, name string) *ap
 	return nil
 }
 func (f *Fake) addSuiteApp(w http.ResponseWriter, r *http.Request, name string) *apiError {
-	t, s, e := f.ownerSuite(r, name)
+	_, s, e := f.ownerSuite(r, name)
 	if e != nil {
 		return e
 	}
@@ -176,11 +174,7 @@ func (f *Fake) addSuiteApp(w http.ResponseWriter, r *http.Request, name string) 
 	if e := decode(r, &a); e != nil {
 		return e
 	}
-	h := f.hosts[a.Host]
-	if h == nil || h.OwnerEmail != t.email {
-		return errf(403, "not_owner", "host is not owned by caller")
-	}
-	if validSlug(a.App, "invalid_suite") != nil {
+	if validSlug(a.App, "invalid_suite") != nil || a.Host == "" {
 		return errf(400, "invalid_suite", "invalid app")
 	}
 	for _, x := range s.Apps {
@@ -310,7 +304,7 @@ func (f *Fake) CanReach(email, host, app string) bool {
 			continue
 		}
 		for _, a := range s.Apps {
-			if a.Host == host && a.App == app {
+			if (a.Host == host || a.Host == "*") && a.App == app {
 				return true
 			}
 		}
