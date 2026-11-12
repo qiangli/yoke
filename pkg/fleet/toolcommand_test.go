@@ -3,6 +3,7 @@ package fleet
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -146,6 +147,27 @@ func TestToolCommandsUndeclaredNameWarnsNotRefuses(t *testing.T) {
 		if !IsCanonicalToolCommand(n) {
 			t.Errorf("%q must be canonical", n)
 		}
+	}
+}
+
+// The Sprint #626 service names are canonical, so a seed registered under
+// one validates with no warning; mail stays the classic Unix verb.
+func TestServiceToolCommandsAreCanonical(t *testing.T) {
+	services := []string{"search", "image", "draw", "pdf", "video", "film", "transcribe", "narrate", "song", "animate", "email", "drive"}
+	for _, n := range services {
+		if !IsCanonicalToolCommand(n) {
+			t.Errorf("%q must be canonical", n)
+		}
+		tl := Tool{Name: "demo", Kind: ToolKindCLI, Commands: []ToolCommand{{Name: n, Slash: "/" + n, Mode: "print"}}}
+		if errs, warns := tl.ValidateCommands(); len(errs) != 0 || len(warns) != 0 {
+			t.Errorf("%s: errs %v warns %v", n, errs, warns)
+		}
+	}
+	if IsCanonicalToolCommand("mail") {
+		t.Error("mail is the Unix mail verb, not a service command")
+	}
+	if !slices.IsSorted(CanonicalToolCommands) {
+		t.Errorf("CanonicalToolCommands is not sorted: %v", CanonicalToolCommands)
 	}
 }
 

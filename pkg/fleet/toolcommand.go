@@ -20,16 +20,34 @@ import (
 //
 // It is a vocabulary, not a whitelist: any name is allowed, and a name
 // outside it only warns (ValidateCommands).
+//
+// The service names (Sprint #626: animate … video) are the vendor features
+// behind the service verbs (`bashy image`, `bashy search`, …); a tool that
+// exposes one registers it under that name so the service door projects it
+// as a vendor provider. A finer dotted role (`image.edit`, `email.send`) is
+// a provider role under the service name, not a second command name.
 var CanonicalToolCommands = []string{
+	"animate",
 	"compact",
 	"deep-research",
+	"draw",
+	"drive",
+	"email",
 	"exit",
+	"film",
+	"image",
 	"init",
+	"narrate",
+	"pdf",
 	"plan",
 	"resume",
 	"review",
+	"search",
 	"security-review",
+	"song",
 	"status",
+	"transcribe",
+	"video",
 }
 
 // IsCanonicalToolCommand reports whether name is in the vocabulary.

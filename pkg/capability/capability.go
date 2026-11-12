@@ -57,11 +57,42 @@ var QualityCaps = []Capability{
 	CapOrchestration,
 }
 
+// Service capabilities (Sprint #626) tag vendor features behind the service
+// verbs (`bashy image`, `bashy narrate`, …); each one is also a canonical
+// tool-command name (fleet.CanonicalToolCommands). They are not matrix
+// columns: a tool either has the feature or not, so no prior is seeded and
+// a cell exists only once a host measurement is recorded. The service verbs
+// `plan` and `search` reuse the quality columns planning and web-search.
+const (
+	CapAnimate    Capability = "animate"
+	CapDraw       Capability = "draw"
+	CapDrive      Capability = "drive"
+	CapEmail      Capability = "email"
+	CapFilm       Capability = "film"
+	CapImage      Capability = "image"
+	CapNarrate    Capability = "narrate"
+	CapPDF        Capability = "pdf"
+	CapSong       Capability = "song"
+	CapTranscribe Capability = "transcribe"
+	CapVideo      Capability = "video"
+)
+
+var ServiceCaps = []Capability{
+	CapAnimate, CapDraw, CapDrive, CapEmail, CapFilm, CapImage, CapNarrate,
+	CapPDF, CapSong, CapTranscribe, CapVideo,
+}
+
 // AllCaps is every canonical capability, in display order.
 func AllCaps() []Capability { return append(append([]Capability{}, HarnessCaps...), QualityCaps...) }
 
+// KnownCaps is every capability ParseCapability resolves: the matrix columns
+// then the service tags.
+func KnownCaps() []Capability { return append(AllCaps(), ServiceCaps...) }
+
 // ParseCapability resolves a user string (case-insensitive, aliases) to a
-// canonical Capability, or returns false.
+// canonical Capability, or returns false. A dotted service role
+// (`image.generate`, `email.send`, `transcribe.diarize`) resolves to its
+// head, so a provider's role and its capability tag agree.
 func ParseCapability(s string) (Capability, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	alias := map[string]Capability{
@@ -69,14 +100,23 @@ func ParseCapability(s string) (Capability, bool) {
 		"review": CapCodeReview, "judge": CapCodeReview, "tests": CapTestGen,
 		"test": CapTestGen, "bugfix": CapBugFixing, "code": CapCoding,
 		"plan": CapPlanning, "data": CapDataAnalysis, "ops": CapOrchestration,
+		"search": CapWebSearch,
+		// Service tags. `mail` stays the Unix mail verb and is not an alias.
+		"animation": CapAnimate, "diagram": CapDraw, "gdrive": CapDrive,
+		"movie": CapFilm, "image-generation": CapImage, "tts": CapNarrate,
+		"speech": CapNarrate, "music": CapSong, "stt": CapTranscribe,
+		"speech-to-text": CapTranscribe,
 	}
 	if c, ok := alias[s]; ok {
 		return c, true
 	}
-	for _, c := range AllCaps() {
+	for _, c := range KnownCaps() {
 		if string(c) == s {
 			return c, true
 		}
+	}
+	if head, _, ok := strings.Cut(s, "."); ok && head != "" {
+		return ParseCapability(head)
 	}
 	return "", false
 }

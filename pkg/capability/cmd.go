@@ -103,7 +103,7 @@ func newShowCmd() *cobra.Command {
 			w := cmd.OutOrStdout()
 			ok2, reason := Operable(ToolOf(args[0]))
 			fmt.Fprintf(w, "%s  (operable=%v: %s)\n", args[0], ok2, reason)
-			for _, c := range AllCaps() {
+			for _, c := range KnownCaps() {
 				if cell, ok := row[c]; ok {
 					fmt.Fprintf(w, "  %-18s q=%.2f [%s n=%d]\n", c, cell.Quality, cell.Source, cell.Samples)
 				}
@@ -211,8 +211,8 @@ func newSeedCmd() *cobra.Command {
 }
 
 func joinCaps() string {
-	parts := make([]string, 0, len(AllCaps()))
-	for _, c := range AllCaps() {
+	parts := make([]string, 0, len(KnownCaps()))
+	for _, c := range KnownCaps() {
 		parts = append(parts, string(c))
 	}
 	return strings.Join(parts, ", ")
