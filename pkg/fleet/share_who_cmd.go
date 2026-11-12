@@ -15,6 +15,7 @@ func NewShareCmd() *cobra.Command {
 	root := &cobra.Command{Use: "share", Short: "Cloudbox shares", SilenceUsage: true, SilenceErrors: true}
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.AddCommand(NewShareWhoCmd())
+	root.AddCommand(newHostGrantCmds()...)
 	return root
 }
 
