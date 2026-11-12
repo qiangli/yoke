@@ -1572,7 +1572,14 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 	return nil, ErrUnsupported
 }
 
-func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, error) {
+func nativeCheckout(_ context.Context, dir string, args []string) (result *ExecResult, retErr error) {
+	quiet := false
+	defer func() {
+		if quiet && retErr == nil && result != nil && result.ExitCode == 0 {
+			result.Stdout = ""
+			result.Stderr = ""
+		}
+	}()
 	if len(args) == 0 {
 		return nil, ErrUnsupported
 	}
@@ -1616,8 +1623,16 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 	// -f/--force discards local changes on branch switches (host parity
 	// for the switch itself; pathspec checkouts stay unsupported).
 	force := false
-	for len(args) > 0 && (args[0] == "-f" || args[0] == "--force") {
-		force = true
+flags:
+	for len(args) > 0 {
+		switch args[0] {
+		case "-f", "--force":
+			force = true
+		case "-q", "--quiet":
+			quiet = true
+		default:
+			break flags
+		}
 		args = args[1:]
 	}
 	if len(args) == 0 {
@@ -1734,9 +1749,44 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		}, nil
 	}
 
-	// Checkout existing branch
+	// Prefer an existing branch; other revisions detach HEAD at a commit.
 	if len(args) == 1 && !strings.HasPrefix(args[0], "-") {
 		branchName := args[0]
+		branchRef := plumbing.NewBranchReferenceName(branchName)
+		if _, err := repo.Reference(branchRef, true); errors.Is(err, plumbing.ErrReferenceNotFound) {
+			commit, err := resolveCommit(repo, branchName)
+			if err != nil {
+				return &ExecResult{Stderr: fmt.Sprintf("fatal: invalid reference: %s\n", branchName), ExitCode: 128}, nil
+			}
+			populate, err := checkoutNeedsPopulate(wt)
+			if err != nil {
+				return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
+			}
+			if !force && !populate {
+				status, err := worktreeStatus(wt)
+				if err != nil {
+					return nil, checkoutUnsupported("cannot inspect worktree status: %v", err)
+				}
+				if !status.IsClean() {
+					return nil, checkoutUnsupported("dirty worktree is not safe for a detached checkout")
+				}
+			}
+			oldHead, err := repo.Storer.Reference(plumbing.HEAD)
+			if err != nil {
+				return nil, checkoutUnsupported("cannot read HEAD before checkout: %v", err)
+			}
+			if err := wt.Checkout(&gogit.CheckoutOptions{Hash: commit.Hash, Force: force || populate}); err != nil {
+				_ = repo.Storer.SetReference(oldHead)
+				restoreIndex()
+				return nil, checkoutUnsupported("worktree checkout failed: %v", err)
+			}
+			subject := strings.SplitN(commit.Message, "\n", 2)[0]
+			return &ExecResult{
+				Stderr: fmt.Sprintf("HEAD is now at %s %s\n", commit.Hash.String()[:7], subject),
+			}, nil
+		} else if err != nil {
+			return nil, checkoutUnsupported("cannot read branch %q: %v", branchName, err)
+		}
 		err := wt.Checkout(&gogit.CheckoutOptions{
 			Branch: plumbing.NewBranchReferenceName(branchName),
 			Force:  force,
