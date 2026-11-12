@@ -30,17 +30,18 @@ import (
 
 // Scopes named by the contract (§1).
 const (
-	ScopeMembersRead    = "members:read"
-	ScopeMembersWrite   = "members:write"
-	ScopeSatellitesRead = "satellites:read"
-	ScopeHostsWrite     = "hosts:write"
-	ScopeHost           = "host"
-	ScopeAttach         = "attach"
-	ScopeSatelliteHost  = "satellite-host"
+	ScopeMembersRead     = "members:read"
+	ScopeMembersWrite    = "members:write"
+	ScopeSatellitesRead  = "satellites:read"
+	ScopeSatellitesWrite = "satellites:write"
+	ScopeHostsWrite      = "hosts:write"
+	ScopeHost            = "host"
+	ScopeAttach          = "attach"
+	ScopeSatelliteHost   = "satellite-host"
 )
 
 // ownerScopes is what an unscoped (legacy) owner token carries.
-var ownerScopes = []string{ScopeMembersRead, ScopeMembersWrite, ScopeSatellitesRead, ScopeHostsWrite}
+var ownerScopes = []string{ScopeMembersRead, ScopeMembersWrite, ScopeSatellitesRead, ScopeSatellitesWrite, ScopeHostsWrite}
 
 // TTLs from the contract.
 const (
@@ -245,6 +246,7 @@ type Fake struct {
 	suiteShares map[string]*SuiteShare
 	groups      map[string]*Group
 	idem        map[string]*idemEntry
+	admitRules  map[string][]AdmitRule
 }
 
 // New starts a fake master; it is closed (with every satellite) at t's end.
@@ -260,8 +262,9 @@ func New(t testing.TB) *Fake {
 		sats:        map[string]*satServer{},
 		assignments: map[string]*Assignment{},
 		shares:      map[string]*Share{}, suites: map[string]*Suite{}, suiteShares: map[string]*SuiteShare{},
-		groups: map[string]*Group{},
-		idem:   map[string]*idemEntry{},
+		groups:     map[string]*Group{},
+		idem:       map[string]*idemEntry{},
+		admitRules: map[string][]AdmitRule{},
 	}
 	f.Master = httptest.NewServer(f.withIdempotency(http.HandlerFunc(f.serveMaster)))
 	t.Cleanup(func() {
@@ -587,6 +590,9 @@ func (f *Fake) serveMaster(w http.ResponseWriter, r *http.Request) {
 		}
 	case p == "/api/v1/satellites" && m == http.MethodGet:
 		e = f.listSatellites(w, r)
+	case func() bool { _, ok := route(p, "api/v1/satellites/:id/admit"); return ok }():
+		ps, _ := route(p, "api/v1/satellites/:id/admit")
+		e = f.satelliteAdmit(w, r, ps[0])
 	case p == "/api/v1/satellites/assignment" && m == http.MethodGet:
 		e = f.listAssignments(w, r)
 	default:

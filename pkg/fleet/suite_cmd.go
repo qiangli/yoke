@@ -103,21 +103,13 @@ func NewSuiteCmd() *cobra.Command {
 	root.AddCommand(&cobra.Command{Use: "shares NAME", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
 		return call(cmd, http.MethodGet, "/api/v1/suites/"+url.PathEscape(a[0])+"/shares", nil)
 	}})
-	var email, circle string
-	share := &cobra.Command{Use: "share NAME", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
-		if (email == "") == (circle == "") {
-			return fmt.Errorf("suite share: exactly one of --email or --circle is required")
-		}
-		body := map[string]string{}
-		if email != "" {
-			body["email"] = email
-		} else {
-			body["circle"] = circle
-		}
-		return call(cmd, http.MethodPost, "/api/v1/suites/"+url.PathEscape(a[0])+"/shares", body)
+	var circles, groups, emails []string
+	share := &cobra.Command{Use: "share NAME", Short: "add one audience rule to a suite", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
+		return call(cmd, http.MethodPost, "/api/v1/suites/"+url.PathEscape(a[0])+"/shares", newGrantRule(circles, groups, emails))
 	}}
-	share.Flags().StringVar(&email, "email", "", "member email")
-	share.Flags().StringVar(&circle, "circle", "", "member circle")
+	share.Flags().StringSliceVar(&circles, "circle", nil, "member circle (repeatable)")
+	share.Flags().StringSliceVar(&groups, "group", nil, "owner group (repeatable)")
+	share.Flags().StringSliceVar(&emails, "email", nil, "member email (repeatable)")
 	root.AddCommand(share)
 	root.AddCommand(&cobra.Command{Use: "unshare NAME SHARE_ID", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, a []string) error {
 		return call(cmd, http.MethodDelete, "/api/v1/suites/"+url.PathEscape(a[0])+"/shares/"+url.PathEscape(a[1]), nil)

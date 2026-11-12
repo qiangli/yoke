@@ -397,9 +397,9 @@ func TestHostCircleSharesAndSuiteAccessAreLive(t *testing.T) {
 	m.wantErr(403, "insufficient_scope", "GET", "/api/v1/hosts/studio/shares", hostTok, nil)
 	invite := obj(m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "team"}), "invitation")
 	m.want(200, "POST", "/api/v1/member/invitations/"+str(invite, "id")+"/accept", bob, nil)
-	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]string{"app": "chat", "circle": "team"})
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]any{"app": "chat", "circles": []string{"team"}})
 	m.wantErr(400, "invalid_share", "POST", "/api/v1/hosts/studio/shares", alice, map[string]string{"app": "chat"})
-	m.wantErr(400, "invalid_share", "POST", "/api/v1/hosts/studio/shares", alice, map[string]string{"app": "chat", "email": "bob@example.com", "circle": "team"})
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]any{"app": "other", "circles": []string{"team"}, "emails": []string{"bob@example.com"}})
 	if !f.CanReach("bob@example.com", "studio", "chat") {
 		t.Fatal("circle share did not grant")
 	}
@@ -410,7 +410,7 @@ func TestHostCircleSharesAndSuiteAccessAreLive(t *testing.T) {
 	}
 	// Suite CLI and the fake wire share one live state.
 	m.want(200, "PUT", "/api/v1/suites/work", alice, map[string]any{"apps": []any{map[string]string{"host": "studio", "app": "chat"}}})
-	m.want(201, "POST", "/api/v1/suites/work/shares", alice, map[string]string{"circle": "other"})
+	m.want(201, "POST", "/api/v1/suites/work/shares", alice, map[string]any{"circles": []string{"other"}})
 	if !f.CanReach("bob@example.com", "studio", "chat") {
 		t.Fatal("suite circle grant did not grant")
 	}
@@ -422,10 +422,10 @@ func TestHostCircleSharesAndSuiteAccessAreLive(t *testing.T) {
 	// Suites are plain owner data: Bob may name Alice's host, but his suite
 	// grants nothing there (the host's owner is Alice).
 	m.want(200, "PUT", "/api/v1/suites/foreign", bob, map[string]any{"apps": []any{map[string]string{"host": "studio", "app": "chat"}}})
-	m.want(201, "POST", "/api/v1/suites/foreign/shares", bob, map[string]any{"circle": "family"})
+	m.want(201, "POST", "/api/v1/suites/foreign/shares", bob, map[string]any{"circles": []string{"family"}})
 	// A logical entry ("*") grants the app on the owner's hosts only.
 	m.want(200, "PUT", "/api/v1/suites/any", alice, map[string]any{"apps": []any{map[string]string{"host": "*", "app": "chat"}}})
-	m.want(201, "POST", "/api/v1/suites/any/shares", alice, map[string]string{"circle": "other"})
+	m.want(201, "POST", "/api/v1/suites/any/shares", alice, map[string]any{"circles": []string{"other"}})
 	if !f.CanReach("bob@example.com", "studio", "chat") {
 		t.Fatal("logical suite entry did not grant on the owner's host")
 	}

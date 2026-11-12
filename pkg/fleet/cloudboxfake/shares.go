@@ -66,8 +66,6 @@ func (f *Fake) addHostShare(w http.ResponseWriter, r *http.Request, host string)
 		Circles []string `json:"circles"`
 		Groups  []string `json:"groups"`
 		Emails  []string `json:"emails"`
-		Circle  string   `json:"circle"`
-		Email   string   `json:"email"`
 	}
 	if e := decode(r, &b); e != nil {
 		return e
@@ -75,17 +73,8 @@ func (f *Fake) addHostShare(w http.ResponseWriter, r *http.Request, host string)
 	if validSlug(b.App, "invalid_share") != nil {
 		return errf(400, "invalid_share", "invalid app")
 	}
-	if b.Circle != "" && len(b.Circles) == 0 {
-		b.Circles = []string{b.Circle}
-	}
-	if b.Email != "" && len(b.Emails) == 0 {
-		b.Emails = []string{strings.ToLower(b.Email)}
-	}
-	if b.Circles == nil && b.Groups == nil && b.Emails == nil && b.Circle == "" && b.Email == "" {
+	if b.Circles == nil && b.Groups == nil && b.Emails == nil {
 		return errf(400, "invalid_share", "app and at least one audience rule required")
-	}
-	if b.Circle != "" && b.Email != "" {
-		return errf(400, "invalid_share", "app and exactly one audience required")
 	}
 	for _, c := range b.Circles {
 		if validSlug(c, "invalid_circle") != nil {
@@ -328,23 +317,12 @@ func (f *Fake) addSuiteShare(w http.ResponseWriter, r *http.Request, name string
 		Circles []string `json:"circles"`
 		Groups  []string `json:"groups"`
 		Emails  []string `json:"emails"`
-		Circle  string   `json:"circle"`
-		Email   string   `json:"email"`
 	}
 	if e := decode(r, &b); e != nil {
 		return e
 	}
-	if b.Circle != "" && len(b.Circles) == 0 {
-		b.Circles = []string{b.Circle}
-	}
-	if b.Email != "" && len(b.Emails) == 0 {
-		b.Emails = []string{strings.ToLower(b.Email)}
-	}
-	if b.Circles == nil && b.Groups == nil && b.Emails == nil && b.Circle == "" && b.Email == "" {
+	if b.Circles == nil && b.Groups == nil && b.Emails == nil {
 		return errf(400, "invalid_share", "at least one audience rule required")
-	}
-	if b.Circle != "" && b.Email != "" {
-		return errf(400, "invalid_share", "exactly one audience required")
 	}
 	for _, c := range b.Circles {
 		if validSlug(c, "invalid_circle") != nil {
