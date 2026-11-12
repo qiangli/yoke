@@ -178,19 +178,24 @@ circle — the owner's label is not shown to the member (least disclosure).
 "status": "active", "mutual": true, "since": "2026-11-09T18:05:00Z"}]}`.
 Cacheable 30 s.
 
-## 2b. App shares (standalone and satellite; never the master)
+## 2b. Host app grants
 
-Shares live where the host row lives; the master holds identity-only hosts
-and has no share routes. Two callers: an owner Bearer (`hosts:read` /
-`hosts:write`), or the host's OWN token (the satellite host token from
-attach, or a legacy pairing token) for shares of that host only (any other
-`:host` is `404 not_found`).
+The host owner creates one rule per share. A rule is
+`{"circles":[],"groups":[],"emails":[]}`; every list is an array, even when
+empty. The owner always passes. A non-owner must be an active mutual member
+and match `circles AND (groups OR emails)`: an empty circles list does not
+restrict circles, and when both groups and emails are empty, membership and
+circle alone suffice. A person passes if any grant for the host and app
+matches. An empty grant list admits the owner only.
 
-- `GET /api/v1/hosts/:host/shares` → `200 {"shares": [{"id", "host", "app", "email", "created_at"}]}`
-- `POST /api/v1/hosts/:host/shares` body `{"app": "board", "email": "bob@example.com"}` →
-  `201 {"share": {...}}`; an identical existing share → `200`; `422 not_mutual_member`
-  unless the email is an active mutual member of the host's owner; `422 invalid_email`.
-- `DELETE /api/v1/hosts/:host/shares/:id` → `204`, idempotent.
+- `GET /api/v1/hosts/:host/shares` → `200 {"shares":[{"id","host","app","circles","groups","emails","created"}]}`.
+- `POST /api/v1/hosts/:host/shares` body `{"app":"board","circles":[],"groups":[],"emails":[]}` → `201 {"share":{...}}`.
+- `DELETE /api/v1/hosts/:host/shares/:id` → `204`.
+- `GET /api/v1/hosts/:host/apps/:app/who` → `200 {"host","app","owner","emails":[...]}`; `emails` is the sorted list of admitted non-owner members.
+
+The CLI uses `bashy share add HOST/APP --circle C --group G --email E`
+(repeatable flags), `bashy share ls HOST`, `bashy share rm HOST/APP ID`, and
+`bashy share who HOST/APP`. It sends one rule per `add` invocation.
 
 ## 3. Pair once — identity-only (master)
 
@@ -235,11 +240,9 @@ The host asks the master for permission, then redeems it at the satellite.
 The host and the satellite must belong to the same owner, or the host's
 owner must be a **mutual** member of the satellite's owner (§2).
 
-**One satellite per host is the CURRENT server limit** (a second attach is
-`409 attached_elsewhere`), not a contract invariant: the assignment is
-exposed as a **list**, and the per-satellite `attached` flag is per row, so
-concurrent attachments can come later without a wire change. Clients must
-read the list and not assume a single row.
+A host may attach to several satellites. Each attachment is identified by the
+host and satellite together. The assignment endpoint returns a list, and
+`attached` is evaluated separately for each satellite.
 
 ```
 host --(host token)--> master  POST /api/v1/satellites/:id/attach   -> attach_token
@@ -267,8 +270,8 @@ The host→satellite assignment over Bearer (S5; today the session-only
 `/api/satellites/assignment`). Query `satellite=<id>` filters.
 → `200 {"assignments": [{"host": "studio", "satellite_id": "sat_1",
 "state": "pending"|"attached", "assigned_at": "…", "attached_at": "…"|null}]}`.
-A host token sees only its own row; an owner token sees the rows of its own
-hosts and of hosts attached to its own satellites.
+A host token sees all rows for its host; an owner token sees the rows of its
+own hosts and of hosts attached to its own satellites.
 
 ### POST /api/v1/satellites/:id/attach — scope `host` (master)
 
@@ -280,8 +283,7 @@ The attach token is single-use, **10 min** TTL, audience = this satellite.
 Natural idempotency: a repeat POST for the same satellite issues a **new**
 token and invalidates any unredeemed earlier one (`201` again); if the host
 is already `attached` here it still returns `201` (re-attach refreshes the
-satellite host token). Errors: `404 not_found`, `409 attached_elsewhere`
-(with `satellite_id` — detach first), `409 satellite_unavailable` (the
+satellite host token). Errors: `404 not_found`, `409 satellite_unavailable` (the
 satellite is not `enabled`).
 
 ### DELETE /api/v1/satellites/:id/attach — scope `host` (master)
@@ -395,7 +397,7 @@ no browser. Shapes (names are the W1–W3 deliverables):
 `bad_request`, `unauthorized`, `insufficient_scope`, `not_found`,
 `invalid_email`, `invalid_circle`, `self_member`, `invitation_expired`,
 `idempotency_mismatch`, `invalid_code`, `code_expired`, `code_consumed`,
-`host_exists`, `attached_elsewhere`, `satellite_unavailable`,
+`host_exists`, `satellite_unavailable`,
 `invalid_attach_token`, `attach_token_used`, `attach_token_expired`,
 `host_mismatch`, `rate_limited`.
 
@@ -414,24 +416,18 @@ no browser. Shapes (names are the W1–W3 deliverables):
    default suggestions; default for a new member is `guest`. (Supersedes the
    earlier closed-set ruling; `team:<name>` syntax is dropped in favor of
    plain slugs.)
-5. **One satellite per host** — current server limit, not an invariant; the
-   assignment stays a list.
+5. **Several satellites per host** — assignments are separate host and satellite rows.
 
 ## 8. Circles and app suites (master)
 
 This section is the S9 public wire contract shared by the cloudbox server,
 this fake and its clients.
 
-### Circle audience on single-app shares
+### Shared rule shape
 
-`POST /api/v1/hosts/{host}/shares` body `{"app": A, "email": E}` OR
-`{"app": A, "circle": C}` (exactly one of email|circle; both or neither
--> 400 invalid_share).
-
-Row JSON: `{"id","host","app","email","circle","created_at"}` —
-email `""` for a circle row, circle `""` for an email row.
-
-`GET` lists both kinds; `DELETE /api/v1/hosts/{host}/shares/{id}` unchanged.
+Host and suite shares use the rule shape in §2b. A group may hold the owner
+or current members; removing a member also removes their group rows. Deleting
+a group removes that group from every grant that names it.
 
 ### Suites (owner-account level named set of host/app)
 
@@ -441,8 +437,8 @@ email `""` for a circle row, circle `""` for an email row.
 - `POST /api/v1/suites/{name}/apps` `{"host","app"}` add (idempotent)
 - `DELETE /api/v1/suites/{name}/apps/{host}/{app}` remove (idempotent)
 - `DELETE /api/v1/suites/{name}` delete suite and its grants
-- `GET /api/v1/suites/{name}/shares` -> `{"shares":[{"id","suite","email","circle","created_at"}]}`
-- `POST /api/v1/suites/{name}/shares` `{"email":E}` OR `{"circle":C}`
+- `GET /api/v1/suites/{name}/shares` -> `{"shares":[{"id","suite","circles","groups","emails","created"}]}`
+- `POST /api/v1/suites/{name}/shares` `{"circles":[],"groups":[],"emails":[]}`
 - `DELETE /api/v1/suites/{name}/shares/{id}`
 
 Errors: `{"error": "<code>"}` with codes invalid_suite, invalid_circle,
@@ -450,10 +446,20 @@ invalid_share, not_found, not_owner.
 
 ### Access semantics
 
-CanReach(member, host, app) is true when an existing email row matches OR
-the member is an active, mutual member of the host owner whose CURRENT circle
-equals a circle on a matching single-app row, OR on a grant of a suite that
-contains (host, app). Evaluate live: membership/circle/suite edits change
-access with no re-share. Implementation may materialize rows
-(Source=suite/circle, rebuilt on change like scopedpairing.Sync) or evaluate
-at check time - result must be identical.
+Host and suite grants use the same rule evaluation in §2b, judged against
+the host owner. A suite grant applies when its suite contains the host/app;
+its audience is still evaluated against the host owner. Membership, circle,
+group and suite edits take effect on the next evaluation.
+
+## 9. Satellite admission
+
+Satellite admission is a separate list of the same rules, judged against the
+satellite owner. It does not reference a host grant. The satellite owner
+always passes; an empty list admits the owner only.
+
+- `GET /api/v1/satellites/:id/admit` → `200 {"satellite":"ID","rules":[...]}`.
+- `PUT /api/v1/satellites/:id/admit` body `{"rules":[...]}` → the same response.
+
+The CLI supports `bashy satellite admit ls SAT [--json]`, `add SAT
+[--circle C]... [--group G]... [--email E]...`, `rm SAT INDEX` (zero-based),
+and `set SAT --json-rules FILE|-`. Mutations accept `--dry-run`.
