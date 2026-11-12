@@ -10,9 +10,9 @@ labels:
     - web
     - perf
 created: 2026-11-12T17:56:24.326162Z
-sprint: 499
-sprint_id: c3c45f32-63b5-5575-980f-299a44a561f3
-sprint_title: 'Content creation with bashy: YC videos and a local-first author-to-reader showcase'
+sprint: 623
+sprint_id: 514ed9c6-c029-58b5-b908-e54ec9acd35b
+sprint_title: 'bashy web suite and content tools: outpost explorer, shared metadata, one family of apps, record and voice'
 ---
 
 Found in review of S499.6A (merged yoke 40d456db): siteHandler (pkg/webconsole/site.go) computes a sha256 of the WHOLE file on every request before http.ServeContent, including every Range request. Seeking in a 1 GB video re-reads 1 GB per seek.
