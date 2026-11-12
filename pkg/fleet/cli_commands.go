@@ -99,6 +99,7 @@ type commandRow struct {
 	Effects  []string `json:"effects"`
 	Provides []string `json:"provides,omitempty"`
 	Requires string   `json:"requires,omitempty"`
+	Route    string   `json:"route,omitempty"`
 	Aliases  []string `json:"aliases,omitempty"`
 	Ring     string   `json:"ring"`
 	Hidden   bool     `json:"hidden,omitempty"`
@@ -129,7 +130,7 @@ func newCommandsList(opts []Option) *cobra.Command {
 				}
 				rows = append(rows, commandRow{
 					RecordLifecycle: r.RecordLifecycle, Name: r.Name, Mode: r.Mode(), Effects: r.Effects, Provides: r.Provides,
-					Requires: r.Requires, Aliases: r.Aliases,
+					Requires: r.Requires, Route: r.Route, Aliases: r.Aliases,
 					Ring: r.Ring.String(), Hidden: r.Hidden, Shadowed: shadows[r.Name], Synopsis: r.Synopsis,
 				})
 			}

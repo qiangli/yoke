@@ -22,6 +22,9 @@ type CommandMatch struct {
 var providerRoleRE = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 
 func (c Command) validateApplicability() error {
+	if c.Route != "" && c.Route != "oss" && c.Route != "vendor" && c.Route != "browser" && c.Route != "api" {
+		return fmt.Errorf("route %q is not one of oss|vendor|browser|api", c.Route)
+	}
 	seen := map[string]bool{}
 	for _, role := range c.Provides {
 		if !providerRoleRE.MatchString(role) {

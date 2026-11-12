@@ -31,7 +31,7 @@ var nonPluralEndingInS = []string{"bus", "dks", "seaweedfs", "stats", "whois"}
 // of the registered-command ring (a CRUD word counts only when a NAME
 // follows it), and `command` is its hidden, no-shim front-door alias in bashy
 // — the exception rests on the POSIX collision alone.
-var pluralListers = []string{"commands"}
+var pluralListers = []string{"commands", "providers"} // providers lists candidates; select is its subcommand.
 
 // irregularPlurals cannot be seen by the suffix check.
 var irregularPlurals = []string{"people"}

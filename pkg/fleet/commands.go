@@ -64,6 +64,7 @@ type Command struct {
 	Provides []string       `yaml:"provides,omitempty" json:"provides,omitempty" doc:"open provider roles implemented by this command (for example transcribe.acquire)"`
 	Accepts  []CommandMatch `yaml:"accepts,omitempty" json:"accepts,omitempty" doc:"JSON-pointer/RE2 rules, all of which an automatically selected request must match; empty accepts every request"`
 	Requires string         `yaml:"requires,omitempty" json:"requires,omitempty" doc:"skill-compatible applicability expression declaring host, architecture and command dependencies"`
+	Route    string         `yaml:"route,omitempty" json:"route,omitempty" doc:"provider route: oss, vendor, browser, or api; empty means oss"`
 
 	// Atlas metadata (closed vocabularies from pkg/atlas).
 	Effects []string `yaml:"effects,omitempty" json:"effects,omitempty" doc:"security effects (atlas vocabulary); at least one — script bodies must declare theirs"`

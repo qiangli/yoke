@@ -23,6 +23,7 @@ var effectProjection = map[string]string{
 	EffDestroy: "destroy",
 	EffNet:     "net",
 	EffRemote:  "net",
+	EffSend:    "write",
 	EffSpend:   "spend",
 }
 

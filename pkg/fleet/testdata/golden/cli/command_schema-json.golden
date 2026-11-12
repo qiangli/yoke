@@ -330,6 +330,11 @@
     "description": "skill-compatible applicability expression declaring host, architecture and command dependencies"
   },
   {
+    "path": "route",
+    "type": "string",
+    "description": "provider route: oss, vendor, browser, or api; empty means oss"
+  },
+  {
     "path": "script",
     "type": "string",
     "description": "inline body run as bashy -c BODY NAME ARGS ($0 = NAME)"

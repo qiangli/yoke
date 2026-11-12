@@ -181,7 +181,7 @@ func (h ToolCommandHTTPAction) Validate(effects []string) error {
 // MutatingEffects are the effect atoms that change state the caller cannot
 // take back by not looking: a command declaring any of them is admitted only
 // with explicit operator confirmation (NeedsConfirmation).
-var MutatingEffects = []string{atlas.EffWrite, atlas.EffDestroy, atlas.EffPersist, atlas.EffPriv, atlas.EffSpend}
+var MutatingEffects = []string{atlas.EffWrite, atlas.EffDestroy, atlas.EffPersist, atlas.EffPriv, atlas.EffSend, atlas.EffSpend}
 
 // NeedsConfirmation is the ONE admission rule for a tool command, shared by
 // toolcmd's runner and every front door that offers --yes: a command that

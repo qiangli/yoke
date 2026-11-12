@@ -14,18 +14,19 @@ import (
 // NewSearchCmd is `bashy search` — web search and local search in one command.
 func NewSearchCmd() *cobra.Command {
 	var (
-		asJSON  bool
-		local   bool
-		content bool
-		files   bool
-		kb      bool
-		indexed bool
-		mode    string
-		dir     string
-		max     int
-		backend string
-		index   bool
-		status  bool
+		asJSON   bool
+		local    bool
+		content  bool
+		files    bool
+		kb       bool
+		indexed  bool
+		mode     string
+		dir      string
+		max      int
+		backend  string
+		provider string
+		index    bool
+		status   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "search QUERY...",
@@ -132,6 +133,12 @@ func NewSearchCmd() *cobra.Command {
 			}
 
 			// --- web (P0a): provider ladder ---
+			if provider != "" {
+				if backend != "" && backend != provider {
+					return fmt.Errorf("search: --provider and --backend disagree")
+				}
+				backend = provider
+			}
 			results, used, err := Web(ctx, query, Options{MaxResults: max, Backend: backend})
 			if err != nil {
 				return err
@@ -173,7 +180,8 @@ func NewSearchCmd() *cobra.Command {
 	f.StringVar(&dir, "dir", "", "local: root to scan (default: cwd)")
 	f.BoolVar(&asJSON, "json", false, "print a bashy-search-v1 JSON envelope")
 	f.IntVar(&max, "max", 8, "maximum results (local defaults to 40)")
-	f.StringVar(&backend, "backend", "", "web: force a backend: tavily | brave | serper (default: auto)")
+	f.StringVar(&backend, "backend", "", "deprecated alias of --provider")
+	f.StringVar(&provider, "provider", "", "web provider: tavily | brave | serper | searxng")
 	return cmd
 }
 

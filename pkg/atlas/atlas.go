@@ -145,6 +145,7 @@ const (
 	EffPriv    = "priv"    // changes privilege, ownership, or a security label
 	EffRemote  = "remote"  // executes on ANOTHER host (crosses the machine boundary)
 	EffPersist = "persist" // leaves something that OUTLIVES the session (cron, daemon, install)
+	EffSend    = "send"    // sends a message or publishes content to another party
 	EffSpend   = "spend"   // incurs metered cost (paid inference, cloud resources)
 )
 
@@ -361,7 +362,7 @@ func Stages() []string {
 func Effects() []string {
 	return []string{
 		EffCred, EffDestroy, EffExec, EffNet, EffPersist, EffPriv,
-		EffPure, EffRead, EffRemote, EffSpend, EffWrite,
+		EffPure, EffRead, EffRemote, EffSend, EffSpend, EffWrite,
 	}
 }
 
@@ -443,7 +444,7 @@ func ReversibilityConsistency(e Entry) error {
 	// (Reading over the network or spawning a known-pure external does not
 	// disqualify it — remote reads may be readonly.)
 	if class == RevReadonly {
-		for _, bad := range []string{EffWrite, EffDestroy, EffPersist, EffPriv, EffSpend} {
+		for _, bad := range []string{EffWrite, EffDestroy, EffPersist, EffPriv, EffSend, EffSpend} {
 			if has(bad) {
 				return fmt.Errorf("class %q but declares mutating/charging effect %q", RevReadonly, bad)
 			}
@@ -1236,6 +1237,7 @@ func init() {
 	// The standalone memory front door is deferred to post-1.0 (Sprint 284); memory
 	// in 1.0 is fronted by kb recall.
 	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierWorkplace, Caps: []string{CapJSON}})
+	addVerb("providers", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierUserland, Caps: []string{CapJSON}})
 	addVerb("search", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierUserland, Caps: []string{CapJSON, CapNeedsNetwork}})
 	addVerb("sota", Entry{Stage: StageCross, Group: GroupKnowledge, Tier: TierUserland, Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses}})
 	// lexicon: what do this project's words mean HERE? It PROJECTS the atlas and the
@@ -1484,7 +1486,7 @@ func init() {
 	// mandatory, never fail-open. A command legitimately lists several atoms.
 
 	// gencat reads message sources and updates the compiled catalog.
-	eff(EffRead, "gencat")
+	eff(EffRead, "gencat", "providers")
 	eff(EffWrite, "gencat")
 
 	// pure — deterministic, touches nothing governed.
@@ -1785,7 +1787,7 @@ func init() {
 		// fixed-purpose read-only externals
 		"bc", "m4", "nm", "man",
 		// verbs that only read a store or query a remote read-only protocol
-		"stats", "whois", "search", "craft", "define", "inspect", "context",
+		"stats", "whois", "search", "providers", "craft", "define", "inspect", "context",
 		"doctor", "audit", "otel", "check", "web",
 	)
 
@@ -1904,7 +1906,7 @@ func init() {
 		// orchestration / knowledge / fleet verbs outside the v1.0.0 table
 		"agentic", "capability", "claim", "coach", "define", "delegate", "dks", "db",
 		"gate", "handoff", "leaderboard", "login", "mirror", "otel", "peer",
-		"person", "resume", "search", "secret", "src", "stats", "steward", "tessaro", "account",
+		"person", "resume", "search", "providers", "secret", "src", "stats", "steward", "tessaro", "account",
 		// engines, forges and managed externals fronted by a verb
 		"act", "act-runner", "curl", "gh", "git", "git-scm", "helm", "kopia",
 		"kubectl", "rclone", "seaweedfs", "zot",
