@@ -109,15 +109,23 @@ type Host struct {
 	PairedAt   time.Time `json:"paired_at"`
 }
 
-// Share is an owner grant for one host/app, addressed to an email or circle.
+// Group is an owner group holding owner and member emails.
+type Group struct {
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
+	owner   string
+}
+
+// Share is an owner grant for one host/app, evaluated against circles, groups, emails.
 type Share struct {
-	ID        string    `json:"id"`
-	Host      string    `json:"host"`
-	App       string    `json:"app"`
-	Email     string    `json:"email"`
-	Circle    string    `json:"circle"`
-	CreatedAt time.Time `json:"created_at"`
-	owner     string
+	ID      string    `json:"id"`
+	Host    string    `json:"host"`
+	App     string    `json:"app"`
+	Circles []string  `json:"circles"`
+	Groups  []string  `json:"groups"`
+	Emails  []string  `json:"emails"`
+	Created time.Time `json:"created"`
+	owner   string
 }
 
 type SuiteApp struct {
@@ -132,12 +140,13 @@ type Suite struct {
 	owner     string
 }
 type SuiteShare struct {
-	ID        string    `json:"id"`
-	Suite     string    `json:"suite"`
-	Email     string    `json:"email"`
-	Circle    string    `json:"circle"`
-	CreatedAt time.Time `json:"created_at"`
-	owner     string
+	ID      string    `json:"id"`
+	Suite   string    `json:"suite"`
+	Circles []string  `json:"circles"`
+	Groups  []string  `json:"groups"`
+	Emails  []string  `json:"emails"`
+	Created time.Time `json:"created"`
+	owner   string
 }
 
 // Satellite is the master's satellite record. Attached and Hosts are
@@ -234,6 +243,7 @@ type Fake struct {
 	shares      map[string]*Share
 	suites      map[string]*Suite
 	suiteShares map[string]*SuiteShare
+	groups      map[string]*Group
 	idem        map[string]*idemEntry
 }
 
@@ -250,7 +260,8 @@ func New(t testing.TB) *Fake {
 		sats:        map[string]*satServer{},
 		assignments: map[string]*Assignment{},
 		shares:      map[string]*Share{}, suites: map[string]*Suite{}, suiteShares: map[string]*SuiteShare{},
-		idem: map[string]*idemEntry{},
+		groups: map[string]*Group{},
+		idem:   map[string]*idemEntry{},
 	}
 	f.Master = httptest.NewServer(f.withIdempotency(http.HandlerFunc(f.serveMaster)))
 	t.Cleanup(func() {
@@ -551,6 +562,20 @@ func (f *Fake) serveMaster(w http.ResponseWriter, r *http.Request) {
 		e = f.unpair(w, r)
 	case p == "/api/v1/suites" && m == http.MethodGet:
 		e = f.listSuites(w, r)
+	case p == "/api/v1/groups" && m == http.MethodGet:
+		e = f.listGroups(w, r)
+	case func() bool { _, ok := route(p, "api/v1/groups/:name/members"); return ok }() && m == http.MethodPost:
+		ps, _ := route(p, "api/v1/groups/:name/members")
+		e = f.addGroupMembers(w, r, ps[0])
+	case func() bool { _, ok := route(p, "api/v1/groups/:name/members/:email"); return ok }() && m == http.MethodDelete:
+		ps, _ := route(p, "api/v1/groups/:name/members/:email")
+		e = f.removeGroupMember(w, r, ps[0], ps[1])
+	case func() bool { _, ok := route(p, "api/v1/groups/:name"); return ok }() && m == http.MethodDelete:
+		ps, _ := route(p, "api/v1/groups/:name")
+		e = f.deleteGroup(w, r, ps[0])
+	case func() bool { _, ok := route(p, "api/v1/hosts/:host/apps/:app/who"); return ok }() && m == http.MethodGet:
+		ps, _ := route(p, "api/v1/hosts/:host/apps/:app/who")
+		e = f.whoAdmitted(w, r, ps[0], ps[1])
 	case func() bool { _, ok := route(p, "api/v1/hosts/:host/shares"); return ok }():
 		ps, _ := route(p, "api/v1/hosts/:host/shares")
 		if m == http.MethodGet {
@@ -713,6 +738,17 @@ func (f *Fake) deleteMember(w http.ResponseWriter, r *http.Request, id string) *
 		delete(f.members, id)
 		delete(f.invitations, m.InvitationID)
 		f.dropCrossOwnerAttachments(m.owner, m.Email)
+		for _, g := range f.groups {
+			if g.owner == m.owner {
+				newMembers := make([]string, 0, len(g.Members))
+				for _, mem := range g.Members {
+					if !strings.EqualFold(mem, m.Email) {
+						newMembers = append(newMembers, mem)
+					}
+				}
+				g.Members = newMembers
+			}
+		}
 	}
 	w.WriteHeader(204)
 	return nil

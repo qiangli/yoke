@@ -437,3 +437,164 @@ func TestHostCircleSharesAndSuiteAccessAreLive(t *testing.T) {
 	memberToken := f.AddToken("alice@example.com", ScopeMembersRead, ScopeMembersWrite)
 	m.wantErr(403, "insufficient_scope", "GET", "/api/v1/suites", memberToken, nil)
 }
+
+func TestGroupsLifecycleAndMemberConstraints(t *testing.T) {
+	f := New(t)
+	alice, bob := f.AddOwner("alice@example.com"), f.AddOwner("bob@example.com")
+	m := call{t, f.URL()}
+	pairHost(m, alice, "studio")
+
+	// Alice invites bob, bob accepts -> active mutual member
+	invite := obj(m.want(201, "POST", "/api/v1/members", alice, map[string]string{"email": "bob@example.com", "circle": "team"}), "invitation")
+	m.want(200, "POST", "/api/v1/member/invitations/"+str(invite, "id")+"/accept", bob, nil)
+
+	// Non-member refused: 400 not_a_member
+	m.wantErr(400, "not_a_member", "POST", "/api/v1/groups/devs/members", alice, map[string]any{"emails": []string{"stranger@example.com"}})
+
+	// Owner allowed in group
+	res := m.want(200, "POST", "/api/v1/groups/devs/members", alice, map[string]any{"emails": []string{"alice@example.com"}})
+	groups := list(res, "groups")
+	if len(groups) != 1 || str(groups[0].(map[string]any), "name") != "devs" {
+		t.Fatalf("unexpected add group response: %v", res)
+	}
+
+	// Active member allowed in group
+	m.want(200, "POST", "/api/v1/groups/devs/members", alice, map[string]any{"emails": []string{"bob@example.com"}})
+
+	// List groups
+	allGroups := list(m.want(200, "GET", "/api/v1/groups", alice, nil), "groups")
+	if len(allGroups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(allGroups))
+	}
+	devsMembers := list(allGroups[0].(map[string]any), "members")
+	if len(devsMembers) != 2 {
+		t.Fatalf("expected 2 members in devs, got %d", len(devsMembers))
+	}
+
+	// Filter by name
+	filtered := list(m.want(200, "GET", "/api/v1/groups?name=devs", alice, nil), "groups")
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 group matching devs, got %d", len(filtered))
+	}
+	emptyFilter := list(m.want(200, "GET", "/api/v1/groups?name=nonexistent", alice, nil), "groups")
+	if len(emptyFilter) != 0 {
+		t.Fatalf("expected 0 groups matching nonexistent, got %d", len(emptyFilter))
+	}
+
+	// Remove member from group
+	m.want(204, "DELETE", "/api/v1/groups/devs/members/bob@example.com", alice, nil)
+	filtered = list(m.want(200, "GET", "/api/v1/groups?name=devs", alice, nil), "groups")
+	devsMembers = list(filtered[0].(map[string]any), "members")
+	if len(devsMembers) != 1 || devsMembers[0].(string) != "alice@example.com" {
+		t.Fatalf("expected only alice in devs, got %v", devsMembers)
+	}
+
+	// Add bob back, then remove bob's member row -> drops group row
+	m.want(200, "POST", "/api/v1/groups/devs/members", alice, map[string]any{"emails": []string{"bob@example.com"}})
+	memID := str(list(m.want(200, "GET", "/api/v1/members", alice, nil), "members")[0].(map[string]any), "id")
+	m.want(204, "DELETE", "/api/v1/members/"+memID, alice, nil)
+
+	filtered = list(m.want(200, "GET", "/api/v1/groups?name=devs", alice, nil), "groups")
+	devsMembers = list(filtered[0].(map[string]any), "members")
+	if len(devsMembers) != 1 || devsMembers[0].(string) != "alice@example.com" {
+		t.Fatalf("expected removing member to drop group rows, got %v", devsMembers)
+	}
+
+	// Create share naming group "devs"
+	shr := obj(m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]any{
+		"app":     "chat",
+		"circles": []string{},
+		"groups":  []string{"devs"},
+		"emails":  []string{},
+	}), "share")
+	if len(list(shr, "groups")) != 1 {
+		t.Fatalf("share groups: %v", shr)
+	}
+
+	// Delete group "devs" -> removes group from every grant that names it
+	m.want(204, "DELETE", "/api/v1/groups/devs", alice, nil)
+	shares := list(m.want(200, "GET", "/api/v1/hosts/studio/shares", alice, nil), "shares")
+	if len(shares) != 1 {
+		t.Fatalf("expected 1 share, got %d", len(shares))
+	}
+	shrGroups := list(shares[0].(map[string]any), "groups")
+	if len(shrGroups) != 0 {
+		t.Fatalf("expected group removed from share, got %v", shrGroups)
+	}
+}
+
+func TestWhoAdmittedRules(t *testing.T) {
+	f := New(t)
+	alice := f.AddOwner("alice@example.com")
+	bob := f.AddOwner("bob@example.com")
+	carol := f.AddOwner("carol@example.com")
+	dave := f.AddOwner("dave@example.com")
+	eve := f.AddOwner("eve@example.com")
+	m := call{t, f.URL()}
+	pairHost(m, alice, "studio")
+
+	makeMutual := func(ownerTok, memberTok, email, circle string) {
+		inv := obj(m.want(201, "POST", "/api/v1/members", ownerTok, map[string]string{"email": email, "circle": circle}), "invitation")
+		m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", memberTok, nil)
+	}
+
+	makeMutual(alice, bob, "bob@example.com", "team")
+	makeMutual(alice, carol, "carol@example.com", "team")
+	makeMutual(alice, dave, "dave@example.com", "guest")
+	makeMutual(alice, eve, "eve@example.com", "guest")
+
+	// Create groups
+	m.want(200, "POST", "/api/v1/groups/alpha/members", alice, map[string]any{"emails": []string{"bob@example.com", "dave@example.com"}})
+	m.want(200, "POST", "/api/v1/groups/beta/members", alice, map[string]any{"emails": []string{"carol@example.com"}})
+
+	// Rule 1: Empty list of rules -> owner only (who returns empty list of non-owner emails)
+	whoEmpty := m.want(200, "GET", "/api/v1/hosts/studio/apps/none/who", alice, nil)
+	if str(whoEmpty, "owner") != "alice@example.com" || len(list(whoEmpty, "emails")) != 0 {
+		t.Fatalf("empty rules who: %v", whoEmpty)
+	}
+
+	// Rule 2: Circle rule -> circles: ["team"]
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]any{
+		"app":     "circle-app",
+		"circles": []string{"team"},
+		"groups":  []string{},
+		"emails":  []string{},
+	})
+	whoCircle := m.want(200, "GET", "/api/v1/hosts/studio/apps/circle-app/who", alice, nil)
+	emailsCircle := list(whoCircle, "emails")
+	if len(emailsCircle) != 2 || emailsCircle[0].(string) != "bob@example.com" || emailsCircle[1].(string) != "carol@example.com" {
+		t.Fatalf("circle rule who: got %v, want bob, carol", emailsCircle)
+	}
+
+	// Rule 3: Circle + group rule -> circles: ["team"], groups: ["alpha"]
+	// Bob is team + alpha -> matches.
+	// Carol is team + beta (not alpha) -> no.
+	// Dave is alpha, but guest (not team) -> no.
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]any{
+		"app":     "cg-app",
+		"circles": []string{"team"},
+		"groups":  []string{"alpha"},
+		"emails":  []string{},
+	})
+	whoCG := m.want(200, "GET", "/api/v1/hosts/studio/apps/cg-app/who", alice, nil)
+	emailsCG := list(whoCG, "emails")
+	if len(emailsCG) != 1 || emailsCG[0].(string) != "bob@example.com" {
+		t.Fatalf("circle+group rule who: got %v, want [bob@example.com]", emailsCG)
+	}
+
+	// Rule 4: Email rule -> emails: ["dave@example.com"]
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", alice, map[string]any{
+		"app":     "email-app",
+		"circles": []string{},
+		"groups":  []string{},
+		"emails":  []string{"dave@example.com"},
+	})
+	whoEmail := m.want(200, "GET", "/api/v1/hosts/studio/apps/email-app/who", alice, nil)
+	emailsEmail := list(whoEmail, "emails")
+	if len(emailsEmail) != 1 || emailsEmail[0].(string) != "dave@example.com" {
+		t.Fatalf("email rule who: got %v, want [dave@example.com]", emailsEmail)
+	}
+
+	// Caller must be host owner
+	m.wantErr(403, "not_owner", "GET", "/api/v1/hosts/studio/apps/circle-app/who", bob, nil)
+}
