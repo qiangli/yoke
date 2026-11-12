@@ -21,20 +21,20 @@ func TestKlatchManagedServicePin(t *testing.T) {
 	if m.Unverified() || m.License != "Apache-2.0" || m.LicenseURL == "" {
 		t.Fatal("klatch needs a signed, licensed service pin")
 	}
-	if m.Version != "1.2.7-bashy.1" {
-		t.Fatalf("version=%q, want 1.2.7-bashy.1", m.Version)
+	if m.Version != "1.2.8-bashy.1" {
+		t.Fatalf("version=%q, want 1.2.8-bashy.1", m.Version)
 	}
-	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.7-1/"
-	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.7-1"
+	const release = "https://github.com/qiangli/klatch/releases/download/bashy-v1.2.8-1/"
+	const identity = "https://github.com/qiangli/klatch/.github/workflows/bashy-build.yml@refs/tags/bashy-v1.2.8-1"
 	if m.Sigstore.Identity != identity || m.Sigstore.Issuer != "https://token.actions.githubusercontent.com" {
 		t.Fatalf("wrong signing identity: %+v", m.Sigstore)
 	}
 	assets := map[string]struct{ file, sha256 string }{
-		"linux/amd64":   {"klatch-v1.2.7-linux-amd64.tar.gz", "da6f37c19bee9894e54f67bd61e1b4a88036642b661e8eb106d57c4da63bfdfd"},
-		"linux/arm64":   {"klatch-v1.2.7-linux-arm64.tar.gz", "4903ee0415324452ec79bd6ccf18a835fcee96df7d775b323ea513b5e866603e"},
-		"darwin/amd64":  {"klatch-v1.2.7-darwin-amd64.tar.gz", "5ac930f4426832bbc42ab82e74e680e10dc118a144400c6a72a94da6796438c8"},
-		"darwin/arm64":  {"klatch-v1.2.7-darwin-arm64.tar.gz", "55fb9dfba25445bc17447a4cce93c60ce8f9edb1dc0d54958e4615cfbaba1b57"},
-		"windows/amd64": {"klatch-v1.2.7-windows-amd64.tar.gz", "ea4f5ffdad987869d1767d69e6db24e9342b585bc2aedfaa673fe5e49430c565"},
+		"linux/amd64":   {"klatch-v1.2.8-linux-amd64.tar.gz", "e419a33b0f28137443c9c45d182d4ff4105ff75018d1857efeb3f76230dc6c10"},
+		"linux/arm64":   {"klatch-v1.2.8-linux-arm64.tar.gz", "7ec31b33f28c5ba87ad6c5d1a930742429558603290244565277b9501005d6e3"},
+		"darwin/amd64":  {"klatch-v1.2.8-darwin-amd64.tar.gz", "f828c32eb386943139a6ddc76bbcff29cc4616617f09420c769a782b2af6f33a"},
+		"darwin/arm64":  {"klatch-v1.2.8-darwin-arm64.tar.gz", "e447f86308f96038b0e27643f813b6f9f9dcf56835c6fab4a2a340c5abda05e2"},
+		"windows/amd64": {"klatch-v1.2.8-windows-amd64.tar.gz", "fe9b13879bc86d6394e80aa87b8efe7410ca3c1bb78e16b84d85869e5fdf26f2"},
 	}
 	for platform, want := range assets {
 		a, ok := m.Assets[platform]
