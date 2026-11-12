@@ -334,6 +334,9 @@ dialog#settings::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2
   --logo-bg: #2563eb;
   --logo-fg: #ffffff;
   --logo-accent: #5eead4;
+  /* the bashy product mark's turned square (docs/brand): violet that clears
+     3:1 against both the light and the dark page */
+  --mark-accent: #7C5CFF;
 }
 #brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
