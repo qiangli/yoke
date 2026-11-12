@@ -68,13 +68,13 @@ func NewGroupCmd() *cobra.Command {
 			if len(raw) == 0 {
 				return output(cmd, map[string]any{"removed": true}, "")
 			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(string(raw)))
 			return err
 		}
 		if method == http.MethodDelete {
 			return output(cmd, nil, "removed")
 		}
-		return output(cmd, nil, string(raw))
+		return output(cmd, nil, strings.TrimSpace(string(raw)))
 	}
 
 	ls := &cobra.Command{Use: "ls [NAME]", Short: "list groups or group members", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -84,14 +84,18 @@ func NewGroupCmd() *cobra.Command {
 		}
 		path := "/api/v1/groups"
 		if len(args) == 1 {
-			path += "?name=" + url.QueryEscape(args[0])
+			name, err := groupName(args[0])
+			if err != nil {
+				return err
+			}
+			path += "?name=" + url.QueryEscape(name)
 		}
 		raw, err := c.Do(cmd.Context(), http.MethodGet, path, nil)
 		if err != nil {
 			return err
 		}
 		if asJSON {
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(string(raw)))
 			return err
 		}
 		var env struct {
@@ -125,15 +129,25 @@ func NewGroupCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		emails := make([]string, len(args)-1)
+		for i, e := range args[1:] {
+			emails[i] = strings.ToLower(strings.TrimSpace(e))
+		}
 		path := "/api/v1/groups/" + url.PathEscape(name) + "/members"
-		body := map[string]any{"emails": args[1:]}
+		body := map[string]any{"emails": emails}
 		return write(cmd, c, http.MethodPost, path, body)
 	}}
 	root.AddCommand(add)
 
 	rm := &cobra.Command{Use: "rm NAME EMAIL...", Short: "remove members from a group", Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		emails := args[1:]
+		name, err := groupName(args[0])
+		if err != nil {
+			return err
+		}
+		emails := make([]string, len(args)-1)
+		for i, e := range args[1:] {
+			emails[i] = strings.ToLower(strings.TrimSpace(e))
+		}
 		if dryRun {
 			for _, email := range emails {
 				p := "/api/v1/groups/" + url.PathEscape(name) + "/members/" + url.PathEscape(email)
@@ -161,11 +175,15 @@ func NewGroupCmd() *cobra.Command {
 	root.AddCommand(rm)
 
 	del := &cobra.Command{Use: "delete NAME", Short: "delete a group", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := groupName(args[0])
+		if err != nil {
+			return err
+		}
 		c, err := client(cmd.Context())
 		if err != nil {
 			return err
 		}
-		return write(cmd, c, http.MethodDelete, "/api/v1/groups/"+url.PathEscape(args[0]), nil)
+		return write(cmd, c, http.MethodDelete, "/api/v1/groups/"+url.PathEscape(name), nil)
 	}}
 	root.AddCommand(del)
 

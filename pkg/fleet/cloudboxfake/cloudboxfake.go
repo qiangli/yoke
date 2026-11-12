@@ -260,8 +260,8 @@ func New(t testing.TB) *Fake {
 		sats:        map[string]*satServer{},
 		assignments: map[string]*Assignment{},
 		shares:      map[string]*Share{}, suites: map[string]*Suite{}, suiteShares: map[string]*SuiteShare{},
-		groups:      map[string]*Group{},
-		idem:        map[string]*idemEntry{},
+		groups: map[string]*Group{},
+		idem:   map[string]*idemEntry{},
 	}
 	f.Master = httptest.NewServer(f.withIdempotency(http.HandlerFunc(f.serveMaster)))
 	t.Cleanup(func() {

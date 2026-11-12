@@ -10,6 +10,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// NewShareCmd constructs the `share` verb tree for a host front door.
+func NewShareCmd() *cobra.Command {
+	root := &cobra.Command{Use: "share", Short: "Cloudbox shares", SilenceUsage: true, SilenceErrors: true}
+	root.CompletionOptions.DisableDefaultCmd = true
+	root.AddCommand(NewShareWhoCmd())
+	return root
+}
+
 // NewShareWhoCmd constructs the `share who HOST/APP` command.
 func NewShareWhoCmd() *cobra.Command {
 	var master, token string
