@@ -342,9 +342,19 @@ func TestPairAttachDetach(t *testing.T) {
 		t.Fatalf("assignment = %v", as)
 	}
 
-	got := m.want(409, "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
-	if got["code"] != "attached_elsewhere" || got["satellite_id"] != sat1 {
-		t.Fatalf("attach elsewhere = %v", got)
+	// A second attachment coexists with the first.
+	at2 := m.want(201, "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
+	oldTok2 := str(s2.want(201, "POST", "/api/v1/hosts/attach", str(at2, "attach_token"), body), "token")
+	for _, caller := range []string{alice, host} {
+		as := list(m.want(200, "GET", "/api/v1/satellites/assignment", caller, nil), "assignments")
+		if len(as) != 2 {
+			t.Fatalf("concurrent assignments = %v", as)
+		}
+	}
+	for _, id := range []string{sat1, sat2} {
+		if hv := obj(m.want(200, "GET", "/api/v1/satellites/"+id, host, nil), "satellite"); hv["attached"] != true {
+			t.Fatalf("concurrent host view = %v", hv)
+		}
 	}
 
 	// Detach via the master revokes the satellite host token.
@@ -352,12 +362,23 @@ func TestPairAttachDetach(t *testing.T) {
 	m.want(204, "DELETE", "/api/v1/satellites/"+sat1+"/attach", host, nil)
 	s.wantErr(401, "unauthorized", "DELETE", "/api/v1/hosts/self", satTok, nil)
 
+	if as := list(m.want(200, "GET", "/api/v1/satellites/assignment", host, nil), "assignments"); len(as) != 1 || str(as[0].(map[string]any), "satellite_id") != sat2 || str(as[0].(map[string]any), "state") != "attached" {
+		t.Fatalf("surviving assignment = %v", as)
+	}
+	if again := s2.want(200, "POST", "/api/v1/hosts/attach", str(at2, "attach_token"), body); str(again, "token") != oldTok2 {
+		t.Fatalf("other satellite token changed on detach: %v", again)
+	}
+
 	// Re-attach to sat2, then leave from the satellite side.
 	f.SetSatelliteState(sat2, "stopped")
 	m.wantErr(409, "satellite_unavailable", "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
 	f.SetSatelliteState(sat2, "enabled")
-	at2 := m.want(201, "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
+	at2 = m.want(201, "POST", "/api/v1/satellites/"+sat2+"/attach", host, nil)
 	tok2 := str(s2.want(201, "POST", "/api/v1/hosts/attach", str(at2, "attach_token"), body), "token")
+	if tok2 == oldTok2 {
+		t.Fatal("reattach did not refresh the satellite host token")
+	}
+	s2.wantErr(401, "unauthorized", "DELETE", "/api/v1/hosts/self", oldTok2, nil)
 	s2.want(204, "DELETE", "/api/v1/hosts/self", tok2, nil)
 	if as := list(m.want(200, "GET", "/api/v1/satellites/assignment", alice, nil), "assignments"); len(as) != 0 {
 		t.Fatalf("assignment after leave = %v", as)
@@ -597,4 +618,47 @@ func TestWhoAdmittedRules(t *testing.T) {
 
 	// Caller must be host owner
 	m.wantErr(403, "not_owner", "GET", "/api/v1/hosts/studio/apps/circle-app/who", bob, nil)
+}
+
+func TestMultiplePendingAttachmentsAndUnpair(t *testing.T) {
+	f := New(t)
+	owner := f.AddOwner("owner@example.com")
+	m := call{t, f.URL()}
+	host := pairHost(m, owner, "studio")
+	other := pairHost(m, owner, "other")
+	type attachment struct {
+		id, token string
+		satellite call
+	}
+	var attachments []attachment
+	for _, name := range []string{"lab", "zoo"} {
+		id := f.AddSatellite(t, "owner@example.com", name)
+		at := m.want(201, "POST", "/api/v1/satellites/"+id+"/attach", host, nil)
+		attachments = append(attachments, attachment{id, str(at, "attach_token"), call{t, str(obj(at, "satellite"), "endpoint")}})
+	}
+	// Refreshing one pending pair must not invalidate the other pair's token.
+	first := &attachments[0]
+	old := first.token
+	at := m.want(201, "POST", "/api/v1/satellites/"+first.id+"/attach", host, nil)
+	first.token = str(at, "attach_token")
+	body := map[string]string{"host": "studio"}
+	first.satellite.wantErr(401, "invalid_attach_token", "POST", "/api/v1/hosts/attach", old, body)
+	for i := range attachments {
+		a := &attachments[i]
+		a.token = str(a.satellite.want(201, "POST", "/api/v1/hosts/attach", a.token, body), "token")
+	}
+	if rows := list(m.want(200, "GET", "/api/v1/satellites/assignment", other, nil), "assignments"); len(rows) != 0 {
+		t.Fatalf("another host sees assignments: %v", rows)
+	}
+	m.want(204, "DELETE", "/api/v1/hosts/self", host, nil)
+	if rows := list(m.want(200, "GET", "/api/v1/satellites/assignment", owner, nil), "assignments"); len(rows) != 0 {
+		t.Fatalf("unpair left assignments: %v", rows)
+	}
+	for _, a := range attachments {
+		a.satellite.wantErr(401, "unauthorized", "DELETE", "/api/v1/hosts/self", a.token, nil)
+		view := obj(m.want(200, "GET", "/api/v1/satellites/"+a.id, owner, nil), "satellite")
+		if hosts := list(view, "hosts"); len(hosts) != 0 {
+			t.Fatalf("unpair left satellite hosts: %v", hosts)
+		}
+	}
 }
