@@ -639,6 +639,7 @@ func (f *Fake) addMember(w http.ResponseWriter, r *http.Request) *apiError {
 	var body struct {
 		Email  string `json:"email"`
 		Circle string `json:"circle"`
+		Notify *bool  `json:"notify"` // false: no invitation email (the fake sends none anyway)
 	}
 	if e := decode(r, &body); e != nil {
 		return e

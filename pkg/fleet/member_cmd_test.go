@@ -35,6 +35,9 @@ func TestMemberVerbsAgainstWire(t *testing.T) {
 	if got := run(alice, "ls"); len(got["members"].([]any)) != 0 {
 		t.Fatal("dry run sent request")
 	}
+	if got := run(alice, "add", "quiet@example.com", "--circle", "family")["member"].(map[string]any); got["status"] != "pending" || got["circle"] != "family" {
+		t.Fatal(got)
+	}
 	invitation := run(alice, "invite", "bob@example.com", "--circle", "family")["invitation"].(map[string]any)["id"].(string)
 	if got := run(alice, "check", "bob@example.com"); got["reason"] != "inactive" {
 		t.Fatal(got)

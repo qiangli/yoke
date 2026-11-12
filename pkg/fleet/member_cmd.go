@@ -147,6 +147,20 @@ func NewMemberCmd() *cobra.Command {
 	}}
 	invite.Flags().StringVar(&inviteCircle, "circle", "guest", "member circle")
 	root.AddCommand(invite)
+	var addCircle string
+	add := &cobra.Command{Use: "add EMAIL", Short: "add a member without emailing the invitation (they accept after signing in)", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		circle, err := memberCircle(addCircle, false)
+		if err != nil {
+			return err
+		}
+		c, err := client(cmd.Context())
+		if err != nil {
+			return err
+		}
+		return write(cmd, c, http.MethodPost, "/api/v1/members", map[string]any{"email": args[0], "circle": circle, "notify": false})
+	}}
+	add.Flags().StringVar(&addCircle, "circle", "guest", "member circle")
+	root.AddCommand(add)
 	var acceptCircle string
 	accept := &cobra.Command{Use: "accept ID", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		circle, err := memberCircle(acceptCircle, false)
