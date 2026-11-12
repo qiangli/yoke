@@ -39,7 +39,7 @@ as fast as agentic tooling does.
 - **Non-POSIX applets and front-door verbs** (`cmds/`): `ast`, `browser`,
   `fetch`, `jq`, `tar`, `gzip`, `tree`, `which`, `watch`, `tokens`, `tz`,
   `ntp`, `cal`, `hexdump`, `clip`, `duration`, `why`, `atq`/`atrm`, `graph`,
-  `foreman`, `resources`. `cmds/all` blank-imports coreutils' certified
+  `foreman`, `resources`. `cmds/all` blank-imports coreutils' POSIX
   `cmds/all` and adds these — import it to get the whole userland.
 - **`git/`** — the self-contained pure-Go git client (go-git; the "file"
   transport is in-process, `git-upload-pack` is never spawned).
