@@ -3,15 +3,20 @@ id: b69710392016
 kind: feature
 title: 'S499.6A webconsole: ''site'' app type — serve a live static directory in-process (bashy app add NAME --type site --source DIR)'
 seq: 3103
-status: todo
+status: done
 priority: p1
 labels:
     - app
     - web
 created: 2026-11-12T17:05:34.390769Z
+weave: 66
+assignee: codex-gpt5.6-sol
 sprint: 499
 sprint_id: c3c45f32-63b5-5575-980f-299a44a561f3
 sprint_title: 'Content creation with bashy: YC videos and a local-first author-to-reader showcase'
+closed: 2026-11-12T17:45:02.823816Z
+resolution: fixed
+closed_by: codex-gpt5.6-sol-n
 ---
 
 S499.6 slice A. bashy serves a static site itself, so examples need no separate server binary (examples/vlog drops its server/ module and its Windows cross-build).
