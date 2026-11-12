@@ -124,7 +124,7 @@ func NewMemberCmd() *cobra.Command {
 			return output(cmd, map[string]any{"members": filtered, "stale": stale}, "")
 		}
 		for _, r := range filtered {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\t%t\n", r.ID, r.Email, r.Circle, r.Status, r.Mutual)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\t%t\t%s\n", r.ID, r.Email, r.Circle, r.Status, r.Mutual, r.Name)
 		}
 		if stale {
 			fmt.Fprintln(cmd.ErrOrStderr(), "member: showing last known list (offline)")
@@ -161,11 +161,21 @@ func NewMemberCmd() *cobra.Command {
 	}}
 	accept.Flags().StringVar(&acceptCircle, "circle", "guest", "your circle for the inviter")
 	root.AddCommand(accept)
-	var setCircle string
+	var setCircle, setName string
 	set := &cobra.Command{Use: "set EMAIL", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		circle, err := memberCircle(setCircle, true)
-		if err != nil {
-			return err
+		body := map[string]string{}
+		if setCircle != "" || !cmd.Flags().Changed("name") {
+			circle, err := memberCircle(setCircle, true)
+			if err != nil {
+				return err
+			}
+			body["circle"] = circle
+		}
+		if cmd.Flags().Changed("name") {
+			if setName = strings.TrimSpace(setName); setName == "" {
+				return fmt.Errorf("member: --name must not be blank")
+			}
+			body["name"] = setName
 		}
 		c, err := client(cmd.Context())
 		if err != nil {
@@ -175,9 +185,10 @@ func NewMemberCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return write(cmd, c, http.MethodPatch, boundary.MemberPath(id), map[string]string{"circle": circle})
+		return write(cmd, c, http.MethodPatch, boundary.MemberPath(id), body)
 	}}
 	set.Flags().StringVar(&setCircle, "circle", "", "new member circle")
+	set.Flags().StringVar(&setName, "name", "", "display name for the member")
 	root.AddCommand(set)
 	root.AddCommand(&cobra.Command{Use: "rm EMAIL", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := client(cmd.Context())

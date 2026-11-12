@@ -53,6 +53,10 @@ func TestMemberVerbsAgainstWire(t *testing.T) {
 	if got := run(alice, "check", "bob@example.com"); got["circle"] != "team" {
 		t.Fatal(got)
 	}
+	// --name alone relabels without touching the circle.
+	if got := run(alice, "set", "bob@example.com", "--name", "Bobby")["member"].(map[string]any); got["name"] != "Bobby" || got["circle"] != "team" {
+		t.Fatal(got)
+	}
 	run(alice, "rm", "bob@example.com")
 	if got := run(bob, "of"); len(got["of"].([]any)) != 0 {
 		t.Fatal(got)

@@ -64,6 +64,7 @@ type ErrorBody struct {
 type Member struct {
 	ID           string     `json:"id"`
 	Email        string     `json:"email"`
+	Name         string     `json:"name"`
 	Circle       string     `json:"circle"`
 	Status       string     `json:"status"` // pending | active
 	Mutual       bool       `json:"mutual"` // both directional rows exist and are active
@@ -676,6 +677,7 @@ func (f *Fake) patchMember(w http.ResponseWriter, r *http.Request, id string) *a
 	}
 	var body struct {
 		Circle *string `json:"circle"`
+		Name   *string `json:"name"`
 	}
 	if e := decode(r, &body); e != nil {
 		return e
@@ -689,6 +691,13 @@ func (f *Fake) patchMember(w http.ResponseWriter, r *http.Request, id string) *a
 			return e
 		}
 		m.Circle = *body.Circle
+	}
+	if body.Name != nil {
+		name := strings.TrimSpace(*body.Name)
+		if name == "" || len(name) > 100 {
+			return errf(422, "invalid_name", "name must be 1-100 characters")
+		}
+		m.Name = name
 	}
 	writeJSON(w, 200, map[string]any{"member": f.view(m)})
 	return nil
