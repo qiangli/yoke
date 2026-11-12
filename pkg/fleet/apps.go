@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -11,11 +12,10 @@ import (
 )
 
 // A registered app is the web-surface counterpart of a registered command
-// (`bashy app add`): a local web server the OPERATOR taught the Apps console,
-// tiled and proxied beside the panels bashy ships. The record is the
-// dhnt-app-meta-v1 contract as YAML, minus the two facts a registered app
-// cannot choose: its mode (always proxy — a third party owns its lifecycle)
-// and its mount (always its name).
+// (`bashy app add`): a web surface the OPERATOR taught the Apps console, tiled
+// beside the panels bashy ships. Proxy apps point at a separately supervised
+// loopback server; shaped and site apps are served in-process. The mount is
+// always the app's name.
 //
 // Like commands it has NO embedded ring: bashy ships the mechanism, never a
 // catalog of apps (rod, not fish). The console reads the ring as DATA — it
@@ -29,12 +29,12 @@ type App struct {
 	Label           string   `yaml:"label,omitempty" json:"label,omitempty" doc:"tile label; default the name"`
 	Icon            string   `yaml:"icon,omitempty" json:"icon,omitempty" doc:"SVG path data on a 24 grid, or one emoji"`
 	Tip             string   `yaml:"tip,omitempty" json:"tip,omitempty" doc:"tile tooltip"`
-	Port            int      `yaml:"port" json:"port" doc:"loopback port the app listens on; the console proxies /<name>/ to it"`
+	Port            int      `yaml:"port,omitempty" json:"port,omitempty" doc:"proxy only: loopback port the app listens on; the console proxies /<name>/ to it"`
 	Start           []string `yaml:"start,omitempty" json:"start,omitempty" doc:"argv shown as the start hint when the app is down (never run by the console)"`
 	Auth            string   `yaml:"auth,omitempty" json:"auth,omitempty" doc:"auth tier: system (default), public or custom"`
 	LoginPath       string   `yaml:"login_path,omitempty" json:"login_path,omitempty" doc:"custom auth only: app-relative login path"`
-	Type            string   `yaml:"type,omitempty" json:"type,omitempty" doc:"app type: proxy (default, a loopback server) or shaped (served from a versioned source tree)"`
-	Source          string   `yaml:"source,omitempty" json:"source,omitempty" doc:"shaped only: absolute path of the app's git checkout"`
+	Type            string   `yaml:"type,omitempty" json:"type,omitempty" doc:"app type: proxy (default, a loopback server), shaped (versioned source), or site (live static directory)"`
+	Source          string   `yaml:"source,omitempty" json:"source,omitempty" doc:"shaped/site only: absolute source path; a site stays linked to its live directory"`
 
 	Shaping *AppShaping `yaml:"shaping,omitempty" json:"shaping,omitempty" doc:"trusted shaping kind, build/test argv and service unit"`
 
@@ -151,7 +151,7 @@ func (a App) Validate() error {
 	switch a.Type {
 	case "", AppTypeProxy:
 		if a.Source != "" {
-			return fmt.Errorf("fleet: app %q: source is valid only with type %s", a.Name, AppTypeShaped)
+			return fmt.Errorf("fleet: app %q: source is valid only with type %s or %s", a.Name, AppTypeShaped, AppTypeSite)
 		}
 	case AppTypeShaped:
 		// A shaped app is served by the console from its source tree. A
@@ -165,8 +165,26 @@ func (a App) Validate() error {
 			return fmt.Errorf("fleet: app %q: a %s app needs an absolute --source checkout", a.Name, AppTypeShaped)
 		}
 		return nil
+	case AppTypeSite:
+		if a.Port != 0 {
+			return fmt.Errorf("fleet: app %q: a %s app has no port", a.Name, AppTypeSite)
+		}
+		if len(a.Start) != 0 {
+			return fmt.Errorf("fleet: app %q: a %s app has no start argv", a.Name, AppTypeSite)
+		}
+		if !filepath.IsAbs(a.Source) {
+			return fmt.Errorf("fleet: app %q: a %s app needs an absolute --source directory", a.Name, AppTypeSite)
+		}
+		st, err := os.Stat(a.Source)
+		if err != nil {
+			return fmt.Errorf("fleet: app %q: site source: %w", a.Name, err)
+		}
+		if !st.IsDir() {
+			return fmt.Errorf("fleet: app %q: site source %q is not a directory", a.Name, a.Source)
+		}
+		return nil
 	default:
-		return fmt.Errorf("fleet: app %q: type %q, want %s or %s", a.Name, a.Type, AppTypeProxy, AppTypeShaped)
+		return fmt.Errorf("fleet: app %q: type %q, want %s, %s or %s", a.Name, a.Type, AppTypeProxy, AppTypeShaped, AppTypeSite)
 	}
 	if a.Port < 1 || a.Port > 65535 {
 		return fmt.Errorf("fleet: app %q: port %d out of range (--port N)", a.Name, a.Port)
@@ -179,10 +197,14 @@ func (a App) Validate() error {
 const (
 	AppTypeProxy  = "proxy"
 	AppTypeShaped = "shaped"
+	AppTypeSite   = "site"
 )
 
 // IsShaped reports whether the console serves this app from its source tree.
 func (a App) IsShaped() bool { return a.Type == AppTypeShaped }
+
+// IsSite reports whether the console serves this app from a linked live directory.
+func (a App) IsSite() bool { return a.Type == AppTypeSite }
 
 // Apps returns every registered app, name-sorted, across the shared and
 // local rings. Entries that fail to parse are reported, never hidden.

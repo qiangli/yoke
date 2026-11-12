@@ -522,6 +522,9 @@ func (s *server) panelHandler(p Panel) (http.Handler, func() error) {
 	if p.ShapedSource != "" {
 		return s.shapedApp(p).handler(), nil
 	}
+	if p.SiteSource != "" {
+		return siteHandler(p.SiteSource), nil
+	}
 	if p.Mode == atlas.WebProxy && p.Port > 0 {
 		return s.proxyTo(p), nil
 	}

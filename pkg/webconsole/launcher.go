@@ -37,6 +37,10 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 				coopauth.Mount(mount, s.shapedApp(p).handler()).ServeHTTP(w, r)
 				return
 			}
+			if p.SiteSource != "" {
+				coopauth.Mount(mount, siteHandler(p.SiteSource)).ServeHTTP(w, r)
+				return
+			}
 			coopauth.Mount(mount, s.proxyTo(p)).ServeHTTP(w, r)
 			return
 		}

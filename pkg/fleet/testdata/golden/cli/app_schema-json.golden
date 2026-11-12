@@ -32,7 +32,7 @@
   {
     "path": "port",
     "type": "int",
-    "description": "loopback port the app listens on; the console proxies /\u003cname\u003e/ to it"
+    "description": "proxy only: loopback port the app listens on; the console proxies /\u003cname\u003e/ to it"
   },
   {
     "path": "shaping",
@@ -72,7 +72,7 @@
   {
     "path": "source",
     "type": "string",
-    "description": "shaped only: absolute path of the app's git checkout"
+    "description": "shaped/site only: absolute source path; a site stays linked to its live directory"
   },
   {
     "path": "start",
@@ -92,6 +92,6 @@
   {
     "path": "type",
     "type": "string",
-    "description": "app type: proxy (default, a loopback server) or shaped (served from a versioned source tree)"
+    "description": "app type: proxy (default, a loopback server), shaped (versioned source), or site (live static directory)"
   }
 ]

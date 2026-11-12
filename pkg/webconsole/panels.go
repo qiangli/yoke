@@ -82,6 +82,9 @@ type Panel struct {
 	// means the console serves the app itself, per principal, from this tree.
 	ShapedSource string            `json:"-"`
 	Shaping      *fleet.AppShaping `json:"-"`
+	// SiteSource is a linked static directory. The console serves its current
+	// bytes directly; it is never copied into or decorated by the suite.
+	SiteSource string `json:"-"`
 
 	handler http.Handler
 }
