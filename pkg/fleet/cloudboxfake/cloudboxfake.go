@@ -162,9 +162,7 @@ type Satellite struct {
 	Attached   *bool    `json:"attached,omitempty"`
 }
 
-// Assignment is the host → satellite assignment (S5). The fake keeps one
-// per host — the CURRENT server limit (409 attached_elsewhere) — but the wire
-// is a list, so concurrent attachments need no wire change.
+// Assignment is the host → satellite assignment (S5), one per host/satellite pair.
 type Assignment struct {
 	Host        string     `json:"host"`
 	SatelliteID string     `json:"satellite_id"`
@@ -182,6 +180,10 @@ type SatelliteHost struct {
 	OS         string    `json:"os,omitempty"`
 	Arch       string    `json:"arch,omitempty"`
 	AttachedAt time.Time `json:"attached_at"`
+}
+
+type assignmentKey struct {
+	host, satellite string
 }
 
 type token struct {
@@ -240,7 +242,7 @@ type Fake struct {
 	codes       map[string]*pairCode
 	hosts       map[string]*Host // host name -> record
 	sats        map[string]*satServer
-	assignments map[string]*Assignment // host -> assignment
+	assignments map[assignmentKey]*Assignment // host/satellite -> assignment
 	shares      map[string]*Share
 	suites      map[string]*Suite
 	suiteShares map[string]*SuiteShare
@@ -260,7 +262,7 @@ func New(t testing.TB) *Fake {
 		codes:       map[string]*pairCode{},
 		hosts:       map[string]*Host{},
 		sats:        map[string]*satServer{},
-		assignments: map[string]*Assignment{},
+		assignments: map[assignmentKey]*Assignment{},
 		shares:      map[string]*Share{}, suites: map[string]*Suite{}, suiteShares: map[string]*SuiteShare{},
 		groups:     map[string]*Group{},
 		idem:       map[string]*idemEntry{},
@@ -901,8 +903,10 @@ func (f *Fake) unpair(w http.ResponseWriter, r *http.Request) *apiError {
 	if e != nil {
 		return e
 	}
-	if a := f.assignments[tok.host]; a != nil {
-		f.dropAttachment(tok.host, a.SatelliteID)
+	for _, a := range f.assignments {
+		if a.Host == tok.host {
+			f.dropAttachment(tok.host, a.SatelliteID)
+		}
 	}
 	delete(f.hosts, tok.host)
 	for k, t := range f.tokens {
@@ -920,13 +924,13 @@ func (f *Fake) dropCrossOwnerAttachments(a, b string) {
 	if f.mutual(a, b) {
 		return
 	}
-	for h, as := range f.assignments {
+	for _, as := range f.assignments {
 		s := f.sats[as.SatelliteID]
 		if s == nil {
 			continue
 		}
 		if (as.owner == a && s.sat.OwnerEmail == b) || (as.owner == b && s.sat.OwnerEmail == a) {
-			f.dropAttachment(h, as.SatelliteID)
+			f.dropAttachment(as.Host, as.SatelliteID)
 		}
 	}
 }
@@ -935,9 +939,7 @@ func (f *Fake) dropCrossOwnerAttachments(a, b string) {
 // attach tokens and revokes its satellite host token. The fake revokes
 // immediately; the contract allows up to 60s at the satellite.
 func (f *Fake) dropAttachment(host, satID string) {
-	if a := f.assignments[host]; a != nil && a.SatelliteID == satID {
-		delete(f.assignments, host)
-	}
+	delete(f.assignments, assignmentKey{host, satID})
 	for k, t := range f.tokens {
 		if t.host == host && t.satellite == satID {
 			delete(f.tokens, k)
@@ -953,14 +955,14 @@ func (f *Fake) dropAttachment(host, satID string) {
 func (f *Fake) satelliteView(s *satServer, tok *token) Satellite {
 	v := *s.sat
 	if hasScope(tok, ScopeHost) {
-		a := f.assignments[tok.host]
-		att := a != nil && a.SatelliteID == s.sat.ID && a.State == "attached"
+		a := f.assignments[assignmentKey{tok.host, s.sat.ID}]
+		att := a != nil && a.State == "attached"
 		v.Attached = &att
 		return v
 	}
-	for h, a := range f.assignments {
+	for _, a := range f.assignments {
 		if a.SatelliteID == s.sat.ID && a.State == "attached" {
-			v.Hosts = append(v.Hosts, h)
+			v.Hosts = append(v.Hosts, a.Host)
 		}
 	}
 	sort.Strings(v.Hosts)
@@ -1025,17 +1027,22 @@ func (f *Fake) listAssignments(w http.ResponseWriter, r *http.Request) *apiError
 	}
 	sat := r.URL.Query().Get("satellite")
 	out := []Assignment{}
-	for h, a := range f.assignments {
+	for _, a := range f.assignments {
 		satOwner := ""
 		if s := f.sats[a.SatelliteID]; s != nil {
 			satOwner = s.sat.OwnerEmail
 		}
-		if (a.owner != tok.email && satOwner != tok.email) || (hasScope(tok, ScopeHost) && h != tok.host) || (sat != "" && a.SatelliteID != sat) {
+		if (a.owner != tok.email && satOwner != tok.email) || (hasScope(tok, ScopeHost) && a.Host != tok.host) || (sat != "" && a.SatelliteID != sat) {
 			continue
 		}
 		out = append(out, *a)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host == out[j].Host {
+			return out[i].SatelliteID < out[j].SatelliteID
+		}
+		return out[i].Host < out[j].Host
+	})
 	writeJSON(w, 200, map[string]any{"assignments": out})
 	return nil
 }
@@ -1052,25 +1059,20 @@ func (f *Fake) attach(w http.ResponseWriter, r *http.Request, id string) *apiErr
 	if s == nil {
 		return errf(404, "not_found", "satellite %s not found", id)
 	}
-	if a := f.assignments[tok.host]; a != nil && a.SatelliteID != id {
-		e := errf(409, "attached_elsewhere", "host %s is attached to %s; detach first", tok.host, a.SatelliteID)
-		e.body.SatelliteID = a.SatelliteID
-		return e
-	}
 	if s.sat.State != "enabled" {
 		return errf(409, "satellite_unavailable", "satellite %s is %s", id, s.sat.State)
 	}
-	// A new attach token supersedes any unredeemed earlier one.
+	// A new attach token supersedes unredeemed tokens for this pair only.
 	for k, t := range f.tokens {
-		if t.host == tok.host && hasScope(t, ScopeAttach) && t.used == "" {
+		if t.host == tok.host && t.satellite == id && hasScope(t, ScopeAttach) && t.used == "" {
 			delete(f.tokens, k)
 		}
 	}
 	now := f.now()
 	at := f.nextID("atok")
 	f.tokens[at] = &token{email: tok.email, host: tok.host, satellite: id, scopes: []string{ScopeAttach}, expires: now.Add(AttachTokenTTL)}
-	if a := f.assignments[tok.host]; a == nil {
-		f.assignments[tok.host] = &Assignment{Host: tok.host, SatelliteID: id, State: "pending", AssignedAt: now, owner: tok.email}
+	if a := f.assignments[assignmentKey{tok.host, id}]; a == nil {
+		f.assignments[assignmentKey{tok.host, id}] = &Assignment{Host: tok.host, SatelliteID: id, State: "pending", AssignedAt: now, owner: tok.email}
 	}
 	writeJSON(w, 201, map[string]any{
 		"attach_token": at,
@@ -1151,7 +1153,7 @@ func (f *Fake) redeemAttach(s *satServer, w http.ResponseWriter, r *http.Request
 	f.tokens[st] = &token{email: tok.email, host: tok.host, satellite: s.sat.ID, scopes: []string{ScopeSatelliteHost}}
 	s.hosts[tok.host], s.token[tok.host] = rec, st
 	tok.used = sum
-	if a := f.assignments[tok.host]; a != nil && a.SatelliteID == s.sat.ID {
+	if a := f.assignments[assignmentKey{tok.host, s.sat.ID}]; a != nil {
 		a.State, a.AttachedAt = "attached", &now
 	}
 	writeJSON(w, 201, map[string]any{"host": rec, "token": st, "scopes": []string{ScopeSatelliteHost}, "satellite_id": s.sat.ID, "registration": s.registration(tok.host, st)})
