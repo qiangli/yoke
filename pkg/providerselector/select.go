@@ -72,8 +72,13 @@ func Project(records []fleet.Command, tools []fleet.Tool, opt Options) []Candida
 			if opt.Route != "" && opt.Provider == "" && opt.Route != "vendor" {
 				c.Rejected = "route is vendor"
 			}
+			if c.Rejected == "" && !tool.Active() {
+				c.Rejected = "vendor CLI is not installed"
+			}
 			if c.Rejected == "" && !opt.Yes {
-				if need, reason := command.NeedsConfirmation(); need {
+				if needsYes(command.Effects) {
+					c.Rejected = "requires --yes for spend/send effect"
+				} else if need, reason := command.NeedsConfirmation(); need {
 					c.Rejected = "requires --yes: " + reason
 				}
 			}

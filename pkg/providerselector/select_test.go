@@ -1,9 +1,11 @@
 package providerselector
 
 import (
-	"github.com/qiangli/yoke/pkg/fleet"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 func TestRouteOrderAndOverride(t *testing.T) {
@@ -55,10 +57,42 @@ func TestRefusalAndAmbiguity(t *testing.T) {
 	}
 }
 func TestToolCommandProjection(t *testing.T) {
-	tools := []fleet.Tool{{Name: "claude", Commands: []fleet.ToolCommand{{Name: "plan"}}}}
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := []fleet.Tool{{Name: "claude", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "plan"}}}}
 	opt := Options{Role: "plan"}
 	got, err := Select(Project(nil, tools, opt), opt)
 	if err != nil || got.Name != "claude:plan" || got.Route != "vendor" || got.Kind != "tool-command" {
 		t.Fatalf("tool = %+v, %v", got, err)
+	}
+}
+
+func TestToolCommandSpendSendAndAbsentCLI(t *testing.T) {
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, effect := range []string{"spend", "send"} {
+		tool := fleet.Tool{Name: "vendor", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email.send", Effects: []string{effect}}}}
+		opt := Options{Role: "email.send"}
+		candidates := Project(nil, []fleet.Tool{tool}, opt)
+		if len(candidates) != 1 || !strings.Contains(candidates[0].Rejected, "--yes") {
+			t.Fatalf("effect %s not refused: %+v", effect, candidates)
+		}
+		opt.Yes = true
+		if got, err := Select(Project(nil, []fleet.Tool{tool}, opt), opt); err != nil || got.Name != "vendor:email.send" {
+			t.Fatalf("effect %s with --yes = %+v, %v", effect, got, err)
+		}
+	}
+	missing := fleet.Tool{Name: "absent", CLI: fleet.ToolCLI{Binary: "no-such-provider-selector-test-binary"}, Commands: []fleet.ToolCommand{{Name: "plan"}}}
+	opt := Options{Role: "plan", Provider: "absent:plan"}
+	candidates := Project(nil, []fleet.Tool{missing}, opt)
+	if len(candidates) != 1 || !strings.Contains(candidates[0].Rejected, "not installed") {
+		t.Fatalf("absent CLI = %+v", candidates)
+	}
+	if _, err := Select(candidates, opt); err == nil {
+		t.Fatal("selected absent CLI")
 	}
 }
