@@ -5,7 +5,11 @@ Yoke or its agentic commands. [S561 evidence](https://github.com/qiangli/bashy/b
 closure with 67 residual non-passes; [S571](https://github.com/dhnt/umbrella/blob/main/docs/plan-s571-posix-certification-readiness.md) owns their resolution
 and submission readiness. No official POSIX certification is claimed.
 
-bashy's **agentic userland**: everything the [bashy](https://github.com/qiangli/bashy)
+Yoke is bashy's **agentic userland** and the **software shaping engine**.
+
+> **[Software shaping lets anyone tell an agent, in plain words, how a running tool should work, and get their own verified, reversible version, while everyone else keeps theirs.](https://github.com/qiangli/bashy/blob/main/docs/software-shaping.md)**
+
+The userland is everything the [bashy](https://github.com/qiangli/bashy)
 shell adds on top of the POSIX implementation package
 [coreutils](https://github.com/qiangli/coreutils) that is not itself a
 POSIX-required or GNU coreutils program. Pure Go, no cgo in core, one
@@ -19,6 +23,13 @@ as fast as agentic tooling does.
 
 ## What is here
 
+- **The shaping engine** (`pkg/shape`): the one candidate lifecycle
+  (wish, candidate, verify, preview, approve, undo/restore, promote) shared by
+  the web console, the `bashy shape` CLI and REST. The trusted verifier
+  (`pkg/shape/verify`) runs checks, surface contracts (expand-then-contract)
+  and effects; results are kept as evidence records (`pkg/shape/evidence`).
+  Activation is scoped per principal or per host, and history is kept.
+  `pkg/webconsole` serves `/shape/<app>/`.
 - **The AgentOS hub** (`pkg/`): `fleet` (tools/models/agents/skills
   registry), `kb` (the host-scope knowledge base), `bus`/`room`/`meet`
   (agent comms), `weave`/`dag`/`foreman`/`sprint` (orchestration), `chat`,
