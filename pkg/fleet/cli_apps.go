@@ -18,6 +18,6 @@ func NewAppCmds(opts ...Option) []*cobra.Command {
 	}
 }
 
-// AppsHint is printed after a write: the console mounts panels when it
-// starts, so a running one picks the change up on restart.
-const AppsHint = "takes effect when the console (re)starts: bashy service restart apps"
+// AppsHint is printed after a write: production consoles discover registered
+// records per request, so registration and linked-site edits are live.
+const AppsHint = "takes effect on the console's next request"

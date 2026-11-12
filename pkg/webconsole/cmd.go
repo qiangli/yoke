@@ -36,7 +36,7 @@ func NewAppsCmd() *cobra.Command {
 			"It is ONE launcher with the apps deep-linked beneath it, not one server per\n" +
 			"verb: one nav, one auth, one design system. `bashy commands --view web` lists\n" +
 			"the same surfaces in the terminal.\n\n" +
-			"`bashy app add NAME --port N` registers any local web server as a tile of\n" +
+			"`bashy app add NAME --port N` registers a local server; `--type site --source DIR` links static files as a tile of\n" +
 			"its own (show · set · rm · edit manage it); bashy ships no catalog of them.",
 		SilenceUsage: true,
 		// The caller (bashy's dispatch arm) prints the error. Without this cobra

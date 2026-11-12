@@ -10,10 +10,10 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 )
 
-// Registered apps (`bashy app add`) are the rod beside the stock panels: any
-// local web server the operator names, proxied at /<name>/. The record is the
-// dhnt-app-meta-v1 contract persisted in the fleet ring, so discovery READS
-// data and never execs — the rule --app has to spend a probe to honor.
+// Registered apps (`bashy app add`) are the rod beside the stock panels: a
+// named loopback proxy, shaped source tree, or linked static directory at
+// /<name>/. The record is persisted in the fleet ring, so discovery READS data
+// and never execs — the rule --app has to spend a probe to honor.
 
 // appMeta turns a registered record into the contract Validate checks. The
 // record's auth IS operator policy (the operator wrote it), so unlike a probed
@@ -42,7 +42,9 @@ func appMeta(a fleet.App) AppMeta {
 		m.LoginPath = ""
 	}
 	if a.IsShaped() {
-		m.shaped, m.Mode = true, atlas.WebInProcess
+		m.inProcess, m.shaped, m.Mode = true, true, atlas.WebInProcess
+	} else if a.IsSite() {
+		m.inProcess, m.Mode = true, atlas.WebInProcess
 	}
 	return m
 }
@@ -54,13 +56,17 @@ func ValidateRegisteredApp(a fleet.App) error {
 	return appMeta(a).Validate(TakenMounts(stockPanels()))
 }
 
-// discoverRegistered reads the registered-app ring into proxy panels. A bad
+// discoverRegistered reads the registered-app ring into panels. A bad
 // or colliding record is reported and skipped; the launcher still comes up.
 func discoverRegistered(taken map[string]bool) ([]Panel, []error) {
 	apps, errs := fleet.New().Apps()
 	var out []Panel
 	for _, a := range apps {
 		if a.IsRetired() {
+			continue
+		}
+		if err := a.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", a.Name, err))
 			continue
 		}
 		m := appMeta(a)
@@ -75,6 +81,14 @@ func discoverRegistered(taken map[string]bool) ([]Panel, []error) {
 				LaunchPath: "/shape/" + m.Mount + "/",
 				Mode:       atlas.WebInProcess, Icon: m.Icon, Tip: m.Tip, Auth: m.Auth,
 				ShapedSource: a.Source, Shaping: a.Shaping, Source: "registered", Available: true,
+			})
+			continue
+		}
+		if a.IsSite() {
+			out = append(out, Panel{
+				Name: m.Mount, Label: m.Label, Path: "/" + m.Mount + "/",
+				Mode: atlas.WebInProcess, Icon: m.Icon, Tip: m.Tip, Auth: m.Auth,
+				LoginPath: m.LoginPath, SiteSource: a.Source, Source: "registered", Available: true,
 			})
 			continue
 		}

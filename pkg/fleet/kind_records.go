@@ -301,15 +301,17 @@ func appRecord() *recordSpec {
 		Check:     (*Catalog).checkApp,
 		ShowShort: "Print a registered app's record",
 		AddDoc: verbDoc{
-			Use:     "add (<name> --port N [flags] | <file>|-)",
+			Use:     "add (<name> (--port N | --type site --source DIR) [flags] | <file>|-)",
 			Aliases: []string{"register"},
 			Short:   "Register a local web app as a console tile",
 			Long: "Register a local web server as an Apps tile, proxied at /<name>/ to\n" +
-				"127.0.0.1:<port>. The record is read as data: the console never runs\n" +
+				"127.0.0.1:<port>, or link a live static directory with --type site.\n" +
+				"The record is read as data: the console never runs\n" +
 				"anything to discover a registered app. A name the console already uses\n" +
 				"(a builtin panel, an atlas surface, a reserved mount) is refused.\n\n" +
 				AppsHint + ".",
 			Example: "  bashy app add jupyter --port 8888 --label Jupyter --icon 📓 --start jupyter --start lab\n" +
+				"  bashy app add vlog --type site --source /absolute/path/to/vlog\n" +
 				"  bashy app add ./grafana.yaml",
 		},
 		SetDoc: verbDoc{
@@ -325,8 +327,8 @@ func appRecord() *recordSpec {
 			listFlag("start", "start", "start-hint argv element shown when the app is down (repeatable; never run)", "start-hint argv element shown when the app is down (repeatable; never run)",
 				func(a *App, argv []string) error { a.Start = argv; return nil }),
 			strFlag("auth", "auth", "auth tier: system (default), public or custom", "auth tier: system (default), public or custom", func(a *App) *string { return &a.Auth }),
-			strFlag("type", "type", "app type: proxy (default) or shaped", "app type: proxy (default) or shaped", func(a *App) *string { return &a.Type }),
-			strFlag("source", "source", "shaped only: absolute path of the app's git checkout", "shaped only: absolute path of the app's git checkout", func(a *App) *string { return &a.Source }),
+			strFlag("type", "type", "app type: proxy (default), shaped or site", "app type: proxy (default), shaped or site", func(a *App) *string { return &a.Type }),
+			strFlag("source", "source", "shaped/site source; site links an absolute live directory", "shaped/site source; site links an absolute live directory", func(a *App) *string { return &a.Source }),
 			strFlag("login-path", "login_path", "custom auth only: app-relative login path", "custom auth only: app-relative login path", func(a *App) *string { return &a.LoginPath }),
 		},
 		Saved: func(cmd *cobra.Command, _ *Catalog, a App, set bool) error {
@@ -334,6 +336,8 @@ func appRecord() *recordSpec {
 				fmt.Fprintln(cmd.OutOrStdout(), a.Name)
 			} else if a.IsShaped() {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s -> /%s/ (shaped, %s)\n", a.Name, a.Name, a.Source)
+			} else if a.IsSite() {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s -> /%s/ (site, %s)\n", a.Name, a.Name, a.Source)
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s -> /%s/ (127.0.0.1:%d)\n", a.Name, a.Name, a.Port)
 			}
