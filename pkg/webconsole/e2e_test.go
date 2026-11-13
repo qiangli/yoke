@@ -209,32 +209,46 @@ func TestE2EFilesServesItsScope(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("/files/ = %d", code)
 	}
-	if !strings.Contains(strings.ToLower(body), "file browser") {
+	if !strings.Contains(body, `id="app-config"`) {
 		t.Error("/files/ did not serve File Browser")
 	}
-	// fbembed carries the mount in StaticURL rather than a <base href> — asserting
-	// the wrong mechanism is how a passing test can describe a panel it never
-	// actually checked. If this is absent the panel is loading its assets from
-	// the launcher root and the page is broken under any prefix.
-	if !strings.Contains(body, `"/files/static"`) {
-		t.Error("/files/ did not rewrite StaticURL for its mount")
+	// fbembed carries the mount in baseURL/staticURL rather than a <base href> —
+	// asserting the wrong mechanism is how a passing test can describe a panel
+	// it never actually checked. If this is absent the panel is loading its
+	// assets from the launcher root and the page is broken under any prefix.
+	if !strings.Contains(body, `"/files/public/static/`) {
+		t.Error("/files/ did not rewrite staticURL for its mount")
+	}
+	if !strings.Contains(body, `"baseURL":"/files/"`) {
+		t.Error("/files/ did not rewrite baseURL for its mount")
 	}
 
 	// And the scope must be the one we asked for: this panel already shipped once
 	// defaulting to the server's working directory, which showed a different tree
 	// per invocation.
 	//
-	// The listing needs the token the SPA itself carries. This check used to be
-	// written as `if code == 200 && ...`, which meant the 401 an unauthenticated
-	// probe actually gets skipped the assertion entirely — the test reported a
-	// scope it had never looked at.
-	code, listing, _ := getAuthed(t, base+"/files/api/resources/", filesToken(t, base))
+	// fbembed runs noauth — the embedding console is the access gate — so the
+	// listing needs no token. This check used to be written as
+	// `if code == 200 && ...`, which meant a failing probe skipped the
+	// assertion entirely — the test reported a scope it had never looked at.
+	// The engine serves the listing from its index or straight from disk
+	// while the first scan runs, so allow it a moment.
+	var listing string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		code, listing, _ = get(t, base+"/files/api/resources?path=/&source=files")
+		if code == http.StatusOK && strings.Contains(listing, marker) {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	if code != http.StatusOK {
-		t.Fatalf("/files/api/resources/ = %d (%s)", code, ellipsize(strings.TrimSpace(listing), 200))
+		t.Fatalf("/files/api/resources = %d (%s)", code, ellipsize(strings.TrimSpace(listing), 200))
 	}
-	if !strings.Contains(listing, marker) {
-		t.Errorf("scope %s does not list %s: %s", dir, marker, ellipsize(listing, 200))
-	}
+	t.Errorf("scope %s does not list %s: %s", dir, marker, ellipsize(listing, 200))
 }
 
 // The Files panel is READ-ONLY unless the operator said otherwise, and the
@@ -249,12 +263,11 @@ func TestE2EFilesIsReadOnlyUnlessAsked(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		base := serve(t, Options{Scope: dir, AllowWrite: allowWrite})
-		req, err := http.NewRequest("POST", base+"/files/api/resources/written.txt",
+		req, err := http.NewRequest("POST", base+"/files/api/resources?path=/written.txt&source=files",
 			strings.NewReader("written by the e2e"))
 		if err != nil {
 			t.Fatalf("request: %v", err)
 		}
-		req.Header.Set("X-Auth", filesToken(t, base))
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("POST: %v", err)
@@ -264,57 +277,24 @@ func TestE2EFilesIsReadOnlyUnlessAsked(t *testing.T) {
 		return resp.StatusCode, statErr == nil
 	}
 
-	code, created := write(t, false)
-	if code == http.StatusOK || created {
-		t.Errorf("read-only console accepted a write: status %d, file created %v", code, created)
-	}
-
-	code, created = write(t, true)
-	if code != http.StatusOK || !created {
-		t.Fatalf("AllowWrite console refused the same write: status %d, file created %v — "+
-			"the refusal above proves nothing until this succeeds", code, created)
-	}
-}
-
-// filesToken logs in the way the File Browser SPA does. fbembed runs NoAuth —
-// the embedding console is the access gate — but its API still wants the JWT,
-// so an unauthenticated probe gets a 401 that says nothing about scope or
-// permissions.
-func filesToken(t *testing.T, base string) string {
-	t.Helper()
-	code, body, _ := post(t, base+"/files/api/login", "")
-	if code != http.StatusOK {
-		t.Fatalf("/files/api/login = %d (%s)", code, ellipsize(strings.TrimSpace(body), 120))
-	}
-	tok := strings.TrimSpace(body)
-	if tok == "" {
-		t.Fatal("/files/api/login returned an empty token")
-	}
-	return tok
-}
-
-func getAuthed(t *testing.T, url, token string) (int, string, http.Header) {
-	t.Helper()
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		t.Fatalf("request %s: %v", url, err)
-	}
-	req.Header.Set("X-Auth", token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
-	}
-	defer resp.Body.Close()
-	b := make([]byte, 1<<20)
-	n := 0
-	for n < len(b) {
-		m, err := resp.Body.Read(b[n:])
-		n += m
-		if err != nil {
-			break
+	// One embedded File Browser per process: each console must be torn down
+	// (subtest cleanup) before the next one boots, or the second panel fails
+	// to mount and the launcher's own page answers the write with a 200.
+	var roCode int
+	var roCreated bool
+	t.Run("read-only", func(t *testing.T) {
+		roCode, roCreated = write(t, false)
+	})
+	t.Run("allow-write", func(t *testing.T) {
+		code, created := write(t, true)
+		if code/100 != 2 || !created {
+			t.Fatalf("AllowWrite console refused the same write: status %d, file created %v — "+
+				"the refusal below proves nothing until this succeeds", code, created)
 		}
-	}
-	return resp.StatusCode, string(b[:n]), resp.Header
+		if roCode == http.StatusOK || roCreated {
+			t.Errorf("read-only console accepted a write: status %d, file created %v", roCode, roCreated)
+		}
+	})
 }
 
 // ellipsize is the test-local shortener. It is NOT named truncate: pair_http.go

@@ -18,7 +18,7 @@ func TestFilesBrandingUsesTheFolderIcon(t *testing.T) {
 	t.Cleanup(func() { _ = closer() })
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/static/img/logo.svg", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/static/favicon.svg", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("logo status = %d, want 200", rec.Code)
 	}
@@ -29,9 +29,9 @@ func TestFilesBrandingUsesTheFolderIcon(t *testing.T) {
 	if !strings.Contains(body, filesLogoPath) {
 		t.Errorf("branded logo does not carry the folder icon path:\n%s", body)
 	}
-	for _, floppy := range []string{"prefix__", "#2bbcff", "#006498"} {
-		if strings.Contains(body, floppy) {
-			t.Errorf("branded logo still looks like the stock floppy disk (%q)", floppy)
+	for _, stock := range []string{"prefix__", "#2bbcff", "#006498", "<rect"} {
+		if strings.Contains(body, stock) {
+			t.Errorf("branded icon still looks like the stock one (%q)", stock)
 		}
 	}
 }
