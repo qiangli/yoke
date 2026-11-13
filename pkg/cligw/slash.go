@@ -359,6 +359,11 @@ func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	args := lastUserText(req)
 	opts := toolcmd.Options{Agent: agent.Name}
+	if args != "" {
+		// The message is ONE operand, as on the shell door: split into words
+		// it would inject vendor CLI flags through an exec: seed's {args}.
+		opts.Argv = []string{args}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), toolcmd.CommandTimeout(cmd, opts))
 	defer cancel()
 

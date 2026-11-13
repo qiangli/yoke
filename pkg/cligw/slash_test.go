@@ -129,13 +129,14 @@ type fakeRunner struct {
 
 type fakeCall struct {
 	Tool, Command, Args, Agent string
+	Argv                       []string
 	Deadline                   time.Duration
 }
 
 func (f *fakeRunner) run(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args string, opts toolcmd.Options) (toolcmd.Result, error) {
 	dl, _ := ctx.Deadline()
 	f.mu.Lock()
-	f.calls = append(f.calls, fakeCall{Tool: tool.Name, Command: cmd.Name, Args: args, Agent: opts.Agent, Deadline: time.Until(dl)})
+	f.calls = append(f.calls, fakeCall{Tool: tool.Name, Command: cmd.Name, Args: args, Agent: opts.Agent, Argv: opts.Argv, Deadline: time.Until(dl)})
 	res, err, delay := f.res, f.err, f.delay
 	f.mu.Unlock()
 	if delay > 0 {
@@ -511,5 +512,24 @@ func TestResolveAgentRefusesSlash(t *testing.T) {
 	ts := newSlashServer(t, &fakeRunner{})
 	if _, err := ts.ResolveAgent(context.Background(), "L4", "slash=plan"); err == nil || !strings.Contains(err.Error(), "sticky") {
 		t.Fatalf("ResolveAgent froze a slash filter: %v", err)
+	}
+}
+
+// A chat message is ONE operand: split into words it could inject vendor CLI
+// flags into an exec: seed ({args} expands per word). S626 S7 finding F1.
+func TestSlashMessageIsOneOperand(t *testing.T) {
+	runner := &fakeRunner{res: toolcmd.Result{Mode: "print", Outcome: toolcmd.OutcomeSuccess, Text: "ok"}}
+	ts := newSlashServer(t, runner)
+	body := `{"model":"L4","messages":[{"role":"user","content":"--version and then plan it"}]}`
+	resp := ts.doHeaders(t, http.MethodPost, "/v1/chat/completions", body, map[string]string{FilterHeader: "slash=plan"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("slash plan = %s: %v", resp.Status, decodeBody(t, resp))
+	}
+	calls := runner.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("runner calls = %d", len(calls))
+	}
+	if got := calls[0].Argv; len(got) != 1 || got[0] != "--version and then plan it" {
+		t.Fatalf("argv = %q, want the message as one operand", got)
 	}
 }
