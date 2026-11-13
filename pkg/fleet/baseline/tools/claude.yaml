@@ -199,6 +199,42 @@ commands:
     capability: planning
     output: turn
     exec: claude -p --permission-mode plan --output-format json --model {model} {args}
+  # MEASURED 2026-11-12 (claude 2.1.284, Sprint #626 S5): Gmail and Drive are
+  # the account's claude.ai connectors (mcp__claude_ai_Gmail__*,
+  # mcp__claude_ai_Google_Drive__*), reached in print through ToolSearch.
+  # These commands are READ-ONLY by construction: --permission-mode dontAsk
+  # denies every tool not in --allowedTools (the connector's read tools), and
+  # --disallowedTools removes the send/draft (Gmail) or share/create/update
+  # (Drive) tools, the other connectors and Bash/Edit/Write from the session
+  # (a ToolSearch for send_message or share_file found nothing). `--tools`
+  # must NOT be used: any --tools list also hides every MCP connector tool.
+  # Names are the dotted roles, never the bare service: the selector matches
+  # a role's head (email.send -> email), so a command named `email` would be
+  # chosen for email.send. Sending or sharing stays a separate command that
+  # declares the send effect. A claude parent session exports
+  # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, which keeps claude.ai
+  # connectors from loading; the child then answers "no Gmail tool" with
+  # subtype success. Run from a plain shell, or unset it.
+  # email.read: "search Gmail for newer_than:7d (max 5), count only" ran
+  # ToolSearch then search_threads (ids-only view), 5 threads, 10.8 s,
+  # no permission denials.
+  - name: email.read
+    slash: /email.read {args}
+    mode: print
+    capability: email
+    output: turn
+    effects: [read, net, remote]
+    exec: claude -p --permission-mode dontAsk --allowedTools mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Gmail__get_thread,mcp__claude_ai_Gmail__get_message,mcp__claude_ai_Gmail__list_labels,mcp__claude_ai_Gmail__list_drafts,mcp__claude_ai_Gmail__get_draft --disallowedTools Bash,Edit,Write,NotebookEdit,mcp__claude_ai_Gmail__send_message,mcp__claude_ai_Gmail__reply,mcp__claude_ai_Gmail__forward,mcp__claude_ai_Gmail__create_draft,mcp__claude_ai_Gmail__update_draft,mcp__claude_ai_Gmail__delete_draft,mcp__claude_ai_Google_Drive,mcp__claude_ai_Google_Calendar,mcp__claude_ai_Claude_Docs --output-format json --model {model} {args}
+  # drive.read: "list my 5 most recently modified Drive files, count only"
+  # ran ToolSearch then list_recent_files, 5 files, 6.9 s, no permission
+  # denials.
+  - name: drive.read
+    slash: /drive.read {args}
+    mode: print
+    capability: drive
+    output: turn
+    effects: [read, net, remote]
+    exec: claude -p --permission-mode dontAsk --allowedTools mcp__claude_ai_Google_Drive__search_files,mcp__claude_ai_Google_Drive__list_recent_files,mcp__claude_ai_Google_Drive__read_file_content,mcp__claude_ai_Google_Drive__download_file_content,mcp__claude_ai_Google_Drive__get_file_metadata,mcp__claude_ai_Google_Drive__get_file_permissions,mcp__claude_ai_Google_Drive__list_shared_drives,mcp__claude_ai_Google_Drive__get_shared_drive_metadata,mcp__claude_ai_Google_Drive__list_file_revisions --disallowedTools Bash,Edit,Write,NotebookEdit,mcp__claude_ai_Google_Drive__share_file,mcp__claude_ai_Google_Drive__create_file,mcp__claude_ai_Google_Drive__update_file,mcp__claude_ai_Google_Drive__copy_file,mcp__claude_ai_Google_Drive__trash_file,mcp__claude_ai_Gmail,mcp__claude_ai_Google_Calendar,mcp__claude_ai_Claude_Docs --output-format json --model {model} {args}
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

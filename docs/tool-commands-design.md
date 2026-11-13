@@ -52,8 +52,14 @@ local open-source models, browser automation and paid APIs are the other
 providers.
 
 A provider role is an open dotted value whose head is the service
-(`image.edit`, `email.send`). The command name is always the head; the
-dotted role is the provider's, never a second command name.
+(`image.edit`, `email.send`). A command named for the service head serves
+every role of that service, so the selector matches a role to a command by
+its full name or its head (`video.understand` → `agy:video`). A tool that
+offers only part of a service names the command by that role instead
+(`claude:email.read`), so it is never offered for a sibling role. A
+command named for the bare head serves a mutating role (`*.send`,
+`*.write`) only if it declares that effect; a read-only `email` is
+rejected for `email.send` (`TestSendRoleNeverSelectsReadOnlyCommand`).
 
 | Service | Example roles | Capability tag | Notes |
 |---|---|---|---|
@@ -65,16 +71,17 @@ dotted role is the provider's, never a second command name.
 | `video` | `video.understand` | `video` | `agy:video` (print) is seeded |
 | `transcribe` | `transcribe.*` | `transcribe` | `bashy transcribe` selector is the base of the shared one; `muse:transcribe` (print) is seeded |
 | `narrate` | `narrate` | `narrate` | spoken audio; no vendor CLI produces it headlessly yet |
-| `email` | `email.read`, `email.send` | `email` | `mail` stays the Unix mail verb |
-| `drive` | `drive.read`, `drive.write` | `drive` | |
+| `email` | `email.read`, `email.send` | `email` | `mail` stays the Unix mail verb; `claude:email.read` (print, read-only) is seeded |
+| `drive` | `drive.read`, `drive.write` | `drive` | `claude:drive.read` (print, read-only) is seeded |
 | `song` | `song` | `song` | Sprint #627 |
 | `animate` | `animate` | `animate` | Sprint #627 |
 | `film` | `film` | `film` | Sprint #627 |
 
 A name in this catalog says what to call the feature, not that any tool
 offers it. Seeded today: `claude:plan`, `agy:plan` and `muse:plan` (Sprint
-#626 S1, print), `muse:transcribe` (S4, print), `agy:video` (S6, print) and `codex:review`; a seed for any other service needs its
-own measurement. A tool has one command per name: the claude `/plan` TUI
+#626 S1, print), `muse:transcribe` (S4, print), `agy:video` (S6, print), `claude:email.read`
+and `claude:drive.read` (S5, print) and `codex:review`; a seed for any other
+service needs its own measurement. A tool has one command per name: the claude `/plan` TUI
 spelling is in the umbrella's `docs/tool-commands-overlay-example.yaml`.
 
 An `exec:` override gets no `events_stdout` flags, and the runner reads only
@@ -102,3 +109,23 @@ image.generate` and `capability: image` match the same requests.
   `movie` → `film`; `image-generation` → `image`; `tts`, `speech` →
   `narrate`; `music` → `song`; `animation` → `animate`; `stt`,
   `speech-to-text` → `transcribe`. `mail` is not an alias.
+
+## Connector services (Sprint #626 S5)
+
+`claude:email.read` and `claude:drive.read` reach the account's claude.ai
+Gmail and Drive connectors in print mode. They are read-only by
+construction, not by prompt:
+
+- `--permission-mode dontAsk` denies every tool that `--allowedTools` does
+  not name, and `--allowedTools` names only the connector's read tools.
+- `--disallowedTools` removes the send/draft (Gmail) or share/create/update
+  (Drive) tools, the other connectors and Bash/Edit/Write from the session.
+- `--tools` is never used: any `--tools` list also hides the connector
+  tools.
+
+Sending or sharing is a separate command that declares the `send` effect,
+so the door selects it only with `--yes`. No vendor send command is seeded;
+the gws rods in bashy's `examples/google` include `google-email-send`. A
+claude parent session exports `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+which keeps the connectors from loading in the child; the child then
+reports that it has no Gmail tool, and the outcome is still success.

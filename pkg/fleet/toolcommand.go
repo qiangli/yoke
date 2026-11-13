@@ -25,7 +25,10 @@ import (
 // behind the service verbs (`bashy image`, `bashy search`, …); a tool that
 // exposes one registers it under that name so the service door projects it
 // as a vendor provider. A finer dotted role (`image.edit`, `email.send`) is
-// a provider role under the service name, not a second command name.
+// a provider role under the service name. A tool that offers only part of a
+// service names the command by that role (`email.read`), so the selector,
+// which also matches a role's head, never offers it for a sibling role; a
+// dotted name whose head is in this list is canonical.
 var CanonicalToolCommands = []string{
 	"animate",
 	"compact",
@@ -91,7 +94,7 @@ func (t Tool) ValidateCommands() (errs []error, warns []string) {
 			bad("duplicate name")
 		} else {
 			seen[c.Name] = true
-			if !IsCanonicalToolCommand(c.Name) {
+			if head, _, _ := strings.Cut(c.Name, "."); !IsCanonicalToolCommand(head) {
 				warns = append(warns, fmt.Sprintf("tool %s: command %s is not a canonical name (%s); allowed, but other tools will not find it under the same name",
 					t.Name, c.Name, strings.Join(CanonicalToolCommands, ", ")))
 			}

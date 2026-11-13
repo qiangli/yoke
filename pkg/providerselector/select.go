@@ -70,7 +70,13 @@ func Project(records []fleet.Command, tools []fleet.Tool, opt Options) []Candida
 				continue
 			}
 			c := Candidate{Name: tool.Name + ":" + command.Name, Role: opt.Role, Route: "vendor", Kind: "tool-command", Effects: command.Effects}
-			if opt.Route != "" && opt.Provider == "" && opt.Route != "vendor" {
+			// A command named for the bare service stands in for a mutating
+			// role (email.send, drive.write) only if it declares that
+			// effect; a read-only `email` is never chosen to send.
+			if need := roleEffect(opt.Role); command.Name != opt.Role && need != "" && !slices.Contains(command.Effects, need) {
+				c.Rejected = "declares no " + need + " effect for " + opt.Role
+			}
+			if c.Rejected == "" && opt.Route != "" && opt.Provider == "" && opt.Route != "vendor" {
 				c.Rejected = "route is vendor"
 			}
 			if c.Rejected == "" && !tool.Active() {
@@ -154,6 +160,23 @@ func rank(route string) int {
 	}
 	return 4
 }
+
+// roleEffect is the effect a dotted role's action implies: send for
+// *.send, write for *.write; "" for a read or an undotted role.
+func roleEffect(role string) string {
+	_, action, ok := strings.Cut(role, ".")
+	if !ok {
+		return ""
+	}
+	switch action {
+	case "send":
+		return "send"
+	case "write":
+		return "write"
+	}
+	return ""
+}
+
 func needsYes(effects []string) bool {
 	for _, e := range effects {
 		if e == "spend" || e == "send" {
