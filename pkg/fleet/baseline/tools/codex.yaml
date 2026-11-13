@@ -198,6 +198,20 @@ harness:
 # wire are seeded here; the rest are a user overlay
 # (docs/tool-commands-overlay-example.yaml in the umbrella).
 commands:
+  # MEASURED 2026-11-12 (codex 0.162.0, Sprint #626 S3): headless
+  # image_generation wrote a PNG under CODEX_HOME/generated_images and
+  # returned its path with exec --json, workspace-write and an explicit
+  # writable generated_images directory. Paid image credits require spend.
+  # The service door sets the workdir to its requested output directory;
+  # the prompt asks Codex to save the deliverable there.
+  # Elapsed (codex session log): 36.5 s seeded run, 37.4 s direct run; PNG written.
+  - name: image
+    slash: Create an image for this request using image generation, save the final PNG in the current working directory, and report its path. {args}
+    mode: print
+    capability: image-generation
+    effects: [write, spend]
+    output: 'file:*.png'
+    exec: codex exec --json -s workspace-write --skip-git-repo-check {prompt}
   # MEASURED 2026-09-28 (codex-cli 0.157.1, Sprint #324 S2 live smoke): review
   # is a print-mode SUBCOMMAND, not a slash line (`codex exec review --help`:
   # [PROMPT], --uncommitted, --base, --commit, --json, -m), hence exec:.

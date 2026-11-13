@@ -157,6 +157,17 @@ harness:
 # are seeded here; the rest are a user overlay
 # (docs/tool-commands-overlay-example.yaml in the umbrella).
 commands:
+  # MEASURED 2026-11-12 (agy 1.5.7, Sprint #626 S3): print mode with
+  # --mode accept-edits read invoice.pdf and wrote a UTF-8 text summary;
+  # JSON status SUCCESS. No permission-bypass flag was used.
+  # Elapsed (conductor re-measure, agy 1.5.7): 83 s; summary carried invoice 1047 and USD 480.00.
+  - name: pdf
+    slash: Read the PDF named in this request and write a plain UTF-8 summary to one TXT file in the current working directory. Report its path. {args}
+    mode: print
+    capability: pdf-reading
+    effects: [read, write]
+    output: 'file:*.txt'
+    exec: agy --mode accept-edits --output-format text -p {prompt}
   # MEASURED 2026-11-12 (agy 1.5.7, Sprint #626 S1): plan is the print-mode
   # session flag `--mode plan` (agy --help: accept-edits, auto, plan), hence
   # exec:. `agy --mode plan --output-format json -p TEXT` on a toy git repo

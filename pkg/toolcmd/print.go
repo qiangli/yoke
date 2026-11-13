@@ -220,7 +220,21 @@ func runPrint(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args 
 		copt.Stream = opts.Stdout
 	}
 	if plan.ExecArgv != nil {
-		fin, err := finalizeArgs(tool.Name, plan.ExecArgv[1:], agentlaunch.Options{DryRun: opts.DryRun})
+		launchOpts := agentlaunch.Options{DryRun: opts.DryRun}
+		execArgs := plan.ExecArgv[1:]
+		// An exec override can declare Codex's own safe sandbox. Preserve that
+		// choice when finalizing: the generic Codex default otherwise replaces
+		// it with the host bypass flag, even though the template says -s.
+		if tool.Name == "codex" {
+			for i, arg := range execArgs {
+				if (arg == "-s" || arg == "--sandbox") && i+1 < len(execArgs) {
+					launchOpts.Sandbox = execArgs[i+1]
+					execArgs = append(append([]string{}, execArgs[:i]...), execArgs[i+2:]...)
+					break
+				}
+			}
+		}
+		fin, err := finalizeArgs(tool.Name, execArgs, launchOpts)
 		if err != nil {
 			cleanupTemp(tempDir, dir, cmd)
 			return finish(OutcomeError, err)

@@ -188,6 +188,22 @@ func TestPrintExecOverride(t *testing.T) {
 	}
 }
 
+func TestPrintCodexExecPreservesDeclaredSandbox(t *testing.T) {
+	got := stubInvoke(t, "", 0, nil)
+	prev := finalizeArgs
+	finalizeArgs = agentlaunch.FinalizeArgs
+	t.Cleanup(func() { finalizeArgs = prev })
+	cmd := fleet.ToolCommand{Name: "image", Slash: "make an image", Mode: "print", Exec: "codex exec --json -s workspace-write {prompt}"}
+	_, err := Run(context.Background(), codexTool(), cmd, "", Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(got.ExecArgv, " ")
+	if strings.Contains(args, "--dangerously-bypass") || strings.Count(args, "--sandbox") != 1 || !strings.Contains(args, "--sandbox workspace-write") {
+		t.Fatalf("safe exec override changed to %q", args)
+	}
+}
+
 const claudeOK = `{"type":"system","subtype":"init","session_id":"s-1"}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"thinking"}]}}
 {"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"The answer is 42.","session_id":"s-1"}

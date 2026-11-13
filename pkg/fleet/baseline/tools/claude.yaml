@@ -181,6 +181,29 @@ harness:
 # wire are seeded here; unmeasured ones (deep-research, exit, review, …) are
 # a user overlay — docs/tool-commands-overlay-example.yaml in the umbrella.
 commands:
+  # MEASURED 2026-11-12 (claude 2.1.284, Sprint #626 S3): print mode with
+  # acceptEdits and only Write produced a valid SVG file, subtype success,
+  # is_error false, and no permission denials. The requested path was inside
+  # the workspace. No permission-bypass flag was used.
+  # Elapsed (conductor re-measure, claude 2.1.284): 8 s, valid SVG.
+  - name: draw
+    slash: Create a valid SVG for this request. Write one SVG file in the current working directory and report its path. {args}
+    mode: print
+    capability: svg-drawing
+    effects: [write]
+    output: 'file:*.svg'
+    exec: claude -p --permission-mode acceptEdits --allowedTools Write --output-format json {prompt}
+  # MEASURED 2026-11-12 (claude 2.1.284, Sprint #626 S3): print mode with
+  # only Read and Write read invoice.pdf and wrote a text summary, subtype
+  # success, is_error false, no permission denials or bypass flag.
+  # Elapsed (conductor re-measure, claude 2.1.284): 10 s; summary carried invoice 1047 and USD 480.00.
+  - name: pdf
+    slash: Read the PDF named in this request and write a plain UTF-8 summary to one TXT file in the current working directory. Report its path. {args}
+    mode: print
+    capability: pdf-reading
+    effects: [read, write]
+    output: 'file:*.txt'
+    exec: claude -p --permission-mode acceptEdits --allowedTools Read,Write --output-format json {prompt}
   # MEASURED 2026-11-12 (claude 2.1.284, Sprint #626 S1): plan is a print
   # PERMISSION MODE, not a slash line — /plan in print answers "isn't available
   # in this environment" (measured 2026-09-28) — hence exec:. `claude -p
