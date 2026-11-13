@@ -720,6 +720,7 @@ func linkSprintGoalStory(s *weaveStory, goalID, root string, it *issue.Issue) (s
 	g.Stories = kept
 	trackGoalStoryRoot(s, root)
 	if !matched {
+		g.Stories = append(g.Stories, sprintStoryRef{Repo: root, ID: it.ID})
 		weaveStoryAppend(s, weaveStoryConductorName(s, ""), "system", fmt.Sprintf("linked story %s to goal %s", it.ID, g.ID))
 		return fmt.Sprintf("sprint #%d goal %s linked %s", s.ID, g.ID, it.ID), nil
 	}

@@ -84,6 +84,73 @@ func TestSprintGoalLinkHealsStaleRepoForSameStory(t *testing.T) {
 	}
 }
 
+// Sprint #632: `sprint goal link` on a story no goal references yet reported
+// "linked" but never stored the ref, so the story stayed UNCOVERED and the
+// close gate tripped while the thread claimed the link.
+func TestSprintGoalLinkNewStoryCoversIt(t *testing.T) {
+	root := t.TempDir()
+	s := &weaveStory{ID: 99205, StoryRoots: []string{root}}
+	id := sprintTestStory(t, root, s.ID, "parity work", "p0", todopkg.StatusTodo)
+	s.Goal = []sprintGoalItem{{ID: "parity", Text: "parity ships"}}
+	it, err := todopkg.ResolveRef(todopkg.RepoStore(root), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := linkSprintGoalStory(s, "parity", root, it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "linked") {
+		t.Fatalf("link answered %q, want the linked confirmation", msg)
+	}
+	got := findSprintGoal(s, "parity").Stories
+	if len(got) != 1 || got[0].Repo != root || !sameGoalStoryID(got[0].ID, id) {
+		t.Fatalf("stories = %+v, want the single new ref %s#%s", got, root, id)
+	}
+	if !sprintStoryCovered(s, sprintStoryRef{Repo: root, ID: id}) {
+		t.Fatal("newly linked story is not covered: it would stay UNCOVERED on the card")
+	}
+
+	msg, err = linkSprintGoalStory(s, "parity", root, it)
+	if err != nil || !strings.Contains(msg, "already links") {
+		t.Fatalf("re-link = %q, %v; want idempotent already-links, not a second linked", msg, err)
+	}
+	if len(findSprintGoal(s, "parity").Stories) != 1 {
+		t.Fatalf("stories = %+v, want no duplicate ref stacked", findSprintGoal(s, "parity").Stories)
+	}
+}
+
+// A story linked to one repo and re-linked to another keeps exactly one ref,
+// healed to the latest repo — the entry the fix path stores must heal the same
+// way a hand-written stale entry does.
+func TestSprintGoalLinkFreshEntryRelinkHealsToSingleEntry(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	s := &weaveStory{ID: 99206, StoryRoots: []string{first}}
+	id := sprintTestStory(t, first, s.ID, "parity work", "p0", todopkg.StatusTodo)
+	s.Goal = []sprintGoalItem{{ID: "parity", Text: "parity ships"}}
+	it, err := todopkg.ResolveRef(todopkg.RepoStore(first), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := linkSprintGoalStory(s, "parity", first, it); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := linkSprintGoalStory(s, "parity", second, it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "corrected link") {
+		t.Fatalf("re-link answered %q, want the repo correction", msg)
+	}
+	got := findSprintGoal(s, "parity").Stories
+	if len(got) != 1 || got[0].Repo != second || !sameGoalStoryID(got[0].ID, id) {
+		t.Fatalf("stories = %+v, want the single healed ref %s#%s", got, second, id)
+	}
+}
+
 // Duplicates the old exact-ref check stacked (one story id under two repos)
 // collapse to the healed ref instead of leaving a permanently dangling twin.
 func TestSprintGoalLinkCollapsesStackedDuplicates(t *testing.T) {
