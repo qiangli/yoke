@@ -176,13 +176,15 @@ commands:
   # MEASURED 2026-11-12 (agy 1.5.7, Sprint #626 S6): agy -p understands video
   # files directly via prompt, extracting visual description, duration, resolution,
   # audio transcripts and content summaries. Measured on
-  # examples/transcribe/fixtures/speech-video.webm (11s, 32x32 vp9/opus): returned
-  # full visual analysis and verbatim Wikispeech transcript in 9.6 s.
+  # examples/transcribe/fixtures/speech-video.webm (11s, 32x32 vp9/opus) without
+  # --dangerously-skip-permissions: returned full visual analysis and verbatim
+  # Wikispeech transcript in 25 s.
   - name: video
     slash: /video {args}
     mode: print
     capability: video
     output: turn
+    exec: agy --output-format text --model {model} -p {args}
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:
