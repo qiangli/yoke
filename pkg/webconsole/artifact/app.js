@@ -584,14 +584,8 @@ function renderHome() {
     if (rec.length) pad.append(sectionEl("Recent", rec.map((a) => tile(a, { noStar: true, section: "recent" }))));
   }
 
-  if (cfg.showCloud && cloud && !search.trim()) {
-    pad.append(cloudSection());
-  }
-
-  if (cfg.showNeighborhood && hood && !search.trim()) {
-    pad.append(neighborhoodSection());
-  }
-
+  // Apps sits right under Recent (Sprint 636): what this host runs comes
+  // before where else to go. Cloud and Neighborhood follow it.
   if (shown.length) {
     pad.append(sectionEl("Apps", shown.map((a) => tile(a, { section: "apps" }))));
   } else {
@@ -602,6 +596,14 @@ function renderHome() {
     p.textContent = apps.length ? "No app matches that search." : "No surfaces declared.";
     s.append(p);
     pad.append(s);
+  }
+
+  if (cfg.showCloud && cloud && !search.trim()) {
+    pad.append(cloudSection());
+  }
+
+  if (cfg.showNeighborhood && hood && !search.trim()) {
+    pad.append(neighborhoodSection());
   }
 
   view.replaceChildren(pad);
@@ -815,6 +817,8 @@ const BG_PRESETS = [
   ["none", "None"], ["sky", "Sky"], ["ocean", "Ocean"], ["mountains", "Mountains"],
   ["plateau", "Plateau"], ["lakes", "Lakes"], ["bamboo", "Bamboo"],
 ];
+// The Settings toggles read top to bottom in the page's own order; Apps has
+// no toggle (it is the page), so it is absent between Recent and Cloud.
 const SECTIONS = [["showSummary", "Overview"], ["showFavorites", "Favorites"], ["showRecents", "Recent"], ["showCloud", "Cloud"], ["showNeighborhood", "Neighborhood"]];
 const dlg = document.getElementById("settings");
 

@@ -124,3 +124,35 @@ func TestAssetsAreRevalidatable(t *testing.T) {
 		}
 	}
 }
+
+// Sprint 636: the landing page lists Apps right under Recent, with Cloud and
+// Neighborhood below it. The order is the order renderHome appends the
+// sections, so it is checked on the exact script the browser receives.
+func TestLauncherListsAppsUnderRecent(t *testing.T) {
+	h := newTestHandler(t, Options{})
+	w := do(h, "GET", "/app.js", "127.0.0.1:5555", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("app.js = %d", w.Code)
+	}
+	js := w.Body.String()
+	start := strings.Index(js, "function renderHome(")
+	if start < 0 {
+		t.Fatal("app.js does not define renderHome")
+	}
+	body := js[start:]
+	if end := strings.Index(body, "\n}\n"); end > 0 {
+		body = body[:end]
+	}
+	marks := []string{`sectionEl("Recent"`, `sectionEl("Apps"`, `cloudSection()`, `neighborhoodSection()`}
+	last := -1
+	for _, m := range marks {
+		at := strings.Index(body, m)
+		if at < 0 {
+			t.Fatalf("renderHome does not append %s", m)
+		}
+		if at < last {
+			t.Errorf("renderHome appends %s before the section that should precede it; want Recent, Apps, Cloud, Neighborhood", m)
+		}
+		last = at
+	}
+}
