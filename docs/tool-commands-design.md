@@ -63,7 +63,7 @@ dotted role is the provider's, never a second command name.
 | `draw` | `draw` | `draw` | diagrams and vector drawings |
 | `pdf` | `pdf.read` | `pdf` | |
 | `video` | `video.understand` | `video` | |
-| `transcribe` | `transcribe.*` | `transcribe` | `bashy transcribe` selector is the base of the shared one |
+| `transcribe` | `transcribe.*` | `transcribe` | `bashy transcribe` selector is the base of the shared one; `muse:transcribe` (print) is seeded |
 | `narrate` | `narrate` | `narrate` | spoken audio; no vendor CLI produces it headlessly yet |
 | `email` | `email.read`, `email.send` | `email` | `mail` stays the Unix mail verb |
 | `drive` | `drive.read`, `drive.write` | `drive` | |
@@ -72,8 +72,8 @@ dotted role is the provider's, never a second command name.
 | `film` | `film` | `film` | Sprint #627 |
 
 A name in this catalog says what to call the feature, not that any tool
-offers it. Only `claude:plan` and `codex:review` are seeded today; a seed
-for any other service needs its own measurement.
+offers it. Only `claude:plan`, `codex:review` and `muse:transcribe` are
+seeded today; a seed for any other service needs its own measurement.
 
 ## Capability tags
 

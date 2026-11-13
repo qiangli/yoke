@@ -115,6 +115,26 @@ harness:
   shell: 0.75
   tool-use: 0.75
   isolation: 0.7
+commands:
+  # MEASURED 2026-11-13 (muse 1.4.3, Sprint #626 S4 live smoke): transcribe
+  # is a print-mode SUBCOMMAND, not a slash line (`muse voice transcribe
+  # --help`: [<FILE>]), hence exec:. `muse voice transcribe` on the pinned
+  # 7.7 s Spanish fixture
+  # (bashy/examples/transcribe/fixtures/spanish-proverb.wav, sha256
+  # df23f58c95b54215e136bd6b1865a9aba360010a02822ec56e8854bc8074e2bb)
+  # returned the expected proverb x3 in 5.3 s (re-run identical); a
+  # say -v Samantha-authored English wav returned verbatim text in 3.0 s.
+  # The same fixture through `bashy tool cmd run muse:transcribe` (managed
+  # muse 1.4.4-R5419.1) returned outcome success with the same text in 5.1 s.
+  # {args} is the caller's argv verbatim (the clip path). slash: is the
+  # subcommand identity; it is not sent here. Like every muse headless call
+  # it needs the Meta sign-in in auth_hint (402 billing_error without one).
+  - name: transcribe
+    slash: voice transcribe {args}
+    mode: print
+    capability: transcribe
+    output: turn
+    exec: muse voice transcribe {args}
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:
