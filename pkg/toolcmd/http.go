@@ -33,7 +33,7 @@ func runHTTP(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args s
 	h := cmd.HTTP
 	// Binding is decided entirely before the token is read or a connection
 	// opened: a missing, extra or out-of-range argument never reaches the wire.
-	payload, err := httpPayload(*h, args, opts.Argv)
+	payload, bound, err := httpPayloadBound(*h, args, opts.Argv)
 	if err != nil {
 		return finish(OutcomeError, fmt.Errorf("toolcmd: %s:%s: %w", tool.Name, cmd.Name, err))
 	}
@@ -48,17 +48,23 @@ func runHTTP(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args s
 	if err != nil {
 		return finish(OutcomeError, fmt.Errorf("toolcmd: %s:%s: encode JSON body: %w", tool.Name, cmd.Name, err))
 	}
-	target, err := httpTarget(*h)
+	target, err := httpTarget(*h, bound)
 	if err != nil {
 		return finish(OutcomeError, fmt.Errorf("toolcmd: %s:%s: %w", tool.Name, cmd.Name, err))
 	}
 	runCtx, cancel := context.WithTimeout(ctx, CommandTimeout(cmd, opts))
 	defer cancel()
-	req, err := http.NewRequestWithContext(runCtx, strings.ToUpper(h.Method), target, bytes.NewReader(body))
+	var reader io.Reader = bytes.NewReader(body)
+	if strings.EqualFold(h.Method, http.MethodGet) {
+		reader = nil
+	}
+	req, err := http.NewRequestWithContext(runCtx, strings.ToUpper(h.Method), target, reader)
 	if err != nil {
 		return finish(OutcomeError, fmt.Errorf("toolcmd: %s:%s: request: %w", tool.Name, cmd.Name, err))
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if reader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	// A configured loopback endpoint must not be able to forward its bearer
 	// token or command body to a different host through an HTTP redirect.
@@ -87,13 +93,33 @@ func runHTTP(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args s
 	return finish(OutcomeSuccess, nil)
 }
 
-func httpTarget(h fleet.ToolCommandHTTPAction) (string, error) {
+func httpTarget(h fleet.ToolCommandHTTPAction, bound map[string]any) (string, error) {
 	u, err := url.Parse(h.URL)
 	if err != nil {
 		return "", err
 	}
 	if h.Path != "" {
-		u.Path = strings.TrimRight(u.Path, "/") + h.Path
+		path := h.Path
+		for _, a := range h.Args {
+			mark := "{" + a.Name + "}"
+			if !strings.Contains(path, mark) {
+				continue
+			}
+			v, ok := bound[a.Name]
+			if !ok {
+				return "", fmt.Errorf("path argument %s is missing", a.Name)
+			}
+			path = strings.ReplaceAll(path, mark, url.PathEscape(fmt.Sprint(v)))
+		}
+		if strings.ContainsAny(path, "{}") {
+			return "", fmt.Errorf("unbound HTTP path placeholder")
+		}
+		raw := strings.TrimRight(u.EscapedPath(), "/") + path
+		decoded, err := url.PathUnescape(raw)
+		if err != nil {
+			return "", err
+		}
+		u.Path, u.RawPath = decoded, raw
 	}
 	return u.String(), nil
 }
@@ -132,19 +158,24 @@ func httpToken(h fleet.ToolCommandHTTPAction) (string, error) {
 // {args} substituted (no http.args) or each bound argument set as its own
 // typed value at its field (http.args).
 func httpPayload(h fleet.ToolCommandHTTPAction, args string, argv []string) (map[string]any, error) {
+	p, _, err := httpPayloadBound(h, args, argv)
+	return p, err
+}
+
+func httpPayloadBound(h fleet.ToolCommandHTTPAction, args string, argv []string) (map[string]any, map[string]any, error) {
 	if len(h.Args) == 0 {
-		return expandHTTPBody(h.Body, args), nil
+		return expandHTTPBody(h.Body, args), nil, nil
 	}
 	if argv == nil {
 		words, err := SplitArgs(args)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		argv = words
 	}
 	bound, err := BindHTTPArgs(h.Args, argv)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	body, _ := expandHTTPValue(h.Body, "").(map[string]any) // deep copy; validated bodies hold no {args}
 	if body == nil {
@@ -167,7 +198,7 @@ func httpPayload(h fleet.ToolCommandHTTPAction, args string, argv []string) (map
 		}
 		cur[segs[len(segs)-1]] = v
 	}
-	return body, nil
+	return body, bound, nil
 }
 
 // BindHTTPArgs binds caller words to declared arguments and projects each to

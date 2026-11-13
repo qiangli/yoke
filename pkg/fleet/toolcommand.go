@@ -1,8 +1,11 @@
 package fleet
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -166,8 +169,8 @@ func (h ToolCommandHTTPAction) Validate(effects []string) error {
 		return fmt.Errorf("http.method %q (want GET, POST, PUT, PATCH or DELETE)", h.Method)
 	}
 	u, err := url.Parse(strings.TrimSpace(h.URL))
-	if err != nil || u.Scheme != "http" || u.Hostname() == "" || u.User != nil {
-		return fmt.Errorf("http.url %q must be an absolute http URL without userinfo", h.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return fmt.Errorf("http.url %q must be an absolute http(s) URL without userinfo", h.URL)
 	}
 	if h.Path != "" && (!strings.HasPrefix(h.Path, "/") || strings.ContainsAny(h.Path, "?#")) {
 		return fmt.Errorf("http.path %q must begin with / and have no query or fragment", h.Path)
@@ -178,7 +181,22 @@ func (h ToolCommandHTTPAction) Validate(effects []string) error {
 	if !loopbackHost(u.Hostname()) && !(slices.Contains(effects, atlas.EffNet) && slices.Contains(effects, atlas.EffRemote)) {
 		return fmt.Errorf("http.url %q is not loopback; remote HTTP requires declared effects net and remote for approval policy", h.URL)
 	}
-	return h.validateArgs()
+	if err := h.validateArgs(); err != nil {
+		return err
+	}
+	for _, match := range regexp.MustCompile(`\{([^{}]+)\}`).FindAllStringSubmatch(h.Path, -1) {
+		found := false
+		for _, a := range h.Args {
+			if a.Name == match[1] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("http.path placeholder %q has no declared argument", match[0])
+		}
+	}
+	return nil
 }
 
 // MutatingEffects are the effect atoms that change state the caller cannot
@@ -244,9 +262,9 @@ func (h ToolCommandHTTPAction) validateArgs() error {
 			return fmt.Errorf("http.args %s: %v", a.Name, err)
 		}
 		switch a.Type {
-		case "", ToolCommandArgString, ToolCommandArgInteger, ToolCommandArgBoolean:
+		case "", ToolCommandArgString, ToolCommandArgInteger, ToolCommandArgBoolean, ToolCommandArgJSONFile:
 		default:
-			return fmt.Errorf("http.args %s: type %q (want string, integer or boolean)", a.Name, a.Type)
+			return fmt.Errorf("http.args %s: type %q (want string, integer, boolean or json-file)", a.Name, a.Type)
 		}
 		if len(a.Enum) > 0 && a.Type != "" {
 			return fmt.Errorf("http.args %s: set type or enum, not both (enum values carry their own JSON type)", a.Name)
@@ -265,6 +283,9 @@ func (h ToolCommandHTTPAction) validateArgs() error {
 			return fmt.Errorf("http.args %s: max_len %d is negative", a.Name, a.MaxLen)
 		}
 		if a.Default != "" {
+			if a.Type == ToolCommandArgJSONFile {
+				return fmt.Errorf("http.args %s: json-file cannot have a default", a.Name)
+			}
 			if a.Required {
 				return fmt.Errorf("http.args %s: required and default are exclusive", a.Name)
 			}
@@ -300,6 +321,27 @@ func (a ToolCommandHTTPArg) Project(v string) (any, error) {
 		return out, nil
 	}
 	switch a.Type {
+	case ToolCommandArgJSONFile:
+		f, err := os.Open(v)
+		if err != nil {
+			return nil, fmt.Errorf("open JSON file: %w", err)
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, 32<<20+1))
+		if err != nil {
+			return nil, fmt.Errorf("read JSON file: %w", err)
+		}
+		if len(b) > 32<<20 {
+			return nil, fmt.Errorf("JSON file exceeds 32 MiB")
+		}
+		var value any
+		if err := json.Unmarshal(b, &value); err != nil {
+			return nil, fmt.Errorf("invalid JSON file: %w", err)
+		}
+		if _, ok := value.(map[string]any); !ok {
+			return nil, fmt.Errorf("JSON file must contain an object")
+		}
+		return value, nil
 	case ToolCommandArgInteger:
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {

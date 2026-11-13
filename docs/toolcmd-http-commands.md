@@ -17,8 +17,8 @@ commands:
     timeout: 30s
     http:
       method: POST               # GET | POST | PUT | PATCH | DELETE
-      url: http://127.0.0.1:8787 # loopback only unless effects has net AND remote
-      path: /v1/decide           # optional; begins with /, no query or fragment
+      url: http://127.0.0.1:8787 # http(s); non-loopback needs net AND remote
+      path: /v1/decide           # optional; may contain {arg-name}
       token_ref: svc             # exactly one of token_ref | token_file
       body:                      # literal JSON object, encoded by encoding/json
         source: bashy
@@ -63,6 +63,12 @@ commands:
   (`a` and `a.b`), a field that would overwrite a literal `body` value or
   descend through a non-object, `required` together with `default`, and
   `{args}` in a body that also declares `args`.
+- `type: json-file` reads a local JSON object (at most 32 MiB) and binds it
+  as an object. The argument is the file path, so large media data URLs never
+  travel through argv. It cannot have a default.
+- A `path` placeholder such as `/v1/predictions/{id}` must name a declared
+  argument. Its value is escaped as one URL path segment. A GET sends no JSON
+  body; the argument still binds and is validated before the token is read.
 
 Without `http.args`, string values in `body` may use `{args}`, replaced
 verbatim by the caller's whole text (the original single-argument form).

@@ -263,9 +263,10 @@ type ToolCommandHTTPArg struct {
 
 // Typed HTTP argument kinds.
 const (
-	ToolCommandArgString  = "string"
-	ToolCommandArgInteger = "integer"
-	ToolCommandArgBoolean = "boolean"
+	ToolCommandArgString   = "string"
+	ToolCommandArgInteger  = "integer"
+	ToolCommandArgBoolean  = "boolean"
+	ToolCommandArgJSONFile = "json-file"
 )
 
 // ToolCommandArgMaxLen bounds a caller value whose declaration sets no max_len.
