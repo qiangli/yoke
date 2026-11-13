@@ -96,3 +96,26 @@ func TestToolCommandSpendSendAndAbsentCLI(t *testing.T) {
 		t.Fatal("selected absent CLI")
 	}
 }
+
+func TestToolCommandDottedRoleMatchesHeadAndProviderPrefix(t *testing.T) {
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := []fleet.Tool{{Name: "agy", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "video"}}}}
+	opt := Options{Role: "video.understand"}
+	got, err := Select(Project(nil, tools, opt), opt)
+	if err != nil || got.Name != "agy:video" || got.Role != "video.understand" || got.Route != "vendor" {
+		t.Fatalf("dotted role match = %+v, %v", got, err)
+	}
+	opt.Provider = "agy"
+	got, err = Select(Project(nil, tools, opt), opt)
+	if err != nil || got.Name != "agy:video" {
+		t.Fatalf("provider prefix = %+v, %v", got, err)
+	}
+	opt.Provider = "agy:video"
+	got, err = Select(Project(nil, tools, opt), opt)
+	if err != nil || got.Name != "agy:video" {
+		t.Fatalf("full provider = %+v, %v", got, err)
+	}
+}

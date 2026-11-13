@@ -64,6 +64,16 @@ func codexTool() fleet.Tool {
 	return t
 }
 
+func agyTool() fleet.Tool {
+	t := fleet.Tool{Name: "agy", Kind: "cli"}
+	t.CLI.Binary = "agy"
+	t.CLI.Launch.Exec = "agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}"
+	t.CLI.Launch.EventsStdout = "--output-format stream-json"
+	t.CLI.Launch.EventsDone = fleet.EventsDone{Field: "event", Values: []string{"result"}}
+	t.CLI.Launch.EventsOutcome = fleet.EventsOutcome{Path: "result.status", OK: []string{"SUCCESS"}}
+	return t
+}
+
 func TestRenderSlash(t *testing.T) {
 	cases := []struct{ slash, args, want string }{
 		{"/deep-research {args}", "why is the sky blue", "/deep-research why is the sky blue"},
@@ -260,6 +270,13 @@ func TestPrintFailureModes(t *testing.T) {
 	res, err := Run(context.Background(), codexTool(), cmd, "", Options{})
 	if err != nil || res.Text != "LGTM" || res.Session != "th-9" || res.Outcome != OutcomeSuccess || res.Verdict != "unverified" {
 		t.Fatalf("codex: %+v %v", res, err)
+	}
+	// agy: stream-json with step_update deltas and final result map
+	stubInvoke(t, `{"event":"step_update","step_update":{"conversation_id":"c-123","step_index":1,"step_type":"agent_response","text_delta":"video clip"}}
+{"event":"result","result":{"conversation_id":"c-123","status":"SUCCESS","response":"clip summary"}}`, 0, nil)
+	res, err = Run(context.Background(), agyTool(), fleet.ToolCommand{Name: "video", Slash: "/video {args}", Mode: "print"}, "sample.mp4", Options{})
+	if err != nil || res.Text != "clip summary" || res.Session != "c-123" || res.Outcome != OutcomeSuccess || res.Verdict != "succeeded" {
+		t.Fatalf("agy: %+v %v", res, err)
 	}
 }
 

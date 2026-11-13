@@ -346,7 +346,7 @@ func parseEvents(tool fleet.Tool, out string) eventSummary {
 			continue
 		}
 		s.parsed = true
-		for _, k := range []string{"session_id", "thread_id"} {
+		for _, k := range []string{"session_id", "thread_id", "conversation_id"} {
 			if v, ok := obj[k].(string); ok && v != "" && s.session == "" {
 				s.session = v
 			}
@@ -370,6 +370,13 @@ func parseEvents(tool fleet.Tool, out string) eventSummary {
 			if n, ok := obj["num_turns"].(float64); ok && n == 0 && unavailableRe.MatchString(r) {
 				s.unavailable = true
 			}
+		} else if resObj, ok := obj["result"].(map[string]any); ok {
+			if cid, ok := resObj["conversation_id"].(string); ok && cid != "" && s.session == "" {
+				s.session = cid
+			}
+			if resp, ok := resObj["response"].(string); ok {
+				lastText = resp
+			}
 		}
 	}
 	s.final = strings.TrimSpace(lastText)
@@ -378,8 +385,17 @@ func parseEvents(tool fleet.Tool, out string) eventSummary {
 
 // eventText pulls a message text out of one event, for the shapes measured
 // on the wire: codex item.completed {item:{type:agent_message,text}}, a
-// claude assistant message {message:{content:[{type:text,text}]}}.
+// claude assistant message {message:{content:[{type:text,text}]}}, or an
+// agy step_update {step_update:{step_type:agent_response,text_delta:text}}.
 func eventText(obj map[string]any) string {
+	if step, ok := obj["step_update"].(map[string]any); ok {
+		if typ, _ := step["step_type"].(string); typ == "agent_response" {
+			if d, ok := step["text_delta"].(string); ok {
+				return d
+			}
+		}
+		return ""
+	}
 	if item, ok := obj["item"].(map[string]any); ok {
 		if typ, _ := item["type"].(string); typ == "agent_message" || typ == "assistant_message" {
 			if t, ok := item["text"].(string); ok {

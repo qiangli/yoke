@@ -62,7 +62,7 @@ dotted role is the provider's, never a second command name.
 | `image` | `image.generate`, `image.edit` | `image` | |
 | `draw` | `draw` | `draw` | diagrams and vector drawings |
 | `pdf` | `pdf.read` | `pdf` | |
-| `video` | `video.understand` | `video` | |
+| `video` | `video.understand` | `video` | `agy:video` (print) is seeded |
 | `transcribe` | `transcribe.*` | `transcribe` | `bashy transcribe` selector is the base of the shared one; `muse:transcribe` (print) is seeded |
 | `narrate` | `narrate` | `narrate` | spoken audio; no vendor CLI produces it headlessly yet |
 | `email` | `email.read`, `email.send` | `email` | `mail` stays the Unix mail verb |
@@ -73,7 +73,7 @@ dotted role is the provider's, never a second command name.
 
 A name in this catalog says what to call the feature, not that any tool
 offers it. Seeded today: `claude:plan`, `agy:plan` and `muse:plan` (Sprint
-#626 S1, print), `muse:transcribe` (S4, print) and `codex:review`; a seed for any other service needs its
+#626 S1, print), `muse:transcribe` (S4, print), `agy:video` (S6, print) and `codex:review`; a seed for any other service needs its
 own measurement. A tool has one command per name: the claude `/plan` TUI
 spelling is in the umbrella's `docs/tool-commands-overlay-example.yaml`.
 

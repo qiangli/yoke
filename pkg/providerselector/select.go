@@ -65,7 +65,8 @@ func Project(records []fleet.Command, tools []fleet.Tool, opt Options) []Candida
 	}
 	for _, tool := range tools {
 		for _, command := range tool.Commands {
-			if command.Name != opt.Role {
+			head, _, _ := strings.Cut(opt.Role, ".")
+			if command.Name != opt.Role && command.Name != head {
 				continue
 			}
 			c := Candidate{Name: tool.Name + ":" + command.Name, Role: opt.Role, Route: "vendor", Kind: "tool-command", Effects: command.Effects}
@@ -97,7 +98,7 @@ func Project(records []fleet.Command, tools []fleet.Tool, opt Options) []Candida
 func Select(candidates []Candidate, opt Options) (Candidate, error) {
 	if opt.Provider != "" {
 		for _, c := range candidates {
-			if c.Name == opt.Provider {
+			if c.Name == opt.Provider || strings.HasPrefix(c.Name, opt.Provider+":") {
 				if c.Rejected != "" {
 					return Candidate{}, fmt.Errorf("provider %q is unavailable: %s", c.Name, c.Rejected)
 				}
