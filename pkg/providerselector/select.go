@@ -70,10 +70,15 @@ func Project(records []fleet.Command, tools []fleet.Tool, opt Options) []Candida
 				continue
 			}
 			c := Candidate{Name: tool.Name + ":" + command.Name, Role: opt.Role, Route: "vendor", Kind: "tool-command", Effects: command.Effects}
+			// An invalid record is rejected on its own; it never takes the
+			// other providers down with it.
+			if errs, _ := (fleet.Tool{Name: tool.Name, Commands: []fleet.ToolCommand{command}}).ValidateCommands(); len(errs) > 0 {
+				c.Rejected = "invalid command record: " + errs[0].Error()
+			}
 			// A command named for the bare service stands in for a mutating
 			// role (email.send, drive.write) only if it declares that
 			// effect; a read-only `email` is never chosen to send.
-			if need := roleEffect(opt.Role); command.Name != opt.Role && need != "" && !slices.Contains(command.Effects, need) {
+			if need := roleEffect(opt.Role); c.Rejected == "" && command.Name != opt.Role && need != "" && !slices.Contains(command.Effects, need) {
 				c.Rejected = "declares no " + need + " effect for " + opt.Role
 			}
 			if c.Rejected == "" && opt.Route != "" && opt.Provider == "" && opt.Route != "vendor" {

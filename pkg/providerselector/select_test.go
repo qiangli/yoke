@@ -61,7 +61,7 @@ func TestToolCommandProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := []fleet.Tool{{Name: "claude", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "plan"}}}}
+	tools := []fleet.Tool{{Name: "claude", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "plan", Slash: "/plan {args}", Mode: "print"}}}}
 	opt := Options{Role: "plan"}
 	got, err := Select(Project(nil, tools, opt), opt)
 	if err != nil || got.Name != "claude:plan" || got.Route != "vendor" || got.Kind != "tool-command" {
@@ -75,7 +75,7 @@ func TestToolCommandSpendSendAndAbsentCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, effect := range []string{"spend", "send"} {
-		tool := fleet.Tool{Name: "vendor", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email.send", Effects: []string{effect}}}}
+		tool := fleet.Tool{Name: "vendor", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email.send", Slash: "/email.send {args}", Mode: "print", Effects: []string{effect}}}}
 		opt := Options{Role: "email.send"}
 		candidates := Project(nil, []fleet.Tool{tool}, opt)
 		if len(candidates) != 1 || !strings.Contains(candidates[0].Rejected, "--yes") {
@@ -86,7 +86,7 @@ func TestToolCommandSpendSendAndAbsentCLI(t *testing.T) {
 			t.Fatalf("effect %s with --yes = %+v, %v", effect, got, err)
 		}
 	}
-	missing := fleet.Tool{Name: "absent", CLI: fleet.ToolCLI{Binary: "no-such-provider-selector-test-binary"}, Commands: []fleet.ToolCommand{{Name: "plan"}}}
+	missing := fleet.Tool{Name: "absent", CLI: fleet.ToolCLI{Binary: "no-such-provider-selector-test-binary"}, Commands: []fleet.ToolCommand{{Name: "plan", Slash: "/plan {args}", Mode: "print"}}}
 	opt := Options{Role: "plan", Provider: "absent:plan"}
 	candidates := Project(nil, []fleet.Tool{missing}, opt)
 	if len(candidates) != 1 || !strings.Contains(candidates[0].Rejected, "not installed") {
@@ -102,7 +102,7 @@ func TestToolCommandDottedRoleMatchesHeadAndProviderPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := []fleet.Tool{{Name: "agy", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "video"}}}}
+	tools := []fleet.Tool{{Name: "agy", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "video", Slash: "/video {args}", Mode: "print"}}}}
 	opt := Options{Role: "video.understand"}
 	got, err := Select(Project(nil, tools, opt), opt)
 	if err != nil || got.Name != "agy:video" || got.Role != "video.understand" || got.Route != "vendor" {
@@ -132,7 +132,7 @@ func TestSendRoleNeverSelectsReadOnlyCommand(t *testing.T) {
 		t.Fatal("baseline claude tool missing")
 	}
 	claude.CLI.Binary = bin
-	overlay := fleet.Tool{Name: "vendor", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email", Effects: []string{"read", "net"}}, {Name: "drive"}}}
+	overlay := fleet.Tool{Name: "vendor", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email", Slash: "/email {args}", Mode: "print", Effects: []string{"read", "net"}}, {Name: "drive", Slash: "/drive {args}", Mode: "print"}}}
 	tools := []fleet.Tool{claude, overlay}
 	for _, role := range []string{"email.send", "drive.write"} {
 		for _, yes := range []bool{false, true} {
@@ -161,9 +161,29 @@ func TestSendRoleNeverSelectsReadOnlyCommand(t *testing.T) {
 		}
 	}
 	// A bare-service command that declares the send effect may send, with --yes.
-	sender := fleet.Tool{Name: "mailer", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email", Effects: []string{"net", "send"}}}}
+	sender := fleet.Tool{Name: "mailer", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "email", Slash: "/email {args}", Mode: "print", Effects: []string{"net", "send"}}}}
 	opt := Options{Role: "email.send", Yes: true}
 	if got, err := Select(Project(nil, []fleet.Tool{sender}, opt), opt); err != nil || got.Name != "mailer:email" {
 		t.Errorf("declared sender = %+v, %v", got, err)
+	}
+}
+
+func TestInvalidToolCommandIsRejectedAlone(t *testing.T) {
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := fleet.Tool{Name: "bad", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "image", Slash: "/image {args}", Mode: "print", Effects: []string{"read", "read"}}}}
+	good := fleet.Tool{Name: "good", CLI: fleet.ToolCLI{Binary: bin}, Commands: []fleet.ToolCommand{{Name: "image", Slash: "/image {args}", Mode: "print", Effects: []string{"read"}}}}
+	opt := Options{Role: "image", Yes: true}
+	candidates := Project(nil, []fleet.Tool{bad, good}, opt)
+	for _, c := range candidates {
+		if c.Name == "bad:image" && !strings.HasPrefix(c.Rejected, "invalid command record") {
+			t.Fatalf("bad:image rejected = %q", c.Rejected)
+		}
+	}
+	got, err := Select(candidates, opt)
+	if err != nil || got.Name != "good:image" {
+		t.Fatalf("Select = %+v, %v", got, err)
 	}
 }
