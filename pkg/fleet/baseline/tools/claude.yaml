@@ -181,27 +181,24 @@ harness:
 # wire are seeded here; unmeasured ones (deep-research, exit, review, …) are
 # a user overlay — docs/tool-commands-overlay-example.yaml in the umbrella.
 commands:
-  # MEASURED 2026-09-28 (claude 2.1.284, Sprint #324 S3 live smoke
-  # TestLiveTUIPlan): /plan is a TUI built-in — `claude -p "/plan …"` answers
-  # "/plan isn't available in this environment." with num_turns 0 — so it is
-  # mode tui. Driven through steer_exec with exactly these steps and quit, a
-  # three-line plan request returned outcome success in 39.7 s; the turn text
-  # was "Enabled plan mode … three-line plan"; the session was torn down.
-  # The steps are the measured sequence verbatim (esc included); change them
-  # only with a new measurement.
-  # The launch guard applies (steer_exec skips permissions): run contained, or
-  # accept it explicitly with BASHY_ALLOW_UNSAFE_AGENT_LAUNCH=1. No timeout is
-  # declared (runner default 30m; the smoke capped itself at 4m).
+  # MEASURED 2026-11-12 (claude 2.1.284, Sprint #626 S1): plan is a print
+  # PERMISSION MODE, not a slash line — /plan in print answers "isn't available
+  # in this environment" (measured 2026-09-28) — hence exec:. `claude -p
+  # --permission-mode plan --output-format json` on a toy git repo (add a
+  # --shout flag to a 3-line hello.sh) returned subtype success, is_error
+  # false, a five-step plan in 12.4 s, no permission denials and an unchanged
+  # work tree. The exec carries its own --output-format: an exec override
+  # does not get events_stdout. {args} is the request as ONE operand
+  # (`bashy plan "TEXT"`); unquoted words become extra positionals.
+  # slash: is the TUI spelling and the command's identity; it is not sent.
+  # One plan per tool: the measured /plan TUI spelling (2026-09-28, 39.7 s,
+  # steps esc) is in the umbrella's docs/tool-commands-overlay-example.yaml.
   - name: plan
     slash: /plan {args}
-    mode: tui
+    mode: print
     capability: planning
     output: turn
-    steps:
-      - wait_idle: 25s
-      - key: esc
-      - wait_idle: 3s
-    quit: /exit
+    exec: claude -p --permission-mode plan --output-format json --model {model} {args}
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

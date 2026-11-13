@@ -115,7 +115,26 @@ harness:
   shell: 0.75
   tool-use: 0.75
   isolation: 0.7
+# Tool commands (Sprint #324): muse's own vendor features as bashy services,
+# `bashy tool cmd run muse:<name> -- TEXT`. Only commands MEASURED on the wire
+# are seeded here; the rest are a user overlay
+# (docs/tool-commands-overlay-example.yaml in the umbrella).
 commands:
+  # MEASURED 2026-11-12 (Muse Code 1.4.3, Sprint #626 S1): /plan is muse's
+  # bundled skill and it expands in headless exec. `muse exec --json "/plan
+  # TEXT"` on a toy git repo (add a --shout flag to a 3-line hello.sh) ended
+  # run.terminal.completed with a four-step plan in 28.0 s and an unchanged
+  # work tree. The skill is a prompt, not a mode ("This is a plan, not a
+  # special mode"), so the exec adds --disable-write and no --yolo. {prompt}
+  # is the rendered slash line, so the request may be several words. Text
+  # output: toolcmd reads a JSON terminal `result` string, and muse's JSONL
+  # carries the text under payload.text.
+  - name: plan
+    slash: /plan {args}
+    mode: print
+    capability: planning
+    output: turn
+    exec: muse exec --disable-write --model {model} {prompt}
   # MEASURED 2026-11-13 (muse 1.4.3, Sprint #626 S4 live smoke): transcribe
   # is a print-mode SUBCOMMAND, not a slash line (`muse voice transcribe
   # --help`: [<FILE>]), hence exec:. `muse voice transcribe` on the pinned

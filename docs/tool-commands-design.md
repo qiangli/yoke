@@ -57,7 +57,7 @@ dotted role is the provider's, never a second command name.
 
 | Service | Example roles | Capability tag | Notes |
 |---|---|---|---|
-| `plan` | `plan` | `planning` | `claude:plan` (tui) is seeded |
+| `plan` | `plan` | `planning` | `claude:plan`, `agy:plan`, `muse:plan` (print) are seeded |
 | `search` | `search` | `web-search` | `bashy search` backends become providers |
 | `image` | `image.generate`, `image.edit` | `image` | |
 | `draw` | `draw` | `draw` | diagrams and vector drawings |
@@ -72,8 +72,17 @@ dotted role is the provider's, never a second command name.
 | `film` | `film` | `film` | Sprint #627 |
 
 A name in this catalog says what to call the feature, not that any tool
-offers it. Only `claude:plan`, `codex:review` and `muse:transcribe` are
-seeded today; a seed for any other service needs its own measurement.
+offers it. Seeded today: `claude:plan`, `agy:plan` and `muse:plan` (Sprint
+#626 S1, print), `muse:transcribe` (S4, print) and `codex:review`; a seed for any other service needs its
+own measurement. A tool has one command per name: the claude `/plan` TUI
+spelling is in the umbrella's `docs/tool-commands-overlay-example.yaml`.
+
+An `exec:` override gets no `events_stdout` flags, and the runner reads only
+a JSON terminal `result` string (claude) or an agent-message item (codex).
+A seed whose JSON keeps the text elsewhere (agy `result.response`, muse
+`payload.text`) runs in text output. The runner guards the rendered `exec:`
+argv; the tool's default launch, which the override discards, is not
+guarded.
 
 ## Capability tags
 

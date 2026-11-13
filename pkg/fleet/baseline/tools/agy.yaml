@@ -152,6 +152,27 @@ harness:
   shell: 0.85
   tool-use: 0.8
   isolation: 0.75
+# Tool commands (Sprint #324): agy's own vendor features as bashy services,
+# `bashy tool cmd run agy:<name> -- TEXT`. Only commands MEASURED on the wire
+# are seeded here; the rest are a user overlay
+# (docs/tool-commands-overlay-example.yaml in the umbrella).
+commands:
+  # MEASURED 2026-11-12 (agy 1.5.7, Sprint #626 S1): plan is the print-mode
+  # session flag `--mode plan` (agy --help: accept-edits, auto, plan), hence
+  # exec:. `agy --mode plan --output-format json -p TEXT` on a toy git repo
+  # (add a --shout flag to a 3-line hello.sh) returned status SUCCESS, a
+  # four-step plan in 39.5 s (agy also wrote implementation_plan.md under its
+  # own brain dir) and an unchanged work tree. -p takes the NEXT token as the
+  # prompt — `-p --output-format …` exits 2 — so -p sits right before {args},
+  # the request as ONE operand. Text output: toolcmd reads a JSON terminal
+  # `result` string, and agy's JSON carries the plan under result.response.
+  # slash: is the command's identity; it is not sent.
+  - name: plan
+    slash: /plan {args}
+    mode: print
+    capability: planning
+    output: turn
+    exec: agy --mode plan --output-format text --model {model} -p {args}
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

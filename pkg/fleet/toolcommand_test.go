@@ -292,7 +292,7 @@ func TestBaselineToolCommandsValidate(t *testing.T) {
 			seeded[tool.Name] = append(seeded[tool.Name], c.Name+"/"+c.Mode)
 		}
 	}
-	want := map[string][]string{"claude": {"plan/tui"}, "codex": {"review/print"}, "muse": {"transcribe/print"}}
+	want := map[string][]string{"agy": {"plan/print"}, "claude": {"plan/print"}, "codex": {"review/print"}, "muse": {"plan/print", "transcribe/print"}}
 	if len(seeded) != len(want) {
 		t.Errorf("seeded commands %v, want exactly %v (seed only what is measured)", seeded, want)
 	}
