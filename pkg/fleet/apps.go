@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/pathconv"
 
 	"github.com/qiangli/yoke/pkg/assetring"
 )
@@ -258,9 +260,21 @@ func (c *Catalog) checkApp(a App) error {
 	return nil
 }
 
+// appSourcePath spells an app's source directory natively for goos. On
+// Windows bashy's own $PWD is an MSYS drive path (/c/Users/...), which
+// Windows does not treat as absolute; a source recorded that way would be
+// refused (and could not be served), so it is stored in drive form.
+func appSourcePath(goos, source string) string {
+	if goos == "windows" && source != "" {
+		return pathconv.NativePath(source)
+	}
+	return source
+}
+
 // SaveApp validates and writes an app into the local store.
 func (c *Catalog) SaveApp(a App) error {
 	a.Kind = KindApp
+	a.Source = appSourcePath(runtime.GOOS, a.Source)
 	if a.IsShaped() {
 		// Validate policy before acquisition so a reserved mount or malformed
 		// record cannot leave an orphaned managed checkout behind.

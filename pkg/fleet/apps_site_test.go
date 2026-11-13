@@ -75,3 +75,21 @@ func TestSiteAppCLIAddShowSchemaAndSetValidation(t *testing.T) {
 		t.Fatalf("set accepted a site port: %v", err)
 	}
 }
+
+// TestAppSourcePathWindowsDrive: on Windows bashy's $PWD is an MSYS drive
+// path; a site source given that way is stored natively (examples/vlog serve
+// on the Windows test host failed with "needs an absolute --source").
+func TestAppSourcePathWindowsDrive(t *testing.T) {
+	if got := appSourcePath("windows", "/c/Users/qa/vlog/public"); got != `c:\Users\qa\vlog\public` && got != `C:\Users\qa\vlog\public` {
+		t.Fatalf("windows: %q", got)
+	}
+	if got := appSourcePath("windows", `C:\site`); got != `C:\site` {
+		t.Fatalf("windows native unchanged: %q", got)
+	}
+	if got := appSourcePath("linux", "/c/Users/qa/vlog/public"); got != "/c/Users/qa/vlog/public" {
+		t.Fatalf("linux unchanged: %q", got)
+	}
+	if got := appSourcePath("windows", ""); got != "" {
+		t.Fatalf("empty: %q", got)
+	}
+}
