@@ -151,6 +151,33 @@ func (c OwnerClient) Transfer(ctx context.Context, id, to string) (TransferResul
 	err := c.request(ctx, "POST", "/api/v1/satellites/"+url.PathEscape(id)+"/transfer", map[string]string{"to": to}, &res)
 	return res, err
 }
+
+// SatelliteDeleted is the master's receipt for DELETE /api/v1/satellites/:id.
+type SatelliteDeleted struct {
+	SatelliteID   string `json:"satellite_id"`
+	Name          string `json:"name"`
+	State         string `json:"state"`
+	Endpoint      string `json:"endpoint,omitempty"`
+	ReleasedHosts []struct {
+		HostName string `json:"host_name"`
+	} `json:"released_hosts,omitempty"`
+	Forced    bool      `json:"forced"`
+	DeletedAt time.Time `json:"deleted_at"`
+}
+
+// Delete removes the caller's satellite row and everything keyed on it
+// (Sprint 630 S12). force deletes a live satellite too; without it the
+// master answers 409 for a satellite that contacted it recently.
+func (c OwnerClient) Delete(ctx context.Context, id string, force bool) (SatelliteDeleted, error) {
+	var res SatelliteDeleted
+	path := "/api/v1/satellites/" + url.PathEscape(id)
+	if force {
+		path += "?force=1"
+	}
+	err := c.request(ctx, "DELETE", path, nil, &res)
+	return res, err
+}
+
 func (c OwnerClient) DestroyLost(ctx context.Context, id string) error {
 	return c.request(ctx, "POST", "/api/satellites/"+url.PathEscape(id)+"/destroy-lost", map[string]any{}, nil)
 }
