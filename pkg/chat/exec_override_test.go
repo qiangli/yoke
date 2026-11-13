@@ -122,3 +122,46 @@ func TestExecOverrideOwnerWinsOverAgentNick(t *testing.T) {
 		t.Fatalf("dry-run argv[0] = %q, want the owning tool's binary", res.Agent)
 	}
 }
+
+// An exec override discards the resolved launch argv, so the uncontained-host
+// guard must not refuse the tool's default template (which carries its
+// kill-switch) when the override itself is safe — the caller finalized and
+// guarded the override (S626 S1: claude/agy/muse print plan were refused).
+func TestExecOverrideNotGatedByDiscardedLaunch(t *testing.T) {
+	denyUnsafeLaunch(t)
+	isolateRoom(t)
+	fleettest.Ring(t)
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	t.Setenv("HOME", home)
+
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "msgtool", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Binary: "msgtool", Launch: fleet.ToolLaunch{
+			Exec:   "msgtool --dangerously-skip-permissions -p {prompt}",
+			Unsafe: fleet.ToolUnsafe{Canonical: "--dangerously-skip-permissions"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Invoke(context.Background(), Options{Agent: "msgtool", Instruction: "x", Catalog: cat}, nil); err == nil {
+		t.Fatal("the plain launch was not guarded; the test does not exercise the guard")
+	}
+
+	execArgv := []string{"-p", "--permission-mode", "plan", "x"}
+	var gotArgs []string
+	r := runnerFunc(func(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+		gotArgs = append([]string(nil), args...)
+		return "ok\n", 0, nil
+	})
+	if _, err := Invoke(context.Background(), Options{
+		Agent: "msgtool", Instruction: "x", ExecArgv: execArgv, ExecTool: "msgtool", Catalog: cat, Cwd: t.TempDir(),
+	}, r); err != nil {
+		t.Fatalf("safe exec override refused: %v", err)
+	}
+	if !slices.Equal(gotArgs, execArgv) {
+		t.Fatalf("runner args = %q, want %q", gotArgs, execArgv)
+	}
+}

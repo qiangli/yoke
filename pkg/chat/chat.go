@@ -1409,7 +1409,15 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		return Result{SchemaVersion: schemaVersion, Agent: opt.Agent, Role: opt.Role, ExitCode: 2}, err
 	}
 	defaultWorkdir(name, &opt)
-	lnch, err := resolveLaunch(name, opt)
+	ropt := opt
+	if opt.ExecArgv != nil {
+		// The resolved argv is discarded for the exec override, which the
+		// caller finalized and guarded itself. Gating the tool's default
+		// launch here refused every exec override of a tool whose headless
+		// template carries its kill-switch (claude, agy, muse; S626 S1).
+		ropt.AllowUnsafe = true
+	}
+	lnch, err := resolveLaunch(name, ropt)
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
 	}
