@@ -129,3 +129,16 @@ the gws rods in bashy's `examples/google` include `google-email-send`. A
 claude parent session exports `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
 which keeps the connectors from loading in the child; the child then
 reports that it has no Gmail tool, and the outcome is still success.
+
+### Native Google access exploration (Sprint #626 S5b)
+
+Measured 2026-11-12 with agy 1.5.7: agy has no native Gmail or Drive connectors
+or built-in Workspace tools in headless print mode, and no `--allowedTools` or
+`--disallowedTools` flags. In `--mode plan` it emits an implementation plan
+without reading Gmail (exit 0, 39.5 s); asked directly without `run_command`,
+it confirms no native Gmail/Drive tools exist (exit 0, 2.5 s); with general
+prompt execution, it delegates to `bashy google` via `run_command` (Gmail:
+exit 0, 73.6 s, 5 IDs; Drive: exit 0, 187.9 s, 403 insufficientPermissions).
+Because agy cannot reach Gmail/Drive headlessly without general shell
+execution, `agy:email.read` and `agy:drive.read` are not seeded in the baseline
+per operator instruction.

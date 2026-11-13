@@ -196,6 +196,28 @@ commands:
     capability: video
     output: turn
     exec: agy --output-format text --model {model} -p {args}
+  # MEASURED 2026-11-12 (agy 1.5.7, Sprint #626 S5b): exploration of native
+  # Google access (Gmail/Drive) measured on the wire (read-only, no bypass flags).
+  # Unlike claude (which seeds claude:email.read and claude:drive.read using
+  # claude.ai connectors with --allowedTools/--disallowedTools restricting execution),
+  # agy has no native headless Gmail or Drive connector in its CLI, no
+  # tool-allowlist flags, and no read-only Workspace execution mode:
+  # 1. Plan mode (`agy --mode plan --output-format text -p "Search Gmail for messages newer_than:7d (max 5) and output count or IDs only."`):
+  #    exit 0, 39.5 s; outputs an implementation plan requesting approval and
+  #    does not query Gmail.
+  # 2. Native tools query (`agy --output-format text -p "Without using run_command, terminal, or any shell commands: do you have any native tool or capability to access Gmail or Google Drive?"`):
+  #    exit 0, 2.5 s; confirms: "No, I do not have any native tool or built-in capability
+  #    to access Gmail or Google Drive in this session... native tools are limited to:
+  #    Local filesystem operations, Public web access, Agent & task management, Shell execution."
+  # 3. Direct print mode (`agy --output-format text -p "Search Gmail for messages newer_than:7d (max 5) and output count or IDs only."`):
+  #    exit 0, 73.6 s; reaches Gmail only by shelling out to `bashy google gmail-list`
+  #    via run_command.
+  # 4. Direct Drive list (`agy --output-format text -p "List my 5 most recently modified Drive files and output count or IDs only."`):
+  #    exit 0, 187.9 s; delegates to `bashy google drive-list`, which fails with
+  #    403 insufficientPermissions (OAuth grant lacks Drive scope).
+  # Per operator rule ("If agy cannot reach Gmail/Drive headlessly, record command,
+  # exit and output instead of seeding"), agy:email.read and agy:drive.read are not
+  # seeded in the baseline. If desired, shell-delegated variants belong in the user overlay.
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:
