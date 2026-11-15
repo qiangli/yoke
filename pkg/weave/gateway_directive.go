@@ -18,6 +18,7 @@ import (
 	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // Gateway directives use the task wire contract in docs/vendor-chat-gateway-mvp.md.
@@ -696,6 +697,9 @@ func (g *gatewayConductor) approve(ctx context.Context, ev Event, d gatewayDirec
 	return nil
 }
 
+// gatewayWorkerProbeTimeout bounds the pre-launch subscription check.
+var gatewayWorkerProbeTimeout = 30 * time.Second
+
 func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir string) (string, int, bool) {
 	argv := d.Args.Argv
 	verified := true
@@ -712,6 +716,19 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 		}
 		if worker != "claude" && worker != "codex" && worker != "agy" && worker != "muse" {
 			return "worker missing or unsupported", 2, true
+		}
+		// Honest worker state before any launch (Sprint 646 decision 5, O2):
+		// run the tool's declared subscription check and refuse to start a
+		// worker that is not signed in, reporting missing/expired/plan-limit/
+		// offline instead of whatever a half-started vendor CLI prints.
+		if tool, ok := fleetCatalog().Tool(worker); ok {
+			if rep := fleet.ProbeWorker(ctx, tool, gatewayWorkerProbeTimeout); rep.State != fleet.WorkerOK {
+				detail := strings.TrimSpace(rep.Detail)
+				if detail != "" {
+					detail = ": " + detail
+				}
+				return fmt.Sprintf("worker %s credential state %s%s", worker, rep.State, detail), 1, true
+			}
 		}
 		launch, err := agentlaunch.ResolveWithCatalog(worker, agentlaunch.Options{Workspace: workdir}, fleetCatalog)
 		if err != nil {
