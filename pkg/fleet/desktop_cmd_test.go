@@ -112,3 +112,85 @@ func TestDesktopInvokeAwaitsResult(t *testing.T) {
 		t.Fatal("replayed command", writes)
 	}
 }
+
+// The allowance policy is set with a signed-in session, never an API token,
+// on the same paths the operator console uses.
+func TestDesktopPolicyUsesSessionAndRoute(t *testing.T) {
+	type call struct {
+		method, path, auth string
+		body               map[string]any
+	}
+	var calls []call
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := call{method: r.Method, path: r.URL.RequestURI(), auth: r.Header.Get("Authorization")}
+		if r.Body != nil {
+			json.NewDecoder(r.Body).Decode(&c.body)
+		}
+		calls = append(calls, c)
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(204)
+			return
+		}
+		w.Write([]byte(`{"owner":"*","daily_limit":5}`))
+	}))
+	defer server.Close()
+	t.Setenv(SuperadminSessionEnv, "session-test")
+	for _, args := range [][]string{{"policy", "ls"}, {"policy", "set", "*", "5"}, {"policy", "unset", "ann@example.com"}} {
+		cmd := NewDesktopCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs(append(args, "--master", server.URL))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if !json.Valid(out.Bytes()) {
+			t.Fatalf("%v: invalid JSON %q", args, out.Bytes())
+		}
+	}
+	want := []struct{ method, path string }{
+		{"GET", "/api/v1/desktop-policy/allowance"},
+		{"PUT", "/api/v1/desktop-policy/allowance"},
+		{"DELETE", "/api/v1/desktop-policy/allowance?owner=ann%40example.com"},
+	}
+	for i, w := range want {
+		if calls[i].method != w.method || calls[i].path != w.path || calls[i].auth != "Bearer session-test" {
+			t.Fatalf("call %d = %+v, want %s %s with the session", i, calls[i], w.method, w.path)
+		}
+	}
+	if calls[1].body["owner"] != "*" || calls[1].body["daily_limit"] != float64(5) {
+		t.Fatalf("set body = %v", calls[1].body)
+	}
+	t.Setenv(SuperadminSessionEnv, "")
+	cmd := NewDesktopCmd()
+	cmd.SetArgs([]string{"policy", "ls", "--master", server.URL})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("policy without a session must be refused before any request")
+	}
+	if len(calls) != 3 {
+		t.Fatalf("a refused policy call still reached the server: %d calls", len(calls))
+	}
+}
+
+// Unavailable wishes are a refusal with a reason: exit 3 and a JSON
+// envelope carrying the status and the server's reason code.
+func TestDesktopUnavailableIsARefusalWithReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"revision":1}`))
+			return
+		}
+		w.WriteHeader(503)
+		w.Write([]byte(`{"code":"pool_unreachable","error":"the model pool cannot be reached right now; ordinary settings still work"}`))
+	}))
+	defer server.Close()
+	cmd := NewDesktopCmd()
+	cmd.SetArgs([]string{"wish", "make it dark", "--master", server.URL, "--token", "t"})
+	err := cmd.Execute()
+	if DesktopExitCode(err) != 3 {
+		t.Fatalf("exit %d for %v; want 3", DesktopExitCode(err), err)
+	}
+	var env map[string]any
+	if json.Unmarshal([]byte(DesktopErrorJSON(err)), &env) != nil || env["status"] != float64(503) || env["exit"] != float64(3) {
+		t.Fatalf("envelope %s", DesktopErrorJSON(err))
+	}
+}
