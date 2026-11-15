@@ -32,6 +32,7 @@ type serviceDefaultGolden struct {
 type kv = map[string]string
 
 var serviceDefaultsGolden = map[string]serviceDefaultGolden{
+	"bashy-mcp":     {true, "default-on: authenticated tunnel endpoint for the vendor gateway sync route", nil},
 	"actrunner":     {false, "opt-in: the runner joins only when the operator points it at work", kv{"forge_unit": "loom", "labels": "host:host", "sandbox": "false", "docker_host": ""}},
 	"apps":          {true, "default-on: paired hosts need the human front door after an upgrade", kv{"pair": "false", "launcher": ""}},
 	"browser-hub":   {false, "opt-in: drives the owner's real logged-in Chrome; started from the outpost admin when needed", nil},

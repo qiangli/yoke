@@ -46,6 +46,12 @@ func ServeHTTPWithShutdown(ctx context.Context, name, version string, opts Optio
 // ServeHTTPServerWithShutdown serves a prebuilt server, preserving caller-owned
 // tools, middleware and registered-command refreshes on the actual HTTP server.
 func ServeHTTPServerWithShutdown(ctx context.Context, server *mcpsdk.Server, listen string) (addr string, shutdown func() error, err error) {
+	return ServeHTTPServerWithAuth(ctx, server, listen, nil)
+}
+
+// ServeHTTPServerWithAuth adds a request authentication boundary to the same
+// loopback transport. Authentication never grants tool effects.
+func ServeHTTPServerWithAuth(ctx context.Context, server *mcpsdk.Server, listen string, authenticate func(*http.Request) bool) (addr string, shutdown func() error, err error) {
 	listen, err = loopbackListenAddress(ctx, listen)
 	if err != nil {
 		return "", nil, err
@@ -56,7 +62,17 @@ func ServeHTTPServerWithShutdown(ctx context.Context, server *mcpsdk.Server, lis
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, &mcpsdk.StreamableHTTPOptions{Stateless: true}))
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	var handler http.Handler = mux
+	if authenticate != nil {
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !authenticate(r) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		})
+	}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	serving := make(chan error, 1)
 	go func() { serving <- srv.Serve(listener) }()
 	ctx, cancel := context.WithCancel(ctx)

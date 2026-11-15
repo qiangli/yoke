@@ -1,0 +1,20 @@
+name: bashy-mcp
+kind: service
+description: Tunnel-only Bashy MCP endpoint with authenticated outpost identity
+exec: [bashy, mcp, serve, --transport, http, --listen, "{bind}:{port}", --outpost]
+ports:
+  - name: http
+    port: 22750
+    bind: loopback
+health:
+  tcp: true
+  interval: 10s
+  timeout: 2s
+  failures: 3
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+expose:
+  app: {name: bashy-mcp, require_login: true, trust_cloud_identity: true}
+enabled: true
