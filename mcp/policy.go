@@ -20,16 +20,17 @@ import (
 // Policy grants privileged effects explicitly. A nil or zero Policy grants none.
 // Configure Allow and Audit before serving; Audit may be called concurrently.
 //
-// RaiseApproval, when non-nil, turns a gated-effect denial on a known command
-// into a needs-approval answer: the hook raises (or finds) the digest-bound
-// ask approval and the call returns its binding instead of executing.
-// Unknown commands still deny outright, and a hook that declines fails
-// closed to the denial.
+// A gated-effect denial on a known command never executes here and never
+// raises an approval here: the call answers {state: "gated", effects: [...]}
+// (exit 126) so the master's router re-dispatches the same call over the
+// pull route with the same idempotency key. The pull conductor raises the
+// task-bound digest-bound ask approval there and executes only after the
+// owning host settles it through ask.ApplyRemote. Unknown commands still
+// deny outright with exit 2.
 type Policy struct {
-	Allow         map[string]bool
-	Audit         func(Record)
-	RaiseApproval func(GatedCall) (GatedGrant, bool)
-	synthetic     *sync.Map
+	Allow     map[string]bool
+	Audit     func(Record)
+	synthetic *sync.Map
 }
 
 // Record describes one tools/call, including policy denials and dispatch failures.
@@ -121,6 +122,53 @@ func (p *Policy) commandEffects(name string) []string {
 	return []string{}
 }
 
+// GatedState is the sync answer when a call's effects need a pull-route
+// approval. It hands the call to the pull route; only the pull conductor
+// raises the task-bound digest approval and executes after approve.
+const GatedState = "gated"
+
+// Gated is the structured sync answer for a gated call: the pull-route
+// handoff. It carries no approval binding because nothing was raised here.
+type Gated struct {
+	State   string   `json:"state"`
+	Effects []string `json:"effects"`
+}
+
+// gatedResult answers a known command's privileged-effect denial with the
+// pull-route handoff. Unknown commands, and denials with no privileged
+// effect in the command's own set, report false so the caller keeps the
+// outright denial. The call never executes on this route.
+func (p *Policy) gatedResult(name string, effects []string) (*mcpsdk.CallToolResult, bool) {
+	if !p.knownCommand(name) {
+		return nil, false
+	}
+	var gated []string
+	for _, effect := range atlas.Effects() {
+		if !privileged(effect) {
+			continue
+		}
+		for _, actual := range effects {
+			if actual == effect {
+				gated = append(gated, effect)
+				break
+			}
+		}
+	}
+	if len(gated) == 0 {
+		return nil, false
+	}
+	text := fmt.Sprintf("gated: effects %s need pull-route approval; not executed",
+		strings.Join(gated, ","))
+	return &mcpsdk.CallToolResult{
+		IsError: true,
+		Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: text}},
+		StructuredContent: Gated{
+			State:   GatedState,
+			Effects: gated,
+		},
+	}, true
+}
+
 func (p *Policy) policyDenial(name string, err error) (*mcpsdk.CallToolResult, RunToolOutput) {
 	out := RunToolOutput{Stderr: err.Error(), ExitCode: 126}
 	if !p.knownCommand(name) {
@@ -177,8 +225,8 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			record.Command = in.Name
 			record.Effects = (*Policy)(nil).commandEffects(in.Name)
 			if denial := p.Check(in.Name, record.Effects); denial != nil {
-				if res, grant, ok := p.gatedResult(in.Name, append([]string{in.Name}, in.Args...), record.Effects); ok {
-					record.ApprovalID = grant.ApprovalID
+				if res, ok := p.gatedResult(in.Name, record.Effects); ok {
+					record.Denial = denial.Error()
 					record.ExitCode = 126
 					return res, nil
 				}
@@ -189,18 +237,8 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		default:
 			record.Effects = p.commandEffects(record.Command)
 			if denial := p.Check(record.Command, record.Effects); denial != nil {
-				// Bind the full candidate: direct tools carry their
-				// argv in the args array when they use the shared
-				// input shape, else the raw arguments object.
-				argv := []string{record.Command}
-				var in directInput
-				if json.Unmarshal(call.Params.Arguments, &in) == nil && len(in.Args) > 0 {
-					argv = append(argv, in.Args...)
-				} else if raw := strings.TrimSpace(string(call.Params.Arguments)); raw != "" {
-					argv = append(argv, raw)
-				}
-				if res, grant, ok := p.gatedResult(record.Command, argv, record.Effects); ok {
-					record.ApprovalID = grant.ApprovalID
+				if res, ok := p.gatedResult(record.Command, record.Effects); ok {
+					record.Denial = denial.Error()
 					record.ExitCode = 126
 					return res, nil
 				}

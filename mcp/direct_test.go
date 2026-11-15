@@ -25,11 +25,12 @@ func TestDirectRegistryCalls(t *testing.T) {
 		stdout, stderr string
 		exit           int
 		denied         bool
+		gated          bool
 	}{
 		{name: "echo", arguments: map[string]any{"args": []string{"hi"}}, stdout: "hi\n"},
 		{name: "mcpprobe", arguments: map[string]any{"args": []string{"x", "y"}, "stdin": "hello\n"}, stdout: "out:hello:x,y"},
 		{name: "mcpprobe", arguments: map[string]any{"args": []string{"fail"}, "stdin": "z"}, stdout: "out:z:fail", stderr: "boom", exit: 5},
-		{name: "rm", arguments: map[string]any{"args": []string{"unused"}}, stderr: "denied: effect destroy requires --allow destroy", exit: 126, denied: true},
+		{name: "rm", arguments: map[string]any{"args": []string{"unused"}}, denied: true, gated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := &Policy{Audit: func(Record) {}}
@@ -41,6 +42,19 @@ func TestDirectRegistryCalls(t *testing.T) {
 			result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: tc.name, Arguments: tc.arguments})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.gated {
+				got := decodeStructured[Gated](t, result)
+				if !result.IsError || got.State != GatedState || !slices.Contains(got.Effects, "destroy") {
+					t.Fatalf("gated = %+v", got)
+				}
+				if len(result.Content) != 1 {
+					t.Fatalf("content = %v", result.Content)
+				}
+				if txt, ok := result.Content[0].(*mcpsdk.TextContent); !ok || !strings.HasPrefix(txt.Text, "gated:") {
+					t.Fatalf("text = %+v", result.Content[0])
+				}
+				return
 			}
 			out := decodeStructured[RunToolOutput](t, result)
 			if out.Stdout != tc.stdout || out.Stderr != tc.stderr || out.ExitCode != tc.exit {
@@ -236,16 +250,18 @@ func TestRegisteredSchemaAndPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out := decodeStructured[RunToolOutput](t, result)
 		if !result.IsError {
 			t.Fatal("expected tool error")
 		}
 		if allow {
-			if out != (RunToolOutput{Stdout: "output", Stderr: "error", ExitCode: 7}) {
+			if out := decodeStructured[RunToolOutput](t, result); out != (RunToolOutput{Stdout: "output", Stderr: "error", ExitCode: 7}) {
 				t.Fatalf("output: %+v", out)
 			}
-		} else if out.ExitCode != 126 {
-			t.Fatalf("denial: %+v", out)
+		} else {
+			got := decodeStructured[Gated](t, result)
+			if got.State != GatedState || !slices.Contains(got.Effects, "destroy") {
+				t.Fatalf("denial: %+v", got)
+			}
 		}
 	}
 	if calls != 1 {
@@ -331,15 +347,22 @@ func TestRegisteredEffectsAreServerLocal(t *testing.T) {
 	command.Effects = []string{"pure"}
 	allowed := NewServerWithOptions("allowed", "test", opts)
 	for _, tc := range []struct {
-		srv  *mcpsdk.Server
-		exit int
-	}{{blocked, 126}, {allowed, 0}} {
+		srv   *mcpsdk.Server
+		gated bool
+	}{{blocked, true}, {allowed, false}} {
 		cs, ctx := policyClient(t, tc.srv)
 		result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: command.Name, Arguments: map[string]any{}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out := decodeStructured[RunToolOutput](t, result); out.ExitCode != tc.exit {
+		if tc.gated {
+			got := decodeStructured[Gated](t, result)
+			if !result.IsError || got.State != GatedState || !slices.Contains(got.Effects, "destroy") {
+				t.Fatalf("gated = %+v", got)
+			}
+			continue
+		}
+		if out := decodeStructured[RunToolOutput](t, result); out.ExitCode != 0 {
 			t.Fatalf("output: %+v", out)
 		}
 	}
@@ -354,8 +377,8 @@ func TestRegisteredCannotWeakenRegistryPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := decodeStructured[RunToolOutput](t, result); out.ExitCode != 126 {
-		t.Fatalf("registry policy weakened: %+v", out)
+	if got := decodeStructured[Gated](t, result); !result.IsError || got.State != GatedState {
+		t.Fatalf("registry policy weakened: %+v", got)
 	}
 }
 

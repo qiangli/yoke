@@ -43,11 +43,12 @@ func TestPolicyCalls(t *testing.T) {
 		allow         bool
 		code          int
 		denial        string
+		gated         bool
 	}{
-		{"rm denied", "rm", false, 126, "denied: effect destroy requires --allow destroy"},
-		{"rm allowed", "rm", true, 0, ""},
-		{"echo allowed", "echo", false, 0, ""},
-		{"unknown", "mcp-no-such-command", false, 2, "unknown command: mcp-no-such-command"},
+		{"rm denied", "rm", false, 126, "denied: effect destroy requires --allow destroy", true},
+		{"rm allowed", "rm", true, 0, "", false},
+		{"echo allowed", "echo", false, 0, "", false},
+		{"unknown", "mcp-no-such-command", false, 2, "unknown command: mcp-no-such-command", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			records := make(chan Record, 2)
@@ -65,17 +66,31 @@ func TestPolicyCalls(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out := decodeStructured[RunToolOutput](t, res)
-			if out.ExitCode != tc.code || res.IsError != (tc.denial != "") {
-				t.Fatalf("result = %+v, output = %+v", res, out)
-			}
-			if tc.denial != "" {
+			var out RunToolOutput
+			if tc.gated {
+				got := decodeStructured[Gated](t, res)
+				if !res.IsError || got.State != GatedState || !strings.Contains(strings.Join(got.Effects, ","), "destroy") {
+					t.Fatalf("result = %+v, gated = %+v", res, got)
+				}
 				if len(res.Content) != 1 {
 					t.Fatalf("content = %v", res.Content)
 				}
-				txt, ok := res.Content[0].(*mcpsdk.TextContent)
-				if !ok || txt.Text != tc.denial {
+				if txt, ok := res.Content[0].(*mcpsdk.TextContent); !ok || !strings.HasPrefix(txt.Text, "gated:") {
 					t.Fatalf("content = %+v", res.Content[0])
+				}
+			} else {
+				out = decodeStructured[RunToolOutput](t, res)
+				if out.ExitCode != tc.code || res.IsError != (tc.denial != "") {
+					t.Fatalf("result = %+v, output = %+v", res, out)
+				}
+				if tc.denial != "" {
+					if len(res.Content) != 1 {
+						t.Fatalf("content = %v", res.Content)
+					}
+					txt, ok := res.Content[0].(*mcpsdk.TextContent)
+					if !ok || txt.Text != tc.denial {
+						t.Fatalf("content = %+v", res.Content[0])
+					}
 				}
 			}
 			if tc.command == "echo" && out.Stdout != "hello\n" {
