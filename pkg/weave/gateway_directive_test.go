@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/chat"
 )
 
@@ -16,6 +18,21 @@ type gatewayTestClient struct {
 	mu         sync.Mutex
 	events     []AppendEventReq
 	failResult bool
+	tasks      []TaskSummary
+}
+
+func (c *gatewayTestClient) ListTasks(context.Context) ([]TaskSummary, error) {
+	return c.tasks, nil
+}
+
+// isolateGateway points the ask approval store and the room timeline at
+// private tempdirs, so gateway approvals never touch the operator's state.
+func isolateGateway(t *testing.T) {
+	t.Helper()
+	t.Setenv("BASHY_ASK_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	oldWait := gatewayApprovalWait
+	t.Cleanup(func() { gatewayApprovalWait = oldWait })
 }
 
 func (c *gatewayTestClient) AppendEvent(_ context.Context, _ string, req AppendEventReq) (Event, error) {
@@ -196,14 +213,19 @@ func TestSubscriptionWorkerEnvExcludesMeteredCredentials(t *testing.T) {
 
 func TestGatewayRunEffectGate(t *testing.T) {
 	for _, tc := range []struct {
-		name, verb string
-		runs       bool
+		name, verb  string
+		runs        bool
+		state       string
+		reason      string
+		needsSearch bool
 	}{
-		{"read", "ls", true},
-		{"destroy", "rm", false},
-		{"unknown", "not-an-atlas-verb", false},
+		{"read", "ls", true, "done", "", false},
+		{"destroy", "rm", false, "needs-approval", "", true},
+		{"unknown", "not-an-atlas-verb", false, "failed", "gated-effect", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			isolateGateway(t)
+			gatewayApprovalWait = 5 * time.Second
 			c := &gatewayTestClient{directiveMockSessionClient: &directiveMockSessionClient{}}
 			g := newGatewayConductor(c, t.TempDir())
 			runs := 0
@@ -221,7 +243,11 @@ func TestGatewayRunEffectGate(t *testing.T) {
 			if err := g.apply(context.Background(), "task", ev); err != nil {
 				t.Fatal(err)
 			}
-			g.wg.Wait()
+			if tc.needsSearch {
+				waitGatewayState(t, g, "key", tc.state)
+			} else {
+				g.wg.Wait()
+			}
 			if (runs == 1) != tc.runs {
 				t.Fatalf("execute calls = %d", runs)
 			}
@@ -229,12 +255,41 @@ func TestGatewayRunEffectGate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.runs && r.State != "done" {
-				t.Fatalf("state = %s", r.State)
-			}
-			if !tc.runs && (r.State != "failed" || r.Reason != "gated-effect") {
+			if r.State != tc.state || (tc.reason != "" && r.Reason != tc.reason) {
 				t.Fatalf("record = %+v", r)
 			}
+			if tc.needsSearch {
+				found := false
+				for _, emitted := range c.snapshot() {
+					if emitted.Kind != "approval" {
+						continue
+					}
+					var approval struct {
+						ApprovalID string   `json:"approval_id"`
+						Digest     string   `json:"digest"`
+						Summary    string   `json:"summary"`
+						Effects    []string `json:"effects"`
+					}
+					if err := json.Unmarshal(emitted.Detail, &approval); err != nil {
+						t.Fatal(err)
+					}
+					if approval.ApprovalID == "" || approval.Digest == "" || approval.Summary == "" || len(approval.Effects) == 0 {
+						t.Fatalf("approval event = %+v", approval)
+					}
+					found = true
+				}
+				if !found {
+					t.Fatal("gated run emitted no approval event")
+				}
+			}
+			if tc.needsSearch {
+				// Release the waiter with a cancellation instead of
+				// waiting out the approval timeout.
+				if err := g.apply(context.Background(), "task", gatewayEvent(t, "cancel", "task", "key", "cancel")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			g.wg.Wait()
 		})
 	}
 }
@@ -291,5 +346,233 @@ func TestGatewayResultRetriesAfterWriteFailure(t *testing.T) {
 	}
 	if !r.ResultSent || !r.TerminalStateSent {
 		t.Fatalf("outbox did not flush: %+v", r)
+	}
+}
+
+// gatewayGatedRun starts a gated run and returns the approval binding its
+// published approval event carries.
+func gatewayGatedRun(t *testing.T, g *gatewayConductor, c *gatewayTestClient, task, key string, argv []string) (approvalID, digest string) {
+	t.Helper()
+	ev := gatewayEvent(t, "1", task, key, "run")
+	var d gatewayDirective
+	if err := json.Unmarshal(ev.Detail, &d); err != nil {
+		t.Fatal(err)
+	}
+	d.Args.Argv = argv
+	ev.Detail, _ = json.Marshal(d)
+	if err := g.apply(context.Background(), task, ev); err != nil {
+		t.Fatal(err)
+	}
+	waitGatewayState(t, g, key, "needs-approval")
+	deadline := time.After(2 * time.Second)
+	for {
+		for _, emitted := range c.snapshot() {
+			if emitted.Kind != "approval" {
+				continue
+			}
+			var approval struct {
+				ApprovalID string `json:"approval_id"`
+				Digest     string `json:"digest"`
+			}
+			if err := json.Unmarshal(emitted.Detail, &approval); err != nil {
+				t.Fatal(err)
+			}
+			if approval.ApprovalID != "" {
+				return approval.ApprovalID, approval.Digest
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatal("no approval event with an id")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func gatewayApproveEvent(t *testing.T, id, task, key, host, approvalID, digest, decision, author string) Event {
+	t.Helper()
+	d := gatewayDirective{Verb: "approve", TaskID: task, IdempotencyKey: key, Host: host}
+	d.Args.ApprovalID = approvalID
+	d.Args.Digest = digest
+	d.Args.Decision = decision
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Event{ID: id, Kind: "directive", Author: author, Detail: b}
+}
+
+// A matching digest settles through ApplyRemote and the gated run executes
+// exactly once.
+func TestGatewayApproveDigestSettles(t *testing.T) {
+	isolateGateway(t)
+	gatewayApprovalWait = 5 * time.Second
+	c := &gatewayTestClient{
+		directiveMockSessionClient: &directiveMockSessionClient{},
+		tasks:                     []TaskSummary{{ID: "task", Owner: "approver"}},
+	}
+	g := newGatewayConductor(c, t.TempDir())
+	runs := 0
+	g.execute = func(context.Context, gatewayDirective) (string, int, bool) {
+		runs++
+		return "shaped", 0, true
+	}
+	approvalID, digest := gatewayGatedRun(t, g, c, "task", "key", []string{"rm", "candidate"})
+	if approvalID == "" || digest == "" {
+		t.Fatal("approval event carries no binding")
+	}
+	ev := gatewayApproveEvent(t, "2", "task", "key", sessionHostName(), approvalID, digest, "approve", "approver")
+	if err := g.apply(context.Background(), "task", ev); err != nil {
+		t.Fatal(err)
+	}
+	g.wg.Wait()
+	if runs != 1 {
+		t.Fatalf("execute calls = %d, want 1", runs)
+	}
+	waitGatewayState(t, g, "key", "done")
+}
+
+// A stale digest fails closed: the decision is refused and the candidate
+// never executes.
+func TestGatewayStaleDigestRefused(t *testing.T) {
+	isolateGateway(t)
+	gatewayApprovalWait = 5 * time.Second
+	c := &gatewayTestClient{
+		directiveMockSessionClient: &directiveMockSessionClient{},
+		tasks:                     []TaskSummary{{ID: "task", Owner: "approver"}},
+	}
+	g := newGatewayConductor(c, t.TempDir())
+	executed := false
+	g.execute = func(context.Context, gatewayDirective) (string, int, bool) {
+		executed = true
+		return "must not run", 0, true
+	}
+	approvalID, _ := gatewayGatedRun(t, g, c, "task", "key", []string{"rm", "candidate"})
+	ev := gatewayApproveEvent(t, "2", "task", "key", sessionHostName(), approvalID, strings.Repeat("0", 64), "approve", "approver")
+	if err := g.apply(context.Background(), "task", ev); err != nil {
+		t.Fatal(err)
+	}
+	// The refusal surfaces as an error result; the approval stays undecided.
+	foundRefusal := false
+	for _, emitted := range c.snapshot() {
+		if emitted.Kind != "result" {
+			continue
+		}
+		var result struct {
+			Text string `json:"text"`
+			Exit int    `json:"exit"`
+		}
+		if err := json.Unmarshal(emitted.Detail, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Exit == 1 && strings.Contains(result.Text, "does not match") {
+			foundRefusal = true
+		}
+	}
+	if !foundRefusal {
+		t.Fatal("stale digest produced no refusal result")
+	}
+	if _, decided := ask.LoadDecision(approvalID); decided {
+		t.Fatal("stale digest decided the approval")
+	}
+	r, err := readGatewayRecord(gatewayRecordPath(g.dir, "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != "needs-approval" || executed {
+		t.Fatalf("stale digest moved the task: %+v executed=%v", r, executed)
+	}
+	if err := g.apply(context.Background(), "task", gatewayEvent(t, "cancel", "task", "key", "cancel")); err != nil {
+		t.Fatal(err)
+	}
+	g.wg.Wait()
+}
+
+// A decision naming another host never settles here.
+func TestGatewayWrongHostRefused(t *testing.T) {
+	isolateGateway(t)
+	gatewayApprovalWait = 5 * time.Second
+	c := &gatewayTestClient{
+		directiveMockSessionClient: &directiveMockSessionClient{},
+		tasks:                     []TaskSummary{{ID: "task", Owner: "approver"}},
+	}
+	g := newGatewayConductor(c, t.TempDir())
+	g.execute = func(context.Context, gatewayDirective) (string, int, bool) {
+		t.Fatal("a foreign decision must not execute the candidate")
+		return "", 0, false
+	}
+	approvalID, digest := gatewayGatedRun(t, g, c, "task", "key", []string{"rm", "candidate"})
+	before := len(c.snapshot())
+	ev := gatewayApproveEvent(t, "2", "task", "key", "some-other-host", approvalID, digest, "approve", "approver")
+	if err := g.apply(context.Background(), "task", ev); err != nil {
+		t.Fatal(err)
+	}
+	if _, decided := ask.LoadDecision(approvalID); decided {
+		t.Fatal("a foreign host decided the approval")
+	}
+	if got := len(c.snapshot()); got != before {
+		t.Fatalf("foreign directive emitted %d events", got-before)
+	}
+	// The explicit host check refuses even a direct call.
+	if err := g.approve(context.Background(), ev, gatewayApproveDirective(t, ev)); err != nil {
+		t.Fatal(err)
+	}
+	refused := false
+	for _, emitted := range c.snapshot()[before:] {
+		if emitted.Kind != "result" {
+			continue
+		}
+		var result struct {
+			Text string `json:"text"`
+			Exit int    `json:"exit"`
+		}
+		if err := json.Unmarshal(emitted.Detail, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Exit == 1 && strings.Contains(result.Text, "not for this host") {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatal("direct approve for another host was not refused")
+	}
+	if err := g.apply(context.Background(), "task", gatewayEvent(t, "cancel", "task", "key", "cancel")); err != nil {
+		t.Fatal(err)
+	}
+	g.wg.Wait()
+}
+
+func gatewayApproveDirective(t *testing.T, ev Event) gatewayDirective {
+	t.Helper()
+	var d gatewayDirective
+	if err := json.Unmarshal(ev.Detail, &d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// An approval nobody answers is denied after the bounded wait: the task ends
+// cancelled and the candidate never executes.
+func TestGatewayUnansweredDenial(t *testing.T) {
+	isolateGateway(t)
+	gatewayApprovalWait = 150 * time.Millisecond
+	c := &gatewayTestClient{directiveMockSessionClient: &directiveMockSessionClient{}}
+	g := newGatewayConductor(c, t.TempDir())
+	g.execute = func(context.Context, gatewayDirective) (string, int, bool) {
+		t.Fatal("an unanswered approval must not execute the candidate")
+		return "", 0, false
+	}
+	approvalID, _ := gatewayGatedRun(t, g, c, "task", "key", []string{"rm", "candidate"})
+	g.wg.Wait()
+	r, err := readGatewayRecord(gatewayRecordPath(g.dir, "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != "cancelled" || r.Reason != "approval-unanswered" {
+		t.Fatalf("record = %+v", r)
+	}
+	dec, ok := ask.LoadDecision(approvalID)
+	if !ok || dec.Verdict != ask.VerdictDeny || dec.Via != ask.ViaTimeout {
+		t.Fatalf("unanswered approval was not denied: %+v %v", dec, ok)
 	}
 }

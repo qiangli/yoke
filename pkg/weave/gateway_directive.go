@@ -47,7 +47,16 @@ type gatewayTaskRecord struct {
 	Result            *gatewayResult `json:"result,omitempty"`
 	ResultSent        bool           `json:"result_sent,omitempty"`
 	TerminalStateSent bool           `json:"terminal_state_sent,omitempty"`
+	// ApprovalID and Digest bind a needs-approval task to its ask approval,
+	// so a crash between raising and settling can re-emit the same event.
+	ApprovalID   string `json:"approval_id,omitempty"`
+	Digest       string `json:"digest,omitempty"`
+	ApprovalSent bool   `json:"approval_sent,omitempty"`
 }
+
+// gatewayApprovalWait bounds how long a gated run waits for its approval
+// before the conductor denies it as unanswered. Tests shrink it.
+var gatewayApprovalWait = 10 * time.Minute
 
 type gatewayResult struct {
 	Text     string `json:"text"`
@@ -277,7 +286,7 @@ func (g *gatewayConductor) apply(ctx context.Context, taskID string, ev Event) e
 
 func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 	defer g.wg.Done()
-	effects, gateErr := gatewayRunEffects(d)
+	effects, gated, gateErr := gatewayRunEffects(d)
 	if gateErr == nil && g.setState(context.Background(), d.IdempotencyKey, d.TaskID, "running", "") != nil {
 		return
 	}
@@ -287,25 +296,33 @@ func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 	if err != nil || r.State == "cancelled" {
 		return
 	}
-	var text string
-	var exit int
-	verified := true
-	reason := ""
 	if gateErr != nil {
-		text, exit = gateErr.Error(), 126
-		reason = "gated-effect"
-	} else {
-		if d.Verb == "run" && gatewayHasEffect(effects, atlas.EffWrite) {
-			if err := g.emit(context.Background(), d.TaskID, "audit", map[string]any{"verb": d.Args.Argv[0], "effects": effects}); err != nil {
-				text, exit, reason = "write audit unavailable", 126, "audit-unavailable"
-			}
-		}
-		if exit == 0 {
-			text, exit, verified = g.execute(ctx, d)
+		g.finishResult(context.Background(), d, gateErr.Error(), 126, true, "gated-effect")
+		return
+	}
+	// A destroy/spend/cred/priv effect never executes on a stored candidate:
+	// it raises a digest-bound approval first and runs only after the owning
+	// host settles it through ask.ApplyRemote.
+	if len(gated) > 0 {
+		if !g.awaitApproval(ctx, d, gated) {
+			return
 		}
 	}
+	if d.Verb == "run" && gatewayHasEffect(effects, atlas.EffWrite) {
+		if err := g.emit(context.Background(), d.TaskID, "audit", map[string]any{"verb": d.Args.Argv[0], "effects": effects}); err != nil {
+			g.finishResult(context.Background(), d, "write audit unavailable", 126, true, "audit-unavailable")
+			return
+		}
+	}
+	text, exit, verified := g.execute(ctx, d)
+	g.finishResult(context.Background(), d, text, exit, verified, "")
+}
+
+// finishResult records a terminal run outcome unless a cancellation won the
+// race, then hands the result and state to the outbox.
+func (g *gatewayConductor) finishResult(ctx context.Context, d gatewayDirective, text string, exit int, verified bool, reason string) {
 	g.mu.Lock()
-	r, err = readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey))
+	r, err := readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey))
 	if err != nil || r.State == "cancelled" {
 		g.mu.Unlock()
 		return
@@ -324,7 +341,119 @@ func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 		return
 	}
 	g.mu.Unlock()
-	_ = g.flushRecord(context.Background(), d.IdempotencyKey)
+	_ = g.flushRecord(ctx, d.IdempotencyKey)
+}
+
+// cancelRecord moves a task to cancelled with a reason unless it already
+// reached a terminal state, then hands the state to the outbox.
+func (g *gatewayConductor) cancelRecord(ctx context.Context, d gatewayDirective, reason string) {
+	g.mu.Lock()
+	r, err := readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey))
+	if err != nil || r.State == "done" || r.State == "failed" || r.State == "cancelled" {
+		g.mu.Unlock()
+		return
+	}
+	delete(g.active, d.IdempotencyKey)
+	r.State = "cancelled"
+	r.Reason = reason
+	if err := writeGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey), r); err != nil {
+		fmt.Fprintln(os.Stderr, "weave conduct: persist cancellation:", err)
+		g.mu.Unlock()
+		return
+	}
+	g.mu.Unlock()
+	_ = g.flushRecord(ctx, d.IdempotencyKey)
+}
+
+// awaitApproval raises the digest-bound approval for a gated run, publishes
+// the needs-approval state with its approval event, and waits for the owning
+// host to settle it. It reports whether the run may proceed; a deny or an
+// unanswered wait records the terminal state itself.
+func (g *gatewayConductor) awaitApproval(ctx context.Context, d gatewayDirective, gated []string) bool {
+	digest := ask.GatewayDigest(d.Args.Argv, d.Host, d.TaskID)
+	req, err := ask.Raise(ask.ApprovalSpec{
+		Source:  ask.SourceGateway,
+		Argv:    append([]string(nil), d.Args.Argv...),
+		Effects: append([]string(nil), gated...),
+		Session: d.TaskID,
+		Token:   digest,
+		Prompt:  "gateway run " + strings.Join(d.Args.Argv, " ") + " on " + d.Host,
+	})
+	if err != nil {
+		g.finishResult(context.Background(), d, "approval unavailable: "+err.Error(), 126, true, "approval-unavailable")
+		return false
+	}
+	g.mu.Lock()
+	r, err := readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey))
+	if err != nil || r.State == "cancelled" {
+		g.mu.Unlock()
+		return false
+	}
+	r.ApprovalID = req.ID
+	r.Digest = digest
+	if werr := writeGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey), r); werr != nil {
+		g.mu.Unlock()
+		return false
+	}
+	g.mu.Unlock()
+	if g.setState(context.Background(), d.IdempotencyKey, d.TaskID, "needs-approval", "") != nil {
+		return false
+	}
+	_ = g.emit(context.Background(), d.TaskID, "approval", map[string]any{
+		"approval_id": req.ID,
+		"digest":      digest,
+		"summary":     req.ApprovalSummary(),
+		"effects":     gated,
+	})
+	g.mu.Lock()
+	if r, err := readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey)); err == nil {
+		r.ApprovalSent = true
+		_ = writeGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey), r)
+	}
+	g.mu.Unlock()
+	waitCtx, cancel := context.WithTimeout(ctx, gatewayApprovalWait)
+	defer cancel()
+	dec, err := ask.WaitDecision(waitCtx, req.ID)
+	if err != nil {
+		// A cancellation that arrived mid-wait owns the outcome; only an
+		// actually unanswered approval is denied here.
+		g.mu.Lock()
+		cancelled := false
+		if r, rerr := readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey)); rerr == nil {
+			cancelled = r.State == "cancelled"
+		}
+		g.mu.Unlock()
+		if cancelled {
+			return false
+		}
+		dec = ask.DenyUnanswered(req.ID, "gateway approval went unanswered")
+	}
+	if !dec.Allowed() {
+		reason := "denied"
+		if dec.Via == ask.ViaTimeout {
+			reason = "approval-unanswered"
+		}
+		g.cancelRecord(context.Background(), d, reason)
+		return false
+	}
+	return true
+}
+
+// gatewayGatedEffects returns the subset of a candidate's effects that needs
+// a digest-bound approval, in atlas vocabulary order.
+func gatewayGatedEffects(effects []string) []string {
+	var gated []string
+	for _, effect := range atlas.Effects() {
+		switch effect {
+		case atlas.EffDestroy, atlas.EffSpend, atlas.EffCred, atlas.EffPriv:
+		default:
+			continue
+		}
+		if gatewayHasEffect(effects, effect) {
+			gated = append(gated, effect)
+		}
+	}
+	return gated
 }
 
 func gatewayHasEffect(effects []string, want string) bool {
@@ -338,24 +467,20 @@ func gatewayHasEffect(effects []string, want string) bool {
 
 // The atlas is the exported source used by the MCP policy. A missing record
 // has no known effect set and must never reach the process launcher.
-func gatewayRunEffects(d gatewayDirective) ([]string, error) {
+// Gated effects (destroy, spend, cred, priv) are reported separately: the
+// run raises a digest-bound approval for them instead of executing.
+func gatewayRunEffects(d gatewayDirective) (effects, gated []string, err error) {
 	if d.Verb != "run" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if len(d.Args.Argv) == 0 {
-		return nil, errors.New("argv required")
+		return nil, nil, errors.New("argv required")
 	}
 	entry, ok := atlas.Lookup(d.Args.Argv[0])
 	if !ok || len(entry.Effects) == 0 {
-		return nil, fmt.Errorf("unknown atlas verb %q", d.Args.Argv[0])
+		return nil, nil, fmt.Errorf("unknown atlas verb %q", d.Args.Argv[0])
 	}
-	for _, effect := range entry.Effects {
-		switch effect {
-		case atlas.EffDestroy, atlas.EffSpend, atlas.EffCred, atlas.EffPriv:
-			return entry.Effects, fmt.Errorf("effect %s requires approval", effect)
-		}
-	}
-	return entry.Effects, nil
+	return entry.Effects, gatewayGatedEffects(entry.Effects), nil
 }
 
 func (g *gatewayConductor) cancel(ctx context.Context, d gatewayDirective) error {
@@ -405,6 +530,12 @@ func (g *gatewayConductor) cancel(ctx context.Context, d gatewayDirective) error
 }
 
 func (g *gatewayConductor) approve(ctx context.Context, ev Event, d gatewayDirective) error {
+	// A directive for another host's queue never settles here, even when it
+	// reaches this method directly: the digest binds the owning host, and a
+	// foreign decision must fail closed.
+	if d.Host != sessionHostName() {
+		return g.emit(ctx, d.TaskID, "result", map[string]any{"text": "approval is not for this host", "exit": 1, "verified": true})
+	}
 	// Trust only the server-stamped author, never the opaque caller in detail.
 	tasks, err := g.client.ListTasks(ctx)
 	if err != nil {

@@ -19,22 +19,30 @@ import (
 
 // Policy grants privileged effects explicitly. A nil or zero Policy grants none.
 // Configure Allow and Audit before serving; Audit may be called concurrently.
+//
+// RaiseApproval, when non-nil, turns a gated-effect denial on a known command
+// into a needs-approval answer: the hook raises (or finds) the digest-bound
+// ask approval and the call returns its binding instead of executing.
+// Unknown commands still deny outright, and a hook that declines fails
+// closed to the denial.
 type Policy struct {
-	Allow     map[string]bool
-	Audit     func(Record)
-	synthetic *sync.Map
+	Allow         map[string]bool
+	Audit         func(Record)
+	RaiseApproval func(GatedCall) (GatedGrant, bool)
+	synthetic     *sync.Map
 }
 
 // Record describes one tools/call, including policy denials and dispatch failures.
 type Record struct {
-	Time     string        `json:"time"`
-	Tool     string        `json:"tool"`
-	Command  string        `json:"command"`
-	Effects  []string      `json:"effects"`
-	Allowed  bool          `json:"allowed"`
-	ExitCode int           `json:"exit_code"`
-	Duration time.Duration `json:"duration"`
-	Denial   string        `json:"denial"`
+	Time       string        `json:"time"`
+	Tool       string        `json:"tool"`
+	Command    string        `json:"command"`
+	Effects    []string      `json:"effects"`
+	Allowed    bool          `json:"allowed"`
+	ExitCode   int           `json:"exit_code"`
+	Duration   time.Duration `json:"duration"`
+	Denial     string        `json:"denial"`
+	ApprovalID string        `json:"approval_id,omitempty"`
 }
 
 func privileged(effect string) bool {
@@ -169,6 +177,11 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			record.Command = in.Name
 			record.Effects = (*Policy)(nil).commandEffects(in.Name)
 			if denial := p.Check(in.Name, record.Effects); denial != nil {
+				if res, grant, ok := p.gatedResult(in.Name, append([]string{in.Name}, in.Args...), record.Effects); ok {
+					record.ApprovalID = grant.ApprovalID
+					record.ExitCode = 126
+					return res, nil
+				}
 				record.Denial = denial.Error()
 				res, _ := p.policyDenial(in.Name, denial)
 				return res, nil
@@ -176,6 +189,21 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		default:
 			record.Effects = p.commandEffects(record.Command)
 			if denial := p.Check(record.Command, record.Effects); denial != nil {
+				// Bind the full candidate: direct tools carry their
+				// argv in the args array when they use the shared
+				// input shape, else the raw arguments object.
+				argv := []string{record.Command}
+				var in directInput
+				if json.Unmarshal(call.Params.Arguments, &in) == nil && len(in.Args) > 0 {
+					argv = append(argv, in.Args...)
+				} else if raw := strings.TrimSpace(string(call.Params.Arguments)); raw != "" {
+					argv = append(argv, raw)
+				}
+				if res, grant, ok := p.gatedResult(record.Command, argv, record.Effects); ok {
+					record.ApprovalID = grant.ApprovalID
+					record.ExitCode = 126
+					return res, nil
+				}
 				record.Denial = denial.Error()
 				res, _ := p.policyDenial(record.Command, denial)
 				return res, nil
