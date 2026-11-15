@@ -240,9 +240,7 @@ require (
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/gtsteffaniak/go-cache v1.1.0 // indirect
-	github.com/gtsteffaniak/go-ffmpeg v0.5.2 // indirect
-	github.com/gtsteffaniak/go-logger v1.1.0 // indirect
+	github.com/gtsteffaniak/go-ffmpeg v1.4.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
@@ -472,4 +470,4 @@ replace github.com/cyphar/filepath-securejoin => ./external/securejoin
 
 replace github.com/mattn/go-runewidth => ./external/runewidth
 
-replace github.com/gtsteffaniak/filebrowser/backend => github.com/qiangli/filebrowser-quantum/backend v0.0.0-20261113140828-88b90a50350d
+replace github.com/gtsteffaniak/filebrowser/backend => github.com/qiangli/filebrowser-quantum/backend v0.0.0-20261115042727-40f3c84d55a9
