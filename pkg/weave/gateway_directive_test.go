@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/chat"
 )
 
 type gatewayTestClient struct {
@@ -36,7 +38,7 @@ func (c *gatewayTestClient) snapshot() []AppendEventReq {
 func gatewayEvent(t *testing.T, id, task, key, verb string) Event {
 	t.Helper()
 	d := gatewayDirective{Verb: verb, TaskID: task, IdempotencyKey: key, Host: sessionHostName()}
-	d.Args.Argv = []string{"version"}
+	d.Args.Argv = []string{"ls"}
 	b, err := json.Marshal(d)
 	if err != nil {
 		t.Fatal(err)
@@ -181,13 +183,65 @@ func TestGatewayResultEventsMarkVerification(t *testing.T) {
 	}
 }
 
-func TestSubscriptionWorkerEnvExcludesAPIKeys(t *testing.T) {
-	got := subscriptionWorkerEnv([]string{
+func TestSubscriptionWorkerEnvExcludesMeteredCredentials(t *testing.T) {
+	got := chat.ScrubDelegateEnv([]string{
 		"OPENAI_API_KEY=masked", "ANTHROPIC_API_KEY=masked",
+		"OTHER_AUTH_TOKEN=masked", "AWS_REGION=masked", "ANTHROPIC_BASE_URL=masked",
 		"CLAUDE_CODE_OAUTH_TOKEN=opaque", "PATH=/bin",
 	})
 	if len(got) != 2 || got[0] != "CLAUDE_CODE_OAUTH_TOKEN=opaque" || got[1] != "PATH=/bin" {
 		t.Fatalf("unexpected environment variable names after filtering")
+	}
+}
+
+func TestGatewayRunEffectGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, verb string
+		runs       bool
+	}{
+		{"read", "ls", true},
+		{"destroy", "rm", false},
+		{"unknown", "not-an-atlas-verb", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &gatewayTestClient{directiveMockSessionClient: &directiveMockSessionClient{}}
+			g := newGatewayConductor(c, t.TempDir())
+			runs := 0
+			g.execute = func(context.Context, gatewayDirective) (string, int, bool) {
+				runs++
+				return "ok", 0, true
+			}
+			ev := gatewayEvent(t, "1", "task", "key", "run")
+			var d gatewayDirective
+			if err := json.Unmarshal(ev.Detail, &d); err != nil {
+				t.Fatal(err)
+			}
+			d.Args.Argv = []string{tc.verb}
+			ev.Detail, _ = json.Marshal(d)
+			if err := g.apply(context.Background(), "task", ev); err != nil {
+				t.Fatal(err)
+			}
+			g.wg.Wait()
+			if (runs == 1) != tc.runs {
+				t.Fatalf("execute calls = %d", runs)
+			}
+			r, err := readGatewayRecord(gatewayRecordPath(g.dir, "key"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.runs && r.State != "done" {
+				t.Fatalf("state = %s", r.State)
+			}
+			if !tc.runs && (r.State != "failed" || r.Reason != "gated-effect") {
+				t.Fatalf("record = %+v", r)
+			}
+		})
+	}
+}
+
+func TestGatewaySubscriptionArgs(t *testing.T) {
+	if len(chat.DelegateSubscriptionArgs("claude")) == 0 || len(chat.DelegateSubscriptionArgs("codex")) == 0 {
+		t.Fatal("subscription login arguments missing")
 	}
 }
 

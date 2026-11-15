@@ -16,6 +16,8 @@ import (
 
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/ask"
+	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/chat"
 )
 
 // Gateway directives use the task wire contract in docs/vendor-chat-gateway-mvp.md.
@@ -275,7 +277,8 @@ func (g *gatewayConductor) apply(ctx context.Context, taskID string, ev Event) e
 
 func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 	defer g.wg.Done()
-	if g.setState(context.Background(), d.IdempotencyKey, d.TaskID, "running", "") != nil {
+	effects, gateErr := gatewayRunEffects(d)
+	if gateErr == nil && g.setState(context.Background(), d.IdempotencyKey, d.TaskID, "running", "") != nil {
 		return
 	}
 	g.mu.Lock()
@@ -284,7 +287,23 @@ func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 	if err != nil || r.State == "cancelled" {
 		return
 	}
-	text, exit, verified := g.execute(ctx, d)
+	var text string
+	var exit int
+	verified := true
+	reason := ""
+	if gateErr != nil {
+		text, exit = gateErr.Error(), 126
+		reason = "gated-effect"
+	} else {
+		if d.Verb == "run" && gatewayHasEffect(effects, atlas.EffWrite) {
+			if err := g.emit(context.Background(), d.TaskID, "audit", map[string]any{"verb": d.Args.Argv[0], "effects": effects}); err != nil {
+				text, exit, reason = "write audit unavailable", 126, "audit-unavailable"
+			}
+		}
+		if exit == 0 {
+			text, exit, verified = g.execute(ctx, d)
+		}
+	}
 	g.mu.Lock()
 	r, err = readGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey))
 	if err != nil || r.State == "cancelled" {
@@ -297,6 +316,7 @@ func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 		state = "failed"
 	}
 	r.State = state
+	r.Reason = reason
 	r.Result = &gatewayResult{Text: text, Exit: exit, Verified: verified}
 	if err := writeGatewayRecord(gatewayRecordPath(g.dir, d.IdempotencyKey), r); err != nil {
 		fmt.Fprintln(os.Stderr, "weave conduct: persist result:", err)
@@ -305,6 +325,37 @@ func (g *gatewayConductor) run(ctx context.Context, d gatewayDirective) {
 	}
 	g.mu.Unlock()
 	_ = g.flushRecord(context.Background(), d.IdempotencyKey)
+}
+
+func gatewayHasEffect(effects []string, want string) bool {
+	for _, effect := range effects {
+		if effect == want {
+			return true
+		}
+	}
+	return false
+}
+
+// The atlas is the exported source used by the MCP policy. A missing record
+// has no known effect set and must never reach the process launcher.
+func gatewayRunEffects(d gatewayDirective) ([]string, error) {
+	if d.Verb != "run" {
+		return nil, nil
+	}
+	if len(d.Args.Argv) == 0 {
+		return nil, errors.New("argv required")
+	}
+	entry, ok := atlas.Lookup(d.Args.Argv[0])
+	if !ok || len(entry.Effects) == 0 {
+		return nil, fmt.Errorf("unknown atlas verb %q", d.Args.Argv[0])
+	}
+	for _, effect := range entry.Effects {
+		switch effect {
+		case atlas.EffDestroy, atlas.EffSpend, atlas.EffCred, atlas.EffPriv:
+			return entry.Effects, fmt.Errorf("effect %s requires approval", effect)
+		}
+	}
+	return entry.Effects, nil
 }
 
 func (g *gatewayConductor) cancel(ctx context.Context, d gatewayDirective) error {
@@ -411,6 +462,7 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 			return err.Error(), 1, true
 		}
 		argv = launch.Argv(d.Args.Prompt)
+		argv = agentlaunch.InsertBeforePrompt(argv, chat.DelegateSubscriptionArgs(launch.ToolName))
 		launchEnv = launch.Env
 		if len(argv) == 0 {
 			return "worker unavailable", 1, true
@@ -423,7 +475,7 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = workdir
 	if d.Verb == "delegate" {
-		cmd.Env = subscriptionWorkerEnv(append(os.Environ(), launchEnv...))
+		cmd.Env = chat.ScrubDelegateEnv(append(os.Environ(), launchEnv...))
 	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -434,18 +486,6 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 		return string(out), ee.ExitCode(), verified
 	}
 	return err.Error(), 1, verified
-}
-
-func subscriptionWorkerEnv(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, pair := range env {
-		name, _, _ := strings.Cut(pair, "=")
-		if strings.HasSuffix(strings.ToUpper(name), "_API_KEY") {
-			continue
-		}
-		out = append(out, pair)
-	}
-	return out
 }
 
 func (g *gatewayConductor) flushRecord(ctx context.Context, key string) error {

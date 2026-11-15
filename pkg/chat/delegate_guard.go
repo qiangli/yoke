@@ -108,6 +108,10 @@ func scrubDelegateEnv(env []string) []string {
 	return out
 }
 
+// ScrubDelegateEnv applies the subscription worker environment guard after
+// launch overlays have been assembled.
+func ScrubDelegateEnv(env []string) []string { return scrubDelegateEnv(env) }
+
 // Auth checks use the same binary and scrubbed environment as the task. Their
 // output is deliberately not returned: status errors can contain account data.
 func delegateAuth(ctx context.Context, agent, cwd string, l Launch) error {
@@ -284,6 +288,9 @@ func delegateSubscriptionArgs(tool string) []string {
 	}
 	return nil
 }
+
+// DelegateSubscriptionArgs pins supported workers to their subscription login.
+func DelegateSubscriptionArgs(tool string) []string { return delegateSubscriptionArgs(tool) }
 
 func delegateBudgetFailure(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
