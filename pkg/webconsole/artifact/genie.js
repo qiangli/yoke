@@ -91,12 +91,10 @@
   const NEUTRAL = "How can I help you today?";
   const ROTATE_MS = 6000;
 
-  // The Software Shaping mark ("Flow": two flattened S curves in a diagonal
-  // stack), the SVG master at bashy docs/software-shaping-design/flow.svg
-  // (Sprint 636). It fills with currentColor, so it follows the light and
-  // dark themes.
-  const sparkle = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
-    '<path d="M3.68 12.44C4.25 12.78 5.11 13.00 5.81 13.07C6.51 13.15 7.24 13.05 7.86 12.88C8.48 12.72 9.03 12.39 9.52 12.10C10.02 11.80 10.42 11.43 10.83 11.09C11.24 10.76 11.62 10.42 12.00 10.08C12.37 9.73 12.72 9.38 13.07 9.03C13.42 8.68 13.74 8.31 14.07 7.97C14.41 7.63 14.74 7.28 15.10 6.98C15.47 6.67 15.84 6.37 16.26 6.12C16.69 5.88 17.14 5.66 17.66 5.52C18.17 5.38 18.74 5.28 19.37 5.29C19.99 5.30 20.99 5.54 21.42 5.58C21.85 5.61 21.81 5.59 21.95 5.51C22.09 5.42 22.23 5.24 22.28 5.08C22.32 4.92 22.29 4.69 22.21 4.55C22.12 4.41 22.24 4.35 21.78 4.22C21.32 4.10 20.19 3.87 19.45 3.79C18.72 3.71 18.03 3.70 17.36 3.75C16.69 3.80 16.06 3.91 15.44 4.07C14.83 4.22 14.25 4.44 13.70 4.68C13.14 4.92 12.62 5.22 12.14 5.51C11.65 5.81 11.20 6.14 10.78 6.44C10.36 6.75 9.99 7.09 9.63 7.37C9.28 7.65 8.95 7.93 8.64 8.12C8.32 8.30 8.00 8.42 7.74 8.48C7.49 8.54 7.28 8.50 7.09 8.47C6.90 8.44 6.81 8.37 6.61 8.28C6.42 8.20 6.35 8.04 5.92 7.96C5.48 7.89 4.57 7.64 4.01 7.83C3.45 8.01 2.83 8.55 2.56 9.08C2.30 9.61 2.24 10.43 2.43 10.99C2.61 11.55 3.12 12.09 3.68 12.44ZM2.48 21.44C3.05 21.78 3.91 22.00 4.61 22.07C5.31 22.15 6.04 22.05 6.66 21.88C7.28 21.72 7.83 21.39 8.32 21.10C8.82 20.80 9.22 20.43 9.63 20.09C10.04 19.76 10.42 19.42 10.80 19.08C11.17 18.73 11.52 18.38 11.87 18.03C12.22 17.68 12.54 17.31 12.87 16.97C13.21 16.63 13.54 16.28 13.90 15.98C14.27 15.67 14.64 15.37 15.06 15.12C15.49 14.88 15.94 14.66 16.46 14.52C16.97 14.38 17.54 14.28 18.17 14.29C18.79 14.30 19.79 14.54 20.22 14.58C20.65 14.61 20.61 14.59 20.75 14.51C20.89 14.42 21.03 14.24 21.08 14.08C21.12 13.92 21.09 13.69 21.01 13.55C20.92 13.41 21.04 13.35 20.58 13.22C20.12 13.10 18.99 12.87 18.25 12.79C17.52 12.71 16.83 12.70 16.16 12.75C15.49 12.80 14.86 12.91 14.24 13.07C13.63 13.22 13.05 13.44 12.50 13.68C11.94 13.92 11.42 14.22 10.94 14.51C10.45 14.81 10.00 15.14 9.58 15.44C9.16 15.75 8.79 16.09 8.43 16.37C8.08 16.65 7.75 16.93 7.44 17.12C7.12 17.30 6.80 17.42 6.54 17.48C6.29 17.54 6.08 17.50 5.89 17.47C5.70 17.44 5.61 17.37 5.41 17.28C5.22 17.20 5.15 17.04 4.72 16.96C4.28 16.89 3.37 16.64 2.81 16.83C2.25 17.01 1.63 17.55 1.36 18.08C1.10 18.61 1.04 19.43 1.23 19.99C1.41 20.55 1.92 21.09 2.48 21.44Z"/></svg>';
+  // The approved Flow silhouette has opposing rounded ends: upper-left and
+  // lower-right. Keep this SVG identical to bashy's design master flow.svg.
+  // currentColor preserves the existing light/dark button treatment.
+  const sparkle = '<svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M43 85 C65 100 84 86 105 63 C124 42 143 29 169 29 C201 29 225 51 227 85 Q228 92 221 88 C189 65 159 77 137 96 C116 115 96 147 65 148 C35 149 20 122 30 99 Q38 81 43 85 Z"/><path d="M43 85 C65 100 84 86 105 63 C124 42 143 29 169 29 C201 29 225 51 227 85 Q228 92 221 88 C189 65 159 77 137 96 C116 115 96 147 65 148 C35 149 20 122 30 99 Q38 81 43 85 Z" transform="rotate(180 128 128)"/></svg>';
 
   const css = `
 .bgn{--g-bg:#fff;--g-fg:#18181b;--g-muted:#71717a;--g-border:#e4e4e7;--g-primary:#2563eb;--g-primary-fg:#fff;--g-warn:#b45309;--g-shade:rgba(0,0,0,.45);
@@ -607,8 +605,14 @@
     cancel.addEventListener("click", close);
     send = el("button", "bgn-b bgn-p", mode === "protected" ? "File request" : mode === "draft" ? "Add the wish" : "Make the wish");
     send.type = "button";
-    send.addEventListener("click", submit);
+    send.addEventListener("click", () => { submit().catch(() => {}); });
     row.append(pick);
+    if (mode === "live") {
+      const presentation = el("button", "bgn-b", "Toggle Shape only");
+      presentation.type = "button";
+      presentation.addEventListener("click", () => { try { setShapeOnly(); } catch (e) { status.textContent = e.message; } });
+      row.append(presentation);
+    }
     if (mic) row.append(mic.button);
     row.append(el("span", "bgn-sp"), status, cancel, send);
     sheet.append(row);
@@ -772,7 +776,8 @@
 
   async function submit() {
     const request = ta.value.trim();
-    if (!request) { ta.focus(); return; }
+    if (!request) { ta.focus(); throw new Error("A shaping request is required"); }
+    if (send.disabled) throw new Error("A shaping request is already being sent");
     send.disabled = true;
     status.textContent = "Sending…";
     if (mode === "draft") { await submitStep(request); return; }
@@ -797,8 +802,12 @@
       a.href = reviewURL();
       status.append(a);
       if (c.id) followCandidate(c.id);
+      send.disabled = false;
+      return c;
     } catch (e) {
       status.textContent = e.message || "The wish could not be sent";
+      send.disabled = false;
+      throw e;
     }
     send.disabled = false;
   }
@@ -1860,6 +1869,75 @@
     } catch (_) {}
   });
 
+
+  // The page owns these semantic handlers; no selectors arrive from agents.
+  // Source wishes still use the existing candidate API and explicit approval.
+  let shapeOnly = false, shapeRestore = [], shapeObserver = null, buttonHome = null;
+  function setShapeOnly(input = {}) {
+    if (input == null) input = {};
+    if (typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "enabled")) throw new Error("Expected {enabled?: boolean}");
+    if (mode !== "live" || (bar && input.enabled !== false)) throw new Error("Review and protected pages keep their controls");
+    const enabled = input.enabled === undefined ? !shapeOnly : input.enabled;
+    if (typeof enabled !== "boolean") throw new Error("enabled must be boolean");
+    if (enabled === shapeOnly) return { enabled };
+    shapeOnly = enabled;
+    if (enabled) {
+      const wrapper = btn && btn.parentElement;
+      if (!wrapper) { shapeOnly = false; throw new Error("Shape control is unavailable"); }
+      buttonHome = { wrapper, parent: wrapper.parentNode, next: wrapper.nextSibling, cls: wrapper.className };
+      wrapper.className = "bgn bgn-corner bgn-tr";
+      document.body.append(wrapper);
+      const seen = new WeakSet(), roots = new WeakSet();
+      const apply = () => {
+        if (bar) { setShapeOnly({ enabled: false }); return; }
+        for (const root of document.body.children) {
+          if (root.matches(".bgn,script,style,link") || roots.has(root)) continue;
+          roots.add(root);
+          const inert = root.inert;
+          shapeRestore.push(() => { root.inert = inert; });
+          root.inert = true;
+        }
+        document.querySelectorAll("button,a,nav,summary,[role=button],input,textarea,select").forEach(node => {
+          if (node.closest(".bgn") || seen.has(node)) return;
+          seen.add(node);
+          const old = { hidden: node.hidden, inert: node.inert, disabled: node.disabled, readOnly: node.readOnly, display: node.style.getPropertyValue("display"), priority: node.style.getPropertyPriority("display") };
+          shapeRestore.push(() => { node.hidden = old.hidden; node.inert = old.inert; if (old.display) node.style.setProperty("display", old.display, old.priority); else node.style.removeProperty("display"); if (old.disabled !== undefined) node.disabled = old.disabled; if (old.readOnly !== undefined) node.readOnly = old.readOnly; });
+          node.inert = true;
+          if (node.matches("input,textarea")) node.readOnly = true;
+          else { node.hidden = true; node.style.setProperty("display", "none", "important"); }
+          if (node.matches("select")) node.disabled = true;
+        });
+      };
+      apply();
+      shapeObserver = new MutationObserver(apply);
+      shapeObserver.observe(document.body, { childList: true, subtree: true });
+    } else {
+      if (shapeObserver) shapeObserver.disconnect();
+      shapeObserver = null;
+      shapeRestore.splice(0).reverse().forEach(restore => restore());
+      if (buttonHome) { const {wrapper,parent,next,cls} = buttonHome; wrapper.className = cls; parent.insertBefore(wrapper,next && next.parentNode === parent ? next : null); buttonHome = null; }
+    }
+    return { enabled: shapeOnly };
+  }
+  function wirePageActions() {
+    if (mode !== "live" || !app || !window.BashyPage) return;
+    const register = (name, description, run) => window.BashyPage.register(name, {description, run});
+    register("shape.open", "Open the source shaping request form", () => { open(); return { open: true }; });
+    register("shape.draft", "Edit without submitting: input {request: string}", (input = {}) => {
+      if (!input || typeof input !== "object" || Object.keys(input).some(k => k !== "request") || typeof input.request !== "string") throw new Error("Only the request text field is supported");
+      if (!overlay) build();
+      ta.value = input.request;
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+      return { request: ta.value };
+    });
+    register("shape.submit", "Submit the current source wish; returns acceptance, never approval", () => { if (!overlay) build(); return submit(); });
+    register("presentation.shape-only", "Toggle page controls: input {enabled?: boolean}; restore original field state", setShapeOnly);
+    const connection = {url: base + "api/page/" + encodeURIComponent(app) + "/events", label: document.title || page};
+    window.BashyPage.connect(connection);
+    window.addEventListener("pagehide", () => window.BashyPage.disconnect());
+    window.addEventListener("pageshow", event => { if (event.persisted) window.BashyPage.connect(connection); });
+  }
+
   function start() {
     if (mode === "draft") draftBar();
     else if (candidate) reviewBar();
@@ -1876,6 +1954,7 @@
       }
     }
     placeButton();
+    wirePageActions();
     // The fixing page names its incident on window.__bashyIncident: follow
     // it so the page reloads when the repair lands.
     try {

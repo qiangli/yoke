@@ -24,6 +24,7 @@ import (
 	"github.com/qiangli/yoke/pkg/coopauth"
 	"github.com/qiangli/yoke/pkg/hostauth"
 	"github.com/qiangli/yoke/pkg/meet"
+	"github.com/qiangli/yoke/pkg/pagecontrol"
 	"github.com/qiangli/yoke/pkg/websession"
 	"github.com/qiangli/yoke/pkg/webterm"
 )
@@ -163,6 +164,8 @@ func (o Options) disabled(p Panel) bool {
 }
 
 type server struct {
+	pageNamespaces pageNamespaces
+	pages          *pagecontrol.Hub
 	opts           Options
 	guard          *coopauth.Guard
 	sessions       *websession.Store
@@ -241,6 +244,10 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		requireLogin: opts.RequireLogin,
 		port:         opts.Port,
 		panels:       opts.Panels,
+	}
+	s.pages = pagecontrol.New(pagecontrol.Options{AllowAction: allowPageAction})
+	if opts.Ctx.Done() != nil {
+		go func() { <-opts.Ctx.Done(); s.pages.Close() }()
 	}
 	s.calls.s = s
 	if s.port == 0 {
@@ -372,6 +379,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	// protected pages load (console_shaped.go). Gated like the root assets.
 	mux.HandleFunc("GET /"+consoleBaseMount+"/", s.handleBaseAsset)
 	// The common Genie button: embedded bytes at a fixed route (genie.go).
+	mux.HandleFunc("/api/page/{app}/{operation}", s.handlePageControl)
 	mux.HandleFunc("GET /"+genieMount+"/{name}", handleGenieAsset)
 	// The external self-description. Ungated (see isOpenPath) and deliberately
 	// a projection, not the internal Panel.
@@ -511,6 +519,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	)
 	s.root = h
 	closer := func() error {
+		s.pages.Close()
 		s.shapes.wg.Wait()
 		err := s.calls.close()
 		_ = s.servers.close()

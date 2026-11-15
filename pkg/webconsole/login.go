@@ -207,6 +207,23 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	principal, _ := PrincipalFromRequest(r)
+	if principal == "" && s.sessions != nil {
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			if subject, ok := s.sessions.Validate(c.Value); ok {
+				principal = osPrincipal(subject)
+			}
+		}
+	}
+	if principal != "" && s.pages != nil {
+		s.pageNamespaces.Range(func(key, value any) bool {
+			if value == principal {
+				s.pages.ClosePrincipal(key.(string))
+				s.pageNamespaces.Delete(key)
+			}
+			return true
+		})
+	}
 	if c, err := r.Cookie(sessionCookie); err == nil && s.sessions != nil {
 		s.sessions.Revoke(c.Value)
 	}

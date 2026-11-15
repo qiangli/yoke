@@ -42,7 +42,7 @@ func isOpenPath(p string) bool {
 	// everyone; the sign-in page carries it too (protected mode), so it
 	// cannot wait for an identity any more than the page can. Exactly that
 	// one file: nothing else under the prefix, and no admission change.
-	if p == "/"+genieMount+"/"+genieAsset {
+	if p == "/"+genieMount+"/"+genieAsset || p == "/"+genieMount+"/page.js" {
 		return true
 	}
 	if rest := strings.TrimPrefix(p, "/meta/"); rest != p {

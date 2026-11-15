@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
+	"github.com/qiangli/yoke/pkg/pagecontrol"
 	"github.com/qiangli/yoke/pkg/shape/appserver"
 )
 
@@ -119,7 +120,7 @@ func (g genieTag) html() string {
 		return "0"
 	}
 	src := g.Base + genieMount + "/" + genieAsset + "?v=" + strings.Trim(etagFor(genieAsset), `"`)
-	return `<script src="` + html.EscapeString(src) + `" data-bashy-genie` +
+	return `<script src="` + html.EscapeString(g.Base+genieMount+"/page.js") + `" defer></script>` + `<script src="` + html.EscapeString(src) + `" data-bashy-genie` +
 		attr("base", g.Base) + attr("app", g.App) + attr("page", g.Page) + attr("mode", g.Mode) +
 		attr("position", g.Position) + attr("anchor", g.Anchor) +
 		attr("hidden", flag(g.Hidden)) + attr("landing", flag(g.Landing)) +
@@ -338,6 +339,10 @@ func draftOf(r *http.Request) bool {
 // handleGenieAsset serves the component from the embedded bytes, whoever
 // asks and whatever they have shaped: the one file under /_shape/.
 func handleGenieAsset(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("name") == "page.js" {
+		pagecontrol.ServeScript(w, r)
+		return
+	}
 	if r.PathValue("name") != genieAsset {
 		http.NotFound(w, r)
 		return
