@@ -445,6 +445,7 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 	argv := d.Args.Argv
 	verified := true
 	var launchEnv []string
+	var delegateTool string
 	if d.Verb == "delegate" {
 		verified = false
 		if strings.TrimSpace(d.Args.Prompt) == "" {
@@ -463,6 +464,7 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 		}
 		argv = launch.Argv(d.Args.Prompt)
 		argv = agentlaunch.InsertBeforePrompt(argv, chat.DelegateSubscriptionArgs(launch.ToolName))
+		delegateTool = launch.ToolName
 		launchEnv = launch.Env
 		if len(argv) == 0 {
 			return "worker unavailable", 1, true
@@ -475,7 +477,7 @@ func executeGatewayDirective(ctx context.Context, d gatewayDirective, workdir st
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = workdir
 	if d.Verb == "delegate" {
-		cmd.Env = chat.ScrubDelegateEnv(append(os.Environ(), launchEnv...))
+		cmd.Env = chat.DelegateWorkerEnv(delegateTool, append(os.Environ(), launchEnv...))
 	}
 	out, err := cmd.CombinedOutput()
 	if err == nil {

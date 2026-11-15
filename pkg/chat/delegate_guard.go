@@ -304,7 +304,24 @@ func delegateLaneArgs(toolName string) []string {
 }
 
 // DelegateSubscriptionArgs pins supported workers to their subscription login.
-func DelegateSubscriptionArgs(tool string) []string { return delegateSubscriptionArgs(tool) }
+func DelegateSubscriptionArgs(tool string) []string { return delegateLaneArgs(tool) }
+
+// DelegateWorkerEnv is the gateway's form of delegateWorkerEnv: scrub, then
+// project the per-worker config dir and the vault OAuth token declared by
+// the tool asset. An unknown tool or a failed projection keeps the scrubbed
+// environment, so the worker reports missing rather than borrowing a key.
+func DelegateWorkerEnv(toolName string, env []string) []string {
+	scrubbed := scrubDelegateEnv(env)
+	tool, ok := newCatalog().Tool(toolName)
+	if !ok {
+		return scrubbed
+	}
+	prepared, err := fleet.PrepareWorkerEnv(os.Environ(), scrubbed, tool)
+	if err != nil {
+		return scrubbed
+	}
+	return prepared
+}
 
 func delegateBudgetFailure(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {

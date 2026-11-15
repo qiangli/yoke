@@ -121,10 +121,14 @@ cli:
     # Operator onboarding is one `muse login` under the worker environment
     # (the XDG_CONFIG_HOME `agents workers` reports).
     # Contributor mode is pinned OFF on every run via MUSE_CONTRIBUTOR_MODE=0
-    # below (documented env var; the --contributor-mode flag is not accepted
+    # below. UNVERIFIED: the name is not found in the pinned muse binary's
+    # help or strings (manager review 2026-11-15); it is harmless if ignored
+    # but proves nothing, so per-host Contributor mode stays an E1 live
+    # check (the --contributor-mode flag is not accepted
     # by every pinned build, and env can never be refused as unknown).
     auth:
       check_exec: login
+    # UNVERIFIED name (same as the booth's derived fallback); E1 live check.
     config_dir_env: MUSE_CONFIG_DIR
     env:
       - MUSE_CONTRIBUTOR_MODE=0

@@ -145,6 +145,7 @@ cli:
     auth:
       check_exec: models
       ok_match: ['(?m)^[A-Za-z0-9][\w.+~-]*\t+\S']
+    # UNVERIFIED name (same as the booth's derived fallback); E1 live check.
     config_dir_env: AGY_CONFIG_DIR
 
     # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
