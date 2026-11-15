@@ -107,6 +107,18 @@ func TestDOMGenieVoice(t *testing.T) {
 	if badges != 1 {
 		t.Errorf("%d badges after marking twice; want exactly one", badges)
 	}
+	// The dot sits inside the Flow mark itself, not in a corner badge, and
+	// its state is carried by shape and name as well as colour.
+	until("the dot is drawn inside the Flow mark in the ready state",
+		`document.querySelector('[data-bashy-genie-btn] svg .bgn-voice-dot[data-state="on"] .bgn-vd-on') !== null`)
+	var offName string
+	eval("the host turns voice off", `(window.bashyVoice.setState("off"), document.querySelector('[data-bashy-genie-btn]').getAttribute('aria-label'))`, &offName)
+	if !strings.Contains(offName, "voice is off") || strings.Contains(offName, "type or speak") {
+		t.Errorf("the accessible name with voice off is %q; want it to say voice is off, once", offName)
+	}
+	until("off is a slashed ring, not a coloured dot",
+		`!!document.querySelector('.bgn-voice-dot[data-state="off"] .bgn-vd-slash') && !document.querySelector('.bgn-voice-dot .bgn-vd-on')`)
+	eval("the host turns voice back on", `window.bashyVoice.setState("on"), true`, nil)
 
 	// It asked for on-device recognition at dictation quality.
 	var asked struct {
@@ -128,6 +140,8 @@ func TestDOMGenieVoice(t *testing.T) {
 		t.Fatal(err)
 	}
 	until("the mic reports it is listening", mic+`.getAttribute('aria-pressed') === 'true'`)
+	until("the shaping button's dot shows listening",
+		`document.querySelector('[data-bashy-genie-btn] .bgn-voice-dot').getAttribute('data-state') === 'listening' && document.querySelector('[data-bashy-genie-btn]').getAttribute('aria-label').includes('listening')`)
 	until("the recognizer was told to stay on the device", `!!window.__sr.instances.at(-1).processLocally`)
 	until("the recognizer was started", `window.__sr.instances.at(-1).started === true`)
 	eval("a recognized phrase", `(() => {

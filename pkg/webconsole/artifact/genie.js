@@ -136,10 +136,15 @@
 .bgn-mic svg{width:15px;height:15px}
 .bgn-mic[aria-pressed="true"]{color:#dc2626;border-color:#dc2626;box-shadow:0 0 0 2px rgba(220,38,38,.25)}
 .bgn-mic[hidden]{display:none}
-.bgn-btn.bgn-has-voice{position:relative}
-.bgn-voice-dot{position:absolute;right:-3px;bottom:-3px;width:14px;height:14px;border-radius:999px;background:var(--g-bg);
-  border:1px solid var(--g-border);color:var(--g-primary);display:inline-flex;align-items:center;justify-content:center}
-.bgn-voice-dot svg{width:9px;height:9px}
+.bgn{--g-voice-on:#16a34a;--g-voice-off:#dc2626}
+.bgn.dark{--g-voice-on:#22c55e;--g-voice-off:#f87171}
+.bgn-voice-dot .bgn-vd-on{fill:var(--g-voice-on);stroke:var(--g-bg);stroke-width:8}
+.bgn-voice-dot .bgn-vd-pulse{fill:var(--g-voice-on);opacity:0;transform-box:fill-box;transform-origin:center}
+.bgn-voice-dot[data-state="listening"] .bgn-vd-pulse{animation:bgn-vd 1.4s ease-out infinite}
+.bgn-voice-dot .bgn-vd-off{fill:var(--g-bg);stroke:var(--g-voice-off);stroke-width:9}
+.bgn-voice-dot .bgn-vd-slash{fill:none;stroke:var(--g-voice-off);stroke-width:9;stroke-linecap:round}
+@keyframes bgn-vd{0%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(2.4)}}
+@media (prefers-reduced-motion:reduce){.bgn-voice-dot[data-state="listening"] .bgn-vd-pulse{animation:none;opacity:.5}}
 .bgn-sheet a{color:var(--g-primary)}
 .bgn-pick{position:fixed;z-index:2147483002;pointer-events:none;border:2px solid var(--g-primary);border-radius:.25rem;background:rgba(37,99,235,.12)}
 .bgn-picking,.bgn-picking *{cursor:crosshair!important}
@@ -411,6 +416,7 @@
     }
 
     function setPressed(on) {
+      setVoiceState(on ? "listening" : "on");
       btn.setAttribute("aria-pressed", on ? "true" : "false");
       btn.replaceChildren();
       btn.innerHTML = micIcon;
@@ -495,30 +501,57 @@
   }
 
   // markVoice is the quiet signal on the shaping button itself: where this
-  // machine and browser can recognize speech on the device, the button
-  // carries a small mic badge and its accessible name offers both ways in,
-  // so nobody has to open the panel to find out that speaking is possible.
-  // Nothing is shown where no route exists — an indicator that promises a
-  // mic the person cannot use is worse than none.
+  // machine and browser can recognize speech on the device, a dot sits in
+  // the mouth of the Flow mark (its centre, 128,128) and the accessible
+  // name offers both ways in, so nobody has to open the panel to find out
+  // that speaking is possible. Nothing is shown where no route exists — an
+  // indicator that promises a mic the person cannot use is worse than none.
+  //
+  // The dot's state never relies on colour alone: on is a filled green dot,
+  // listening adds a slow pulse (static under reduced motion), and off —
+  // the person turned voice off, set by the host through setState — is a
+  // red hollow ring with a slash. Each state also changes the name.
+  const voiceDot = {
+    on: '<circle class="bgn-vd-on" cx="128" cy="128" r="21"/>',
+    listening: '<circle class="bgn-vd-pulse" cx="128" cy="128" r="18"/><circle class="bgn-vd-on" cx="128" cy="128" r="21"/>',
+    off: '<circle class="bgn-vd-off" cx="128" cy="128" r="17"/><path class="bgn-vd-slash" d="M114 142 L142 114"/>',
+  };
+  const voiceName = {
+    on: " — type or speak it (" + VOICE_SHORTCUT + ")",
+    listening: " — listening; press " + VOICE_SHORTCUT + " to stop",
+    off: " — voice is off",
+  };
+  let btnName = null, btnTitle = null;
+
+  function setVoiceState(state) {
+    const dot = btn && btn.querySelector(".bgn-voice-dot");
+    if (!dot || !voiceDot[state]) return;
+    dot.setAttribute("data-state", state);
+    dot.innerHTML = voiceDot[state];
+    btn.title = btnTitle + voiceName[state];
+    btn.setAttribute("aria-label", btnName + voiceName[state]);
+  }
+
   async function markVoice() {
     if (!btn || !voiceOn || mode === "preview" || btn.querySelector(".bgn-voice-dot")) return;
     const st = await onDeviceSpeech();
     if (!st.ok) return;
-    const dot = el("span", "bgn-voice-dot");
-    dot.innerHTML = micIcon;
-    dot.setAttribute("aria-hidden", "true");
-    btn.append(dot);
+    const svg = btn.querySelector("svg");
+    if (!svg || btn.querySelector(".bgn-voice-dot")) return;
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    dot.setAttribute("class", "bgn-voice-dot");
+    svg.append(dot);
     btn.classList.add("bgn-has-voice");
-    const both = " — type or speak it (" + VOICE_SHORTCUT + ")";
-    btn.title += both;
-    btn.setAttribute("aria-label", (btn.getAttribute("aria-label") || "") + both);
+    btnTitle = btn.title || "";
+    btnName = btn.getAttribute("aria-label") || "";
+    setVoiceState("on");
   }
 
   // The Shape page's request box uses this same mic; it loads before this
   // deferred component, so it waits for the event. markButton is re-callable
   // because a route can appear after the page loaded (a language pack
   // finishes downloading; the console gains a transcription provider).
-  window.bashyVoice = { attach: attachVoice, shortcut: VOICE_SHORTCUT, markButton: markVoice };
+  window.bashyVoice = { attach: attachVoice, shortcut: VOICE_SHORTCUT, markButton: markVoice, setState: setVoiceState };
   try { document.dispatchEvent(new CustomEvent("bashy-voice")); } catch (_) {}
 
   // ---- the wish panel ----------------------------------------------------
