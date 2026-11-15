@@ -91,6 +91,11 @@ type genieTag struct {
 	Anchor   string
 	Hidden   bool
 	Landing  bool
+	// Voice offers the wish form's microphone on this page (Sprint 624 V2).
+	// The app may turn it off in shaped.json; where it is on, the component
+	// still shows the mic only when the browser can recognize speech on the
+	// device, and otherwise says how to dictate with the operating system.
+	Voice bool
 	// Candidate is the candidate being previewed (preview mode only): the
 	// component reviews it in place.
 	Candidate string
@@ -118,6 +123,7 @@ func (g genieTag) html() string {
 		attr("base", g.Base) + attr("app", g.App) + attr("page", g.Page) + attr("mode", g.Mode) +
 		attr("position", g.Position) + attr("anchor", g.Anchor) +
 		attr("hidden", flag(g.Hidden)) + attr("landing", flag(g.Landing)) +
+		attr("voice", flag(g.Voice)) +
 		attr("candidate", g.Candidate) + attr("mount", g.Mount) +
 		` defer></script>` + "\n"
 }
@@ -264,7 +270,7 @@ func genieTagFor(r *http.Request, app, mount string, tree *object.Tree, page, de
 	return genieTag{
 		Base: launcherBase(r), App: app, Page: page, Mode: mode,
 		Position: cfg.Position, Anchor: anchor, Hidden: cfg.Hidden, Landing: genieLanding(page),
-		Candidate: candidate, Mount: mount,
+		Voice: cfg.VoiceOn(), Candidate: candidate, Mount: mount,
 	}
 }
 
@@ -273,7 +279,7 @@ func genieTagFor(r *http.Request, app, mount string, tree *object.Tree, page, de
 // pages have no header bar and no shaped revision.
 func (s *server) protectedGenieTag(r *http.Request, page string) genieTag {
 	return genieTag{Base: launcherBase(r), App: consoleApp, Page: page, Mode: genieProtected,
-		Position: appserver.GenieDefaultPosition, Landing: genieLanding(page)}
+		Position: appserver.GenieDefaultPosition, Landing: genieLanding(page), Voice: true}
 }
 
 // ---- request context -------------------------------------------------------

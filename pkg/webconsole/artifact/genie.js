@@ -79,7 +79,12 @@
   const hidden = d.hidden === "1" && d.landing !== "1";
   const candidate = mode === "preview" ? (d.candidate || "") : "";
   const mount = d.mount || "";
+  // The app may turn the mic off in shaped.json (genie.voice: false); where
+  // it is on, the component still shows it only when this browser can
+  // recognize speech on the device (Sprint 624 V2).
+  const voiceOn = d.voice !== "0";
   const SHORTCUT = "Alt+Shift+G";
+  const VOICE_SHORTCUT = "Alt+Shift+V";
   // The one fixed prompt of the wish form, and the placeholder until the
   // example wishes arrive, or when there are none (S526.B1g).
   const PROMPT = "What would you like to change, add or make?";
@@ -129,6 +134,14 @@
 .bgn-b{font:inherit;font-size:.82rem;padding:.3rem .75rem;border-radius:.45rem;border:1px solid var(--g-border);background:var(--g-bg);color:var(--g-fg);cursor:pointer}
 .bgn-b.bgn-p{background:var(--g-primary);color:var(--g-primary-fg);border-color:transparent}
 .bgn-b:disabled{opacity:.55;cursor:default}
+.bgn-mic{display:inline-flex;align-items:center;gap:.35rem}
+.bgn-mic svg{width:15px;height:15px}
+.bgn-mic[aria-pressed="true"]{color:#dc2626;border-color:#dc2626;box-shadow:0 0 0 2px rgba(220,38,38,.25)}
+.bgn-mic[hidden]{display:none}
+.bgn-btn.bgn-has-voice{position:relative}
+.bgn-voice-dot{position:absolute;right:-3px;bottom:-3px;width:14px;height:14px;border-radius:999px;background:var(--g-bg);
+  border:1px solid var(--g-border);color:var(--g-primary);display:inline-flex;align-items:center;justify-content:center}
+.bgn-voice-dot svg{width:9px;height:9px}
 .bgn-sheet a{color:var(--g-primary)}
 .bgn-pick{position:fixed;z-index:2147483002;pointer-events:none;border:2px solid var(--g-primary);border-radius:.25rem;background:rgba(37,99,235,.12)}
 .bgn-picking,.bgn-picking *{cursor:crosshair!important}
@@ -277,6 +290,7 @@
       btn.setAttribute("aria-label", "Make a wish for " + app);
     }
     btn.addEventListener("click", toggle);
+    markVoice();
     // While a review bar is shown the button is the bar's icon; otherwise
     // it goes inside the first anchor that matches, or in the corner.
     let host = barSlot;
@@ -304,8 +318,214 @@
     if (bar && !bar.contains(wrap)) wrap.style.top = Math.round(bar.getBoundingClientRect().bottom + 8) + "px";
   }
 
+  // ---- dictation (Sprint 624 V2) -----------------------------------------
+  // Voice is an INPUT to this same form, not a second way to shape: what is
+  // spoken becomes text in the very box the person types in, they read and
+  // edit it, and they press the same send button. Nothing is submitted by
+  // voice alone, and the server sees the same wish body it always sees.
+  //
+  // The ladder never degrades silently. The mic appears only when THIS
+  // browser says it can recognize speech ON THE DEVICE
+  // (SpeechRecognition.available with processLocally), because the same API
+  // without that flag streams the audio to the browser vendor's servers —
+  // Chrome's default and Safari's prefixed implementation both do. Where
+  // that is missing the form says how to dictate with the operating system
+  // instead (macOS Dictation, Windows voice typing, the phone keyboard's
+  // mic key), which types into this box at no cost and leaves the audio on
+  // the device too. A recorded clip sent to the owner's own host for
+  // transcription is story V3; until it lands, a browser without on-device
+  // recognition shows the hint, not a disabled mystery.
+  const micIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+    '<path d="M12 3.5a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0v-5a3 3 0 0 0-3-3Z"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></svg>';
+
+  const speechCtor = () => window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  const voiceLang = () => document.documentElement.lang || navigator.language || "en-US";
+
+  // onDeviceSpeech asks the browser whether it can recognize voiceLang()
+  // locally, at dictation quality (the default quality is "command", which
+  // is not what a wish is). It resolves to {ok} or {ok:false, why} — the
+  // reason is shown, never swallowed.
+  async function onDeviceSpeech() {
+    if (!window.isSecureContext) return { ok: false, why: "The microphone needs a secure (HTTPS) connection to this console." };
+    const SR = speechCtor();
+    if (!SR) return { ok: false, why: "This browser has no speech recognition." };
+    if (typeof SR.available !== "function") {
+      return { ok: false, why: "This browser recognizes speech only in its vendor's cloud, so the mic stays off." };
+    }
+    const langs = [voiceLang()];
+    try {
+      const state = await SR.available({ langs, processLocally: true, quality: "dictation" });
+      if (state === "available") return { ok: true };
+      if (state === "downloadable" || state === "downloading") return { ok: true, install: state };
+      return { ok: false, why: "This browser has no on-device voice model for " + voiceLang() + "." };
+    } catch (_) {
+      return { ok: false, why: "On-device speech recognition is unavailable in this browser." };
+    }
+  }
+
+  // osDictationHint is the tier-0 line: every platform but desktop Linux
+  // dictates into any text box already, at no cost and on the device.
+  function osDictationHint() {
+    const ua = navigator.userAgent || "";
+    const plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    if (/iPhone|iPad|iPod|Android/i.test(ua)) return "To speak your wish, tap the microphone key on your keyboard.";
+    if (/Mac/i.test(plat) || /Mac OS X/i.test(ua)) return "To speak your wish, start Dictation (the mic key, or press Fn twice) and talk into the box.";
+    if (/Win/i.test(plat) || /Windows/i.test(ua)) return "To speak your wish, press Windows+H for voice typing and talk into the box.";
+    return "This system has no built-in dictation; a dictation tool that types into text boxes can fill this one.";
+  }
+
+  // attachVoice gives one wish box a mic. It is the whole voice feature, and
+  // it is exported (window.bashyVoice) so the Shape page's own request box
+  // uses this same implementation instead of a second copy.
+  //
+  // o.say(message)   where to put progress and refusals (a status line)
+  // o.cls            the host page's button class (the console uses "btn")
+  // o.hintCls        the host page's muted-text class
+  function attachVoice(target, o) {
+    o = o || {};
+    if (!voiceOn || !target) return null;
+    const say = typeof o.say === "function" ? o.say : () => {};
+    const btn = el("button", (o.cls || "bgn-b") + " bgn-mic");
+    btn.type = "button";
+    btn.innerHTML = micIcon;
+    btn.append(el("span", "", "Speak"));
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("data-bgn-mic", "");
+    const hint = el("div", o.hintCls || "bgn-ctx");
+    hint.setAttribute("data-bgn-voice-hint", "");
+    hint.hidden = true;
+    let rec = null, base = "", ready = null;
+
+    // show reflects the tier: the mic for on-device recognition, or the
+    // operating system's own dictation as a one-line hint.
+    async function refresh() {
+      ready = await onDeviceSpeech();
+      btn.hidden = !ready.ok;
+      hint.hidden = ready.ok;
+      if (ready.ok) {
+        btn.title = "Speak your wish, then read it before you send it (" + VOICE_SHORTCUT + ")";
+        btn.setAttribute("aria-label", btn.title);
+        hint.textContent = "";
+      } else {
+        hint.textContent = osDictationHint() + " " + ready.why;
+      }
+      return ready;
+    }
+
+    function setPressed(on) {
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      btn.replaceChildren();
+      btn.innerHTML = micIcon;
+      btn.append(el("span", "", on ? "Stop" : "Speak"));
+    }
+
+    function stop() {
+      if (!rec) return;
+      const r = rec;
+      rec = null;
+      setPressed(false);
+      try { r.stop(); } catch (_) {}
+    }
+
+    // write puts the words in the box: the text already there is kept, the
+    // final parts are appended, and what is still being heard shows at the
+    // end so the person sees the recognizer keeping up.
+    function write(finals, interim) {
+      const joined = [base, finals, interim].filter((s) => s && s.trim()).join(" ").replace(/\s+/g, " ");
+      target.value = joined;
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    async function press() {
+      if (rec) { stop(); return; }
+      const st = ready || await refresh();
+      if (!st.ok) { say(st.why); return; }
+      const SR = speechCtor();
+      if (st.install && typeof SR.install === "function") {
+        say("Getting the on-device voice model…");
+        try { await SR.install({ langs: [voiceLang()], processLocally: true, quality: "dictation" }); } catch (_) {}
+      }
+      let r;
+      try {
+        r = new SR();
+        r.processLocally = true;
+        r.lang = voiceLang();
+        r.continuous = true;
+        r.interimResults = true;
+      } catch (e) {
+        say("The recognizer could not start: " + (e.message || e));
+        return;
+      }
+      base = target.value;
+      let finals = "";
+      r.onresult = (ev) => {
+        let interim = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const text = ev.results[i][0].transcript;
+          if (ev.results[i].isFinal) finals += (finals ? " " : "") + text.trim();
+          else interim += text;
+        }
+        write(finals, interim);
+      };
+      r.onerror = (ev) => {
+        const code = (ev && ev.error) || "";
+        rec = null;
+        setPressed(false);
+        say(code === "not-allowed" || code === "service-not-allowed"
+          ? "The microphone is blocked for this page; allow it in the browser to speak your wish."
+          : code === "no-speech" ? "Nothing was heard."
+            : "Dictation stopped: " + (code || "unknown error"));
+      };
+      r.onend = () => {
+        if (!rec) return;
+        rec = null;
+        setPressed(false);
+        say("Read your wish, edit it if you like, then send it.");
+      };
+      rec = r;
+      setPressed(true);
+      say("Listening on this device — speak your wish.");
+      try { r.start(); } catch (e) {
+        rec = null;
+        setPressed(false);
+        say("The microphone could not start: " + (e.message || e));
+      }
+    }
+
+    btn.addEventListener("click", press);
+    return { button: btn, hint, refresh, press, stop };
+  }
+
+  // markVoice is the quiet signal on the shaping button itself: where this
+  // machine and browser can recognize speech on the device, the button
+  // carries a small mic badge and its accessible name offers both ways in,
+  // so nobody has to open the panel to find out that speaking is possible.
+  // Nothing is shown where no route exists — an indicator that promises a
+  // mic the person cannot use is worse than none.
+  async function markVoice() {
+    if (!btn || !voiceOn || mode === "preview" || btn.querySelector(".bgn-voice-dot")) return;
+    const st = await onDeviceSpeech();
+    if (!st.ok) return;
+    const dot = el("span", "bgn-voice-dot");
+    dot.innerHTML = micIcon;
+    dot.setAttribute("aria-hidden", "true");
+    btn.append(dot);
+    btn.classList.add("bgn-has-voice");
+    const both = " — type or speak it (" + VOICE_SHORTCUT + ")";
+    btn.title += both;
+    btn.setAttribute("aria-label", (btn.getAttribute("aria-label") || "") + both);
+  }
+
+  // The Shape page's request box uses this same mic; it loads before this
+  // deferred component, so it waits for the event. markButton is re-callable
+  // because a route can appear after the page loaded (a language pack
+  // finishes downloading; the console gains a transcription provider).
+  window.bashyVoice = { attach: attachVoice, shortcut: VOICE_SHORTCUT, markButton: markVoice };
+  try { document.dispatchEvent(new CustomEvent("bashy-voice")); } catch (_) {}
+
   // ---- the wish panel ----------------------------------------------------
   let overlay = null, ta = null, status = null, send = null, chip = null, element = "";
+  let mic = null;
   let lastFocus = null;
   let editBtn = null, editNote = null;
 
@@ -371,6 +591,10 @@
     ta.placeholder = NEUTRAL;
     ta.setAttribute("aria-label", "Your wish");
     sheet.append(ta);
+    // The mic fills this same box, and where the browser cannot recognize
+    // speech on the device the hint takes its place under it.
+    mic = attachVoice(ta, { say: (m) => { if (status) status.textContent = m; } });
+    if (mic) sheet.append(mic.hint);
     const row = el("div", "bgn-row");
     const pick = el("button", "bgn-b", "Point at an element");
     pick.type = "button";
@@ -384,7 +608,9 @@
     send = el("button", "bgn-b bgn-p", mode === "protected" ? "File request" : mode === "draft" ? "Add the wish" : "Make the wish");
     send.type = "button";
     send.addEventListener("click", submit);
-    row.append(pick, el("span", "bgn-sp"), status, cancel, send);
+    row.append(pick);
+    if (mic) row.append(mic.button);
+    row.append(el("span", "bgn-sp"), status, cancel, send);
     sheet.append(row);
     if (mode === "live") {
       // The edit session starts here: many wishes in place, undo/redo,
@@ -403,6 +629,7 @@
     const link = el("a", "", "Wishes & versions");
     link.href = reviewURL();
     foot.append(link, el("span", "", " · " + SHORTCUT + " opens this panel anywhere in the app"));
+    if (mic) foot.append(el("span", "", " · " + VOICE_SHORTCUT + " speaks the wish"));
     sheet.append(foot);
     overlay.append(sheet);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
@@ -431,9 +658,13 @@
     ta.focus();
     refreshEditRow();
     loadExamples();
+    // Asked again every time the panel opens: a language pack can finish
+    // downloading, and permission can change, between two wishes.
+    if (mic) mic.refresh();
   }
   function close() {
     if (!overlay || overlay.hidden) return;
+    if (mic) mic.stop();
     overlay.hidden = true;
     stopRotating();
     if (lastFocus && lastFocus.focus) lastFocus.focus();
@@ -686,6 +917,12 @@
     if (ev.altKey && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && ev.code === "KeyG") {
       ev.preventDefault();
       toggle();
+    } else if (ev.altKey && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && ev.code === "KeyV" && voiceOn) {
+      // Alt+Shift+V speaks the wish: it opens the panel where it is closed,
+      // then starts (or stops) dictation in the box.
+      ev.preventDefault();
+      if (!overlay || overlay.hidden) open();
+      if (mic) mic.press();
     } else if (barState && (ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === "z" || ev.key === "Z" || ev.code === "KeyZ") &&
       !typing(ev) && (!overlay || overlay.hidden)) {
       // Ctrl/Cmd-Z undoes the last wish, Ctrl/Cmd-Shift-Z redoes, while

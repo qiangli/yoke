@@ -70,3 +70,28 @@ func TestParseGenie(t *testing.T) {
 		}
 	}
 }
+
+// TestParseGenieVoice (Sprint 624 V2): the mic is on unless the app turns it
+// off, and no manifest at all means on — the key is a way to opt out of a
+// wish-box input, not to opt into one.
+func TestParseGenieVoice(t *testing.T) {
+	var none *Genie
+	if !none.VoiceOn() {
+		t.Error("an app with no genie placement must still offer the mic")
+	}
+	m, err := Parse([]byte(`{"genie": {"position": "top-left"}}`))
+	if err != nil || !m.Genie.VoiceOn() {
+		t.Fatalf("a placement without the voice key = %+v, %v; want voice on", m.Genie, err)
+	}
+	m, err = Parse([]byte(`{"genie": {"voice": false}}`))
+	if err != nil || m.Genie.VoiceOn() {
+		t.Fatalf("voice false = %+v, %v; want voice off", m.Genie, err)
+	}
+	m, err = Parse([]byte(`{"genie": {"voice": true}}`))
+	if err != nil || !m.Genie.VoiceOn() {
+		t.Fatalf("voice true = %+v, %v; want voice on", m.Genie, err)
+	}
+	if _, err := Parse([]byte(`{"genie": {"voice": "yes"}}`)); err == nil {
+		t.Error(`Parse({"genie": {"voice": "yes"}}) accepted; the key is a boolean`)
+	}
+}

@@ -227,3 +227,29 @@ $("shape-ask").addEventListener("submit", async (ev) => {
   refresh();
 });
 refresh();
+
+// The mic on the Shape page (Sprint 624 V2): the same dictation the Genie
+// panel offers, filling this same request box. The implementation lives in
+// the injected Genie component (window.bashyVoice) so there is one mic, one
+// local-first ladder and one set of words for every wish box; this page only
+// places the button and the hint. The component is deferred, so this script
+// runs first and waits for its event.
+let voiceAttached = false;
+function attachShapeVoice() {
+  if (voiceAttached || !window.bashyVoice || !window.bashyVoice.attach) return;
+  const ta = $("shape-request");
+  const foot = document.querySelector("#shape-ask .row.foot");
+  if (!ta || !foot) return;
+  const ctl = window.bashyVoice.attach(ta, {
+    cls: "btn",
+    hintCls: "shape-meta",
+    say: (m) => { $("shape-result").textContent = m; },
+  });
+  if (!ctl) return;
+  voiceAttached = true;
+  foot.insertBefore(ctl.button, foot.firstChild);
+  ta.insertAdjacentElement("afterend", ctl.hint);
+  ctl.refresh();
+}
+document.addEventListener("bashy-voice", attachShapeVoice);
+attachShapeVoice();

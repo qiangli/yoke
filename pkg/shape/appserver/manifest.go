@@ -78,7 +78,19 @@ type Genie struct {
 	// placeholder instead of the ones Genie would generate from the page
 	// (Sprint 526.B1g, api/shape/<app>/suggest). Short, one wish each.
 	Examples []string `json:"examples,omitempty"`
+	// Voice turns the wish form's microphone off for this app (Sprint 624
+	// V2). Absent means on, and on still shows nothing unless the browser
+	// reports that it can recognize speech on the device: a spoken wish is
+	// only another way to fill the same box, never a second workflow. Set
+	// it to false to keep the mic off this app's pages; the form then says
+	// how to dictate with the operating system instead.
+	Voice *bool `json:"voice,omitempty"`
 }
+
+// VoiceOn reports whether the wish form offers a microphone on this app's
+// pages. A manifest that names no genie placement, and one that names a
+// placement without the voice key, both mean on.
+func (g *Genie) VoiceOn() bool { return g == nil || g.Voice == nil || *g.Voice }
 
 // GenieExamplesMax bounds the examples an app may declare, and
 // GenieExampleLen the length of each; the same bounds apply to generated

@@ -129,7 +129,8 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 	// button in the header bar; the trust-surface pages are protected.
 	wantTag(t, "launcher", genieTagOf(get(alice, "/", 200).Body.String()), srcAttr, baseAttr,
 		`data-app="console"`, `data-page="/"`, `data-mode="live"`, `data-position="top-right"`,
-		`data-anchor="#bar #nav, #bar"`, `data-hidden="0"`, `data-landing="1"`, `data-candidate=""`, `data-mount=""`)
+		`data-anchor="#bar #nav, #bar"`, `data-hidden="0"`, `data-landing="1"`, `data-candidate=""`, `data-mount=""`,
+		`data-voice="1"`)
 	wantTag(t, "board", genieTagOf(get(alice, "/sprint/?x=1", 200).Body.String()), baseAttr,
 		`data-app="console"`, `data-page="/sprint/"`, `data-mode="live"`, `data-landing="0"`)
 	wantTag(t, "desktop", genieTagOf(get(alice, "/desktop/"+consoleTestPeer+"/", 200).Body.String()), baseAttr,
@@ -291,9 +292,12 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 		t.Fatalf("unknown wish field accepted: %d", w.Code)
 	}
 
-	// (d) Placement is shaped config. A config-only candidate for notes
-	// passes the real verifier; activated, it moves and hides the button
-	// everywhere but the landing page; the script itself is unchanged.
+	// (d) Placement is shaped config, and so is the wish box's mic (Sprint
+	// 624 V2): an app may turn it off, and absent means on. A config-only
+	// candidate for notes passes the real verifier; activated, it moves and
+	// hides the button everywhere but the landing page and takes the mic off
+	// this app; the script itself is unchanged.
+	wantTag(t, "notes before the config change", genieTagOf(get(alice, "/notes/", 200).Body.String()), `data-voice="1"`)
 	notesApp := s.shapedApp(notes)
 	notesRepo, err := notesApp.open()
 	if err != nil {
@@ -304,7 +308,7 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	placed := consoleCandidate(t, notesApp, alicePrincipal, "abcdef0123456789", notesBase.Hash.String(), func(work string) {
-		if err := os.WriteFile(filepath.Join(work, "shaped.json"), []byte(`{"genie": {"position": "bottom-left", "hidden": true}}`+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(work, "shaped.json"), []byte(`{"genie": {"position": "bottom-left", "hidden": true, "voice": false}}`+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(work, "public", "about.html"), []byte("<!doctype html><html><body><h1>Notes</h1>About</body></html>\n"), 0o644); err != nil {
@@ -318,7 +322,7 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 	notesPreview := get(alice, "/shape/notes/preview/"+placed.ID+"/about.html", 200).Body.String()
 	wantTag(t, "notes preview", genieTagOf(notesPreview), srcAttr, baseAttr, `data-app="notes"`, `data-page="/about.html"`,
 		`data-mode="preview"`, `data-position="bottom-left"`, `data-hidden="1"`, `data-landing="0"`,
-		`data-candidate="`+placed.ID+`"`, `data-mount="notes/"`)
+		`data-candidate="`+placed.ID+`"`, `data-mount="notes/"`, `data-voice="0"`)
 	placedDir, _ := notesApp.candidateDir(alicePrincipal, placed.ID)
 	if err := (&fakeActivator{home: home}).Activate(context.Background(), ActivateRequest{
 		App: "notes", Principal: alicePrincipal, SourceDir: source, CandidateDir: filepath.Join(placedDir, "work"),
@@ -327,7 +331,7 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTag(t, "notes placed landing", genieTagOf(get(alice, "/notes/", 200).Body.String()),
-		`data-mode="live"`, `data-position="bottom-left"`, `data-hidden="1"`, `data-landing="1"`)
+		`data-mode="live"`, `data-position="bottom-left"`, `data-hidden="1"`, `data-landing="1"`, `data-voice="0"`)
 	wantTag(t, "notes placed page", genieTagOf(get(alice, "/notes/about.html", 200).Body.String()),
 		`data-mode="live"`, `data-position="bottom-left"`, `data-hidden="1"`, `data-landing="0"`)
 	if got := get(alice, "/_shape/genie.js", 200).Body.Bytes(); !bytes.Equal(got, embedded) {
