@@ -52,6 +52,13 @@ type gatewayTaskRecord struct {
 	ApprovalID   string `json:"approval_id,omitempty"`
 	Digest       string `json:"digest,omitempty"`
 	ApprovalSent bool   `json:"approval_sent,omitempty"`
+	// Route is "sync" when the loopback sync handler claimed the key. Such a
+	// record is executed by the sync handler only; the pull conductor adopts
+	// it and publishes its outcome instead of running it again.
+	Route string `json:"route,omitempty"`
+	// SyncReply is the sync handler's verbatim reply, so a duplicate sync
+	// call answers with the same shape the first call returned.
+	SyncReply json.RawMessage `json:"sync_reply,omitempty"`
 }
 
 // gatewayApprovalWait bounds how long a gated run waits for its approval
@@ -149,6 +156,10 @@ func writeGatewayRecord(path string, r gatewayTaskRecord) error {
 // claimGatewayTask is the common sync/pull deduplication point. A sync caller
 // must claim before executing; a later pull sees the same task id and skips.
 func claimGatewayTask(dir, key, taskID string) (gatewayTaskRecord, bool, error) {
+	return claimGatewayTaskRoute(dir, key, taskID, gatewayTaskRecord{TaskID: taskID, State: "queued"})
+}
+
+func claimGatewayTaskRoute(dir, key, taskID string, r gatewayTaskRecord) (gatewayTaskRecord, bool, error) {
 	if key == "" || taskID == "" {
 		return gatewayTaskRecord{}, false, errors.New("task_id and idempotency_key are required")
 	}
@@ -156,7 +167,6 @@ func claimGatewayTask(dir, key, taskID string) (gatewayTaskRecord, bool, error) 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return gatewayTaskRecord{}, false, err
 	}
-	r := gatewayTaskRecord{TaskID: taskID, State: "queued"}
 	b, _ := json.Marshal(r)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
@@ -194,12 +204,118 @@ func ClaimGatewayTask(dir, key, taskID string) (existingTaskID string, fresh boo
 
 // ClaimGatewayTaskOnHost is the sync handler's entry point. It shares the
 // conductor's host-scoped record so the pull fallback cannot launch twice.
+// A fresh claim is recorded as running on the sync route: the caller must
+// execute and then call CompleteGatewayTaskOnHost. A pull directive for the
+// same key adopts the record and publishes its result without executing.
 func ClaimGatewayTaskOnHost(key, taskID string) (existingTaskID string, fresh bool, err error) {
 	dir, err := gatewayStateDir()
 	if err != nil {
 		return "", false, err
 	}
-	return ClaimGatewayTask(dir, key, taskID)
+	r, fresh, err := claimGatewayTaskRoute(dir, key, taskID, gatewayTaskRecord{TaskID: taskID, State: "running", Route: "sync"})
+	return r.TaskID, fresh, err
+}
+
+// GatewayTask is the host record as the sync handler sees it.
+type GatewayTask struct {
+	TaskID    string
+	State     string
+	HasResult bool
+	Text      string
+	Exit      int
+	Verified  bool
+	// SyncReply is the sync handler's stored reply, if it recorded one.
+	SyncReply json.RawMessage
+}
+
+// GatewayTaskOnHost reads the host record for an idempotency key, so a
+// duplicate sync call can answer from it instead of executing.
+func GatewayTaskOnHost(key string) (GatewayTask, error) {
+	dir, err := gatewayStateDir()
+	if err != nil {
+		return GatewayTask{}, err
+	}
+	r, err := readGatewayRecord(gatewayRecordPath(dir, key))
+	if err != nil {
+		return GatewayTask{}, err
+	}
+	t := GatewayTask{TaskID: r.TaskID, State: r.State, SyncReply: r.SyncReply}
+	if r.Result != nil {
+		t.HasResult = true
+		t.Text, t.Exit, t.Verified = r.Result.Text, r.Result.Exit, r.Result.Verified
+	}
+	return t, nil
+}
+
+// CompleteGatewayTaskOnHost writes a sync-route outcome into the same host
+// record the pull conductor publishes from (state, text, exit, verified).
+// reply is the sync handler's verbatim answer for duplicate sync calls. A
+// cancellation that already won keeps its terminal state.
+func CompleteGatewayTaskOnHost(key, taskID, text string, exit int, verified bool, reply []byte) error {
+	dir, err := gatewayStateDir()
+	if err != nil {
+		return err
+	}
+	return completeSyncGatewayTask(dir, key, taskID, text, exit, verified, reply)
+}
+
+func completeSyncGatewayTask(dir, key, taskID, text string, exit int, verified bool, reply []byte) error {
+	path := gatewayRecordPath(dir, key)
+	r, err := readGatewayRecord(path)
+	if err != nil {
+		return err
+	}
+	if r.TaskID != taskID {
+		return fmt.Errorf("idempotency key belongs to task %s", r.TaskID)
+	}
+	if r.Route != "sync" {
+		return errors.New("idempotency key was not claimed by the sync route")
+	}
+	if r.State == "cancelled" || r.Result != nil {
+		return nil
+	}
+	r.State = "done"
+	if exit != 0 {
+		r.State = "failed"
+	}
+	r.Result = &gatewayResult{Text: text, Exit: exit, Verified: verified}
+	if len(reply) > 0 {
+		r.SyncReply = append(json.RawMessage(nil), reply...)
+	}
+	return writeGatewayRecord(path, r)
+}
+
+// gatewayAdoptedPath marks a sync-claimed record as owed to the pull route.
+// It is a separate file so the conductor never rewrites a record the sync
+// handler (another process) may still be completing.
+func gatewayAdoptedPath(recordPath string) string {
+	return strings.TrimSuffix(recordPath, ".json") + ".pull"
+}
+
+func gatewayAdopted(recordPath string) bool {
+	_, err := os.Stat(gatewayAdoptedPath(recordPath))
+	return err == nil
+}
+
+// adoptSync answers a pull directive for a key the sync route claimed: it
+// never executes. A stored result is published now; a running claim reports
+// its state and flushOutbox publishes the result once the sync handler
+// records it.
+func (g *gatewayConductor) adoptSync(ctx context.Context, key string) error {
+	path := gatewayRecordPath(g.dir, key)
+	if err := os.WriteFile(gatewayAdoptedPath(path), nil, 0o600); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	r, err := readGatewayRecord(path)
+	g.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if r.Result != nil || r.State == "cancelled" {
+		return g.flushRecordPath(ctx, path)
+	}
+	return g.emit(ctx, r.TaskID, "state", map[string]any{"state": r.State, "reason": r.Reason})
 }
 
 func (g *gatewayConductor) emit(ctx context.Context, id, kind string, payload any) error {
@@ -272,6 +388,9 @@ func (g *gatewayConductor) apply(ctx context.Context, taskID string, ev Event) e
 	}
 	_ = g.emit(ctx, taskID, "ack", map[string]any{"directive_seq": gatewayDirectiveSeq(ev), "task_id": r.TaskID})
 	if !fresh {
+		if r.Route == "sync" {
+			return g.adoptSync(ctx, d.IdempotencyKey)
+		}
 		return nil
 	}
 	_ = g.emit(ctx, taskID, "state", map[string]any{"state": "queued", "reason": ""})
@@ -504,6 +623,11 @@ func (g *gatewayConductor) cancel(ctx context.Context, d gatewayDirective) error
 		g.mu.Unlock()
 		return fmt.Errorf("idempotency key belongs to task %s", r.TaskID)
 	}
+	if r.Route == "sync" {
+		// The cancel names this task on the pull timeline, so a durable
+		// cancellation of a sync claim is retried by flushOutbox too.
+		_ = os.WriteFile(gatewayAdoptedPath(gatewayRecordPath(g.dir, d.IdempotencyKey)), nil, 0o600)
+	}
 	if r.State == "done" || r.State == "failed" || r.State == "cancelled" {
 		g.mu.Unlock()
 		return nil
@@ -638,9 +762,15 @@ func (g *gatewayConductor) flushOutbox(ctx context.Context) error {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		r, err := readGatewayRecord(filepath.Join(dir, entry.Name()))
+		keyPath := filepath.Join(dir, entry.Name())
+		r, err := readGatewayRecord(keyPath)
 		if err != nil {
 			return err
+		}
+		// A sync-route record is owed to the pull timeline only after a pull
+		// directive adopted it; a sync call that answered needs no event.
+		if r.Route == "sync" && !gatewayAdopted(keyPath) {
+			continue
 		}
 		if r.Result == nil && (r.State != "cancelled" || r.TerminalStateSent) {
 			continue
@@ -648,7 +778,6 @@ func (g *gatewayConductor) flushOutbox(ctx context.Context) error {
 		if r.Result != nil && r.ResultSent && r.TerminalStateSent {
 			continue
 		}
-		keyPath := filepath.Join(dir, entry.Name())
 		if err := g.flushRecordPath(ctx, keyPath); err != nil {
 			return err
 		}

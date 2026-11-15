@@ -28,8 +28,14 @@ import (
 // owning host settles it through ask.ApplyRemote. Unknown commands still
 // deny outright with exit 2.
 type Policy struct {
-	Allow     map[string]bool
-	Audit     func(Record)
+	Allow map[string]bool
+	Audit func(Record)
+	// Execute, when set, wraps every tools/call that will execute: run_tool
+	// and direct tools that passed the policy. Pure list_tools/server_info,
+	// policy denials and gated answers never reach it, so a gated call is
+	// answered before any caller-side bookkeeping (such as an idempotency
+	// claim). It may answer without calling next.
+	Execute   func(ctx context.Context, call *mcpsdk.CallToolRequest, next func(context.Context) (mcpsdk.Result, error)) (mcpsdk.Result, error)
 	synthetic *sync.Map
 }
 
@@ -248,6 +254,11 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 			}
 		}
 		record.Allowed = true
+		if p != nil && p.Execute != nil && call.Params.Name != "list_tools" && call.Params.Name != "server_info" {
+			return p.Execute(ctx, call, func(ctx context.Context) (mcpsdk.Result, error) {
+				return next(ctx, method, req)
+			})
+		}
 		return next(ctx, method, req)
 	}
 }
