@@ -79,6 +79,7 @@ Common-case usage:
 	cmd.SetFlagErrorFunc(weaveFlagErrorFunc)
 
 	cmd.AddCommand(newWeaveAddCmd())
+	cmd.AddCommand(newWeaveConductCmd())
 	cmd.AddCommand(newWeaveSplitCmd())
 	cmd.AddCommand(newWeaveLinkCmd())
 	cmd.AddCommand(newWeaveStartCmd())

@@ -56,6 +56,7 @@ var serviceDefaultsGolden = map[string]serviceDefaultGolden{
 	"seaweedfs":     {false, "opt-in: false since first commit; distributed storage is opt-in", kv{"data_dir": ""}},
 	"shard":         {true, "default-on (S436): pre-418 ShardOn was on for paired hosts; mesh formation needs it", kv{"role": "auto", "peers": "", "node_bytes": "0"}},
 	"warm":          {true, "default-on: pre-418 warm followed OllamaOn; keeps preferred models resident", kv{"budget_frac": "0.33"}},
+	"weave-conduct": {false, "opt-in: configure a joined repository before starting the gateway conductor", kv{"repo": ""}},
 	"ycode":         {false, "opt-in: ycode sharing is enabled per host by the operator", kv{"share": "", "require_login": "false"}},
 	"zot":           {false, "opt-in: false since first commit; the local registry is opt-in", kv{"data_dir": ""}},
 }

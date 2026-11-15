@@ -87,15 +87,15 @@ func TestWeaveCommandSurface(t *testing.T) {
 	for _, n := range []string{
 		"add", "start", "next", "prio", "point", "list", "pause", "resume",
 		"autopilot", "status", "log", "remember", "recall", "memory", "attach", "say", "pull", "reverify", "prune", "abandon",
-		"kill", "shell", "open", "reset", "wait", "check", "baton",
+		"kill", "shell", "open", "reset", "wait", "check", "baton", "conduct",
 	} {
 		if !have[n] {
 			t.Errorf("missing subverb %q", n)
 		}
 	}
-	// The conductor-coordination verbs moved to `bashy sprint` (plan
-	// layer) — weave is execution-only now. They must NOT be here.
-	for _, n := range []string{"sessions", "join", "note", "steer", "take", "handoff", "roster", "share", "shares", "unshare", "conduct"} {
+	// The shared-session coordination verbs remain on `bashy sprint`;
+	// conduct also serves weave's host-side gateway execution path.
+	for _, n := range []string{"sessions", "join", "note", "steer", "take", "handoff", "roster", "share", "shares", "unshare"} {
 		if have[n] {
 			t.Errorf("subverb %q should have moved to `sprint`", n)
 		}

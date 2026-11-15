@@ -46,6 +46,10 @@ func consumeDirectives(ctx context.Context, client SessionClient, taskID, queueD
 		if ev.Kind != "directive" {
 			continue
 		}
+		var shape map[string]json.RawMessage
+		if json.Unmarshal(ev.Detail, &shape) == nil && len(shape["task_id"]) != 0 {
+			continue // gateway tasks have their own idempotent consumer
+		}
 		d, parseErr := parseDirectiveDetail(ev.Detail)
 		status := "applied"
 		if parseErr != nil {
@@ -288,14 +292,20 @@ func writeDirectiveCursor(queueDir, cursor string) error {
 	return os.Rename(tmp, path)
 }
 
-func runWeaveConduct(cmd *cobra.Command, interval time.Duration, flags *weaveOutputFlags) error {
+func runWeaveConduct(cmd *cobra.Command, interval time.Duration, repo string, flags *weaveOutputFlags) error {
 	const verb = "weave conduct"
 	mode := flags.mode()
 	if interval <= 0 {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb,
 			weavecli.ExitInvalidArg, fmt.Errorf("--interval must be positive")))
 	}
-	sc, err := sessionClientForRepo()
+	var sc *sessionRepoClient
+	var err error
+	if repo != "" {
+		sc, err = sessionClientForRepoRoot(repo)
+	} else {
+		sc, err = sessionClientForRepo()
+	}
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
 	}
@@ -309,7 +319,13 @@ func runWeaveConduct(cmd *cobra.Command, interval time.Duration, flags *weaveOut
 	}
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	gatewayDir, err := gatewayStateDir()
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+	}
+	gateway := newGatewayConductor(sc.client, gatewayDir)
+	gateway.workdir = sc.repoRoot
+	defer func() { stop(); gateway.wg.Wait() }()
 	for {
 		cursor, err := readDirectiveCursor(queueDir)
 		if err != nil {
@@ -333,6 +349,9 @@ func runWeaveConduct(cmd *cobra.Command, interval time.Duration, flags *weaveOut
 				"applied": applied,
 			})
 		}
+		if err := gateway.poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+		}
 
 		timer := time.NewTimer(interval)
 		select {
@@ -347,6 +366,7 @@ func runWeaveConduct(cmd *cobra.Command, interval time.Duration, flags *weaveOut
 func newWeaveConductCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var interval time.Duration
+	var repo string
 	cmd := &cobra.Command{
 		Use:   "conduct",
 		Short: "Poll a joined shared session for host-side directives",
@@ -355,10 +375,11 @@ func newWeaveConductCmd() *cobra.Command {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave conduct",
 					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
 			}
-			return runWeaveConduct(cmd, interval, &flags)
+			return runWeaveConduct(cmd, interval, repo, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().DurationVar(&interval, "interval", 3*time.Second, "Directive poll interval")
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository whose joined session and task directives to poll")
 	return cmd
 }

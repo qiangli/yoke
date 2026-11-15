@@ -127,6 +127,7 @@ type CreateTaskReq struct {
 
 type Event struct {
 	ID         string          `json:"id"`
+	Seq        int64           `json:"seq,omitempty"`
 	Author     string          `json:"author"`
 	Kind       string          `json:"kind"`
 	Summary    string          `json:"summary"`
