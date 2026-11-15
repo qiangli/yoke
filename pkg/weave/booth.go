@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/yoke/external/loom"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 type boothBackend interface {
@@ -83,6 +84,14 @@ func boothBlindArgv(l *weaveAgentLaunch, prompt string) []string {
 }
 
 func boothConfigEnv(toolName string) string {
+	// The tool asset's declared config_dir_env wins (Sprint 584 adapter
+	// contract); tools without one keep the derived TOOLNAME_CONFIG_DIR
+	// fallback, so existing booths behave exactly as before.
+	if t, ok := fleet.New().Tool(strings.ToLower(filepath.Base(toolName))); ok {
+		if env := strings.TrimSpace(t.CLI.Launch.ConfigDirEnv); env != "" {
+			return env
+		}
+	}
 	toolName = strings.ToUpper(filepath.Base(toolName))
 	var prefix strings.Builder
 	for _, r := range toolName {

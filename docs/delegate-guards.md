@@ -36,21 +36,27 @@ CLI's internal tool loop has no verified hard accounting contract. Text estimate
 and final usage reports cannot enforce an in-flight ceiling. No cap flag means
 that only the existing shared budget admission policy applies.
 
-The initial subscription adapters are Claude and Codex. Before a task starts,
-they run `claude auth status --json` or `codex login status` with a five-second
-probe timeout and require subscription login evidence. Unknown adapters fail
-closed with `auth`. Probe output is bounded and withheld from the result. The
-launcher never opens vendor credential files; vendor CLIs own their login state.
+The subscription adapters are Claude, Codex, agy and Muse. Before a task starts,
+the launcher runs each tool's declared subscription check
+(`cli.launch.auth.check_exec`, with the declared `lane_args` pinning the
+subscription lane) with a five-second probe timeout and requires subscription
+login evidence per the declared `ok_match`. A tool that declares no check
+fails closed with `auth`. Probe output is bounded and withheld from the
+result. The launcher never opens vendor credential files; vendor CLIs own
+their login state — except the seeded login-file allowlist a per-worker
+config dir is provisioned from, mirroring weave booths.
 
 Both the probe and task receive a scrubbed environment, after recipe overlays.
 Metered API keys, bearer auth overrides, cloud billing credentials, and provider
 endpoint overrides are removed. Declared credential-bearing bindings are denied.
-The launcher also pins the subscription lane in vendor arguments: Claude loads
-no user/project/local settings and uses `forceLoginMethod=claudeai` with an empty
-key helper; Codex uses `forced_login_method=chatgpt` and `model_provider=openai`.
-Vendor-managed policy remains authoritative. There is no retry through a metered
-binding. These guards govern the launch; they do not replace the vendor sandbox
-or prevent an authorized child from editing files or executing commands.
+The per-worker environment is then projected from the tool asset: the
+per-worker config dir (`config_dir_env`), and the vault subscription token for
+tools that declare one (`auth.token_ref`, resolved without ever falling back
+to an API key). Muse runs with Contributor mode pinned off
+(`MUSE_CONTRIBUTOR_MODE=0`). Vendor-managed policy remains authoritative.
+There is no retry through a metered binding. These guards govern the launch;
+they do not replace the vendor sandbox or prevent an authorized child from
+editing files or executing commands.
 
 Vendor switch references: [Claude CLI](https://code.claude.com/docs/en/cli-reference),
 [Claude settings](https://code.claude.com/docs/en/settings-reference), and

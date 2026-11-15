@@ -130,6 +130,22 @@ cli:
     steer_exec: agy --dangerously-skip-permissions --model {model}
     prompt_position: last
     trust_preseed: none
+    # Subscription login contract (Sprint 584 adapter, Sprint 646 D4-5). The
+    # worker authenticates with one interactive sign-in, then persisted for
+    # headless use (browser OAuth in the shared SDK home, oauth_creds.json
+    # beside ~/.gemini) — never an API key. No auth-status subcommand is
+    # documented, so the check lists models: `agy models` prints one
+    # tab-separated ID-plus-name row per model when signed in (measured
+    # 2026-11-15) and fails otherwise; the matcher only requires that row
+    # shape, never a model name. No lane_args: agy documents no
+    # subscription-lane switch. Operator onboarding is one interactive
+    # sign-in under the worker environment (the HOME `agents workers`
+    # reports); the worker stays signed out until then, and the probe
+    # reports missing.
+    auth:
+      check_exec: models
+      ok_match: ['(?m)^[A-Za-z0-9][\w.+~-]*\t+\S']
+    config_dir_env: AGY_CONFIG_DIR
 
     # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
     # the production path `meet say` uses — in pkg/agentpty/steer_live_test.go.

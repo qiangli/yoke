@@ -51,7 +51,7 @@ delegate is the lightweight one-shot. For heavier ISOLATED work (its own workspa
 merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 'weave add --from-todo' also auto-flips its status to 'assigned'.
 
-Delegation requires a verified subscription login (currently claude and codex).
+Delegation requires a verified subscription login (claude, codex, agy and muse, per each tool's declared auth check).
 --allow or BASHY_DELEGATE_ALLOW restricts resolved tool:model bindings; a caller
 with BASHY_DELEGATE_CALLER=genie must supply a nonempty allow policy.
 --idle-timeout watches stdout/stderr activity. Required --budget-usd/--max-tokens

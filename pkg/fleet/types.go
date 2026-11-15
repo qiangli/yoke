@@ -3,6 +3,7 @@ package fleet
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -196,6 +197,19 @@ type Tool struct {
 // ValidateCommands: a bad signal is reported, never hidden.
 func (t Tool) ValidateUsageSignals() error {
 	return validateUsageSignals(fmt.Sprintf("fleet: tool %q", t.Name), t.UsageSignals)
+}
+
+// ValidateAuth checks the tool's subscription-login declaration: every
+// ok_match entry must compile as a regex. Called at load like
+// ValidateCommands: a bad matcher is reported, never hidden, and the check
+// fails closed at runtime.
+func (t Tool) ValidateAuth() error {
+	for _, m := range t.CLI.Launch.Auth.OkMatch {
+		if _, err := regexp.Compile(m); err != nil {
+			return fmt.Errorf("fleet: tool %q has invalid auth ok_match %q: %w", t.Name, m, err)
+		}
+	}
+	return nil
 }
 
 // Tool command modes.
@@ -536,6 +550,19 @@ type ToolLaunch struct {
 	// AuthHint explains an interactive sign-in the tool needs before it
 	// can run headless at all.
 	AuthHint string `yaml:"auth_hint,omitempty" json:"auth_hint,omitempty" doc:"interactive authentication guidance"`
+	// Auth declares the vendor subscription-login check (Sprint 584 adapter
+	// contract, Sprint 646 decisions 4-5). It replaces the per-tool Go tables
+	// that used to live in chat/delegate_guard.go: the check argv, the
+	// success matchers, and the subscription-lane argv pinning.
+	Auth ToolAuth `yaml:"auth,omitempty" json:"auth,omitempty" doc:"subscription-login check: check_exec argv, ok_match regexes, lane_args pinning"`
+	// ConfigDirEnv names the environment variable that carries this tool's
+	// per-worker config directory (Sprint 584 adapter contract). It replaces
+	// the derived TOOLNAME_CONFIG_DIR cases in weave/booth.go: the declared
+	// name wins, and tools without one keep the derived fallback. A vendor
+	// CLI that relocates through its own variable (CLAUDE_CONFIG_DIR,
+	// CODEX_HOME) names it here; otherwise the name is a bashy-internal
+	// redirect the booth sets alongside its HOME/XDG relocation.
+	ConfigDirEnv string `yaml:"config_dir_env,omitempty" json:"config_dir_env,omitempty" doc:"environment variable carrying the per-worker config directory"`
 	// Notes is the free-text launch contract commentary.
 	Notes string `yaml:"notes,omitempty" json:"notes,omitempty" doc:"launch contract notes"`
 	// EnvMarkers are environment variables whose presence identifies this
@@ -554,6 +581,39 @@ type GatewayArgStep struct {
 	Action string   `yaml:"action" json:"action" doc:"argv edit operation"`
 	Args   []string `yaml:"args,omitempty" json:"args,omitempty" doc:"argv tokens or placeholders for this edit"`
 	When   string   `yaml:"when,omitempty" json:"when,omitempty" doc:"condition for applying this edit"`
+}
+
+// ToolAuth is a vendor CLI's subscription-login contract, read from the tool
+// asset instead of a Go switch (Sprint 584 adapter contract, Sprint 646
+// decisions 4-5). The check runs the tool binary with CheckExec argv in the
+// scrubbed delegate environment; the lane args pin the subscription login
+// lane on the probe and on the task. No API-key fallback exists: a tool that
+// declares no check fails closed, and a check that finds no subscription
+// login refuses the launch.
+type ToolAuth struct {
+	// CheckExec is the argv fragment after the binary (whitespace-separated,
+	// like an exec template): "auth status --json" for claude,
+	// "login status" for codex.
+	CheckExec string `yaml:"check_exec,omitempty" json:"check_exec,omitempty" doc:"argv after the binary that reports subscription login state"`
+	// OkMatch lists regexes that must ALL match the check's combined
+	// stdout/stderr (plus exit 0) for the login to count as verified.
+	// Empty means the exit code alone decides. Multiple entries are
+	// order-independent: claude's JSON status needs loggedIn AND the
+	// oauth_token method, in whatever order the CLI prints them.
+	OkMatch []string `yaml:"ok_match,omitempty" json:"ok_match,omitempty" doc:"regexes that must all match the check output for a verified login"`
+	// LaneArgs pins the subscription lane: appended before the check argv
+	// on the probe and before the prompt on the task. Empty when the
+	// vendor documents no equivalent switch.
+	LaneArgs []string `yaml:"lane_args,omitempty" json:"lane_args,omitempty" doc:"argv pinning the subscription login lane on probe and task"`
+	// TokenRef names the vault credential projected into the worker
+	// environment for tools whose documented headless method is a
+	// long-lived OAuth token (claude setup-token). The ref resolves
+	// through secrets.ResolveAgentKey (host secrets.map binding, then the
+	// vault) and lands via secrets.PreserveEnvNames; an unresolvable ref
+	// refuses the launch, never falls back to an API key. Empty when the
+	// credential lives in the worker config dir instead (codex device-code
+	// cache, agy persisted sign-in, muse subscription credential).
+	TokenRef string `yaml:"token_ref,omitempty" json:"token_ref,omitempty" doc:"vault credential ref projected as the worker subscription token"`
 }
 
 // ToolDecoder selects answer text from a structured stdout event.

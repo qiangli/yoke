@@ -18,7 +18,8 @@
       "watchdog": {},
       "events_done": {},
       "events_outcome": {},
-      "events_fail": {}
+      "events_fail": {},
+      "auth": {}
     }
   },
   "quirks": "fixture",

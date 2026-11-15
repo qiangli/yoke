@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/capability"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 )
 
@@ -114,20 +114,27 @@ func ScrubDelegateEnv(env []string) []string { return scrubDelegateEnv(env) }
 
 // Auth checks use the same binary and scrubbed environment as the task. Their
 // output is deliberately not returned: status errors can contain account data.
+//
+// The check itself is data, not code: each subscription worker declares its
+// status spelling in the tool asset (cli.launch.auth), and this function only
+// runs it. A tool that declares no check fails closed, exactly like an
+// unknown adapter used to.
 func delegateAuth(ctx context.Context, agent, cwd string, l Launch) error {
-	var args []string
 	if firstPartyTool(l.ToolName) {
 		return nil
 	}
-	switch l.ToolName {
-	case "claude":
-		args = []string{"auth", "status", "--json"}
-	case "codex":
-		args = []string{"login", "status"}
-	default:
+	tool, ok := newCatalog().Tool(l.ToolName)
+	if !ok || len(fleet.AuthCheckArgv(tool)) == 0 {
 		return delegateFailure("auth", "delegate: no subscription login check for "+l.ToolName)
 	}
-	args = append(delegateSubscriptionArgs(l.ToolName), args...)
+	// The worker environment (per-worker config dir, vault subscription
+	// token) resolves here so a missing credential fails with its own
+	// cause instead of a generic "not logged in". agentCommand applies the
+	// same environment to the probe below.
+	if _, err := fleet.PrepareWorkerEnv(os.Environ(), nil, tool); err != nil {
+		return delegateFailure("auth", "delegate: "+err.Error())
+	}
+	args := fleet.AuthCheckArgv(tool)
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := agentCommand(probeCtx, agent, args, cwd)
@@ -146,26 +153,34 @@ func delegateAuth(ctx context.Context, agent, cwd string, l Launch) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	authenticated := false
-	if err == nil {
-		switch l.ToolName {
-		case "claude":
-			var status struct {
-				LoggedIn         bool   `json:"loggedIn"`
-				AuthMethod       string `json:"authMethod"`
-				SubscriptionType string `json:"subscriptionType"`
-			}
-			if json.Unmarshal(out.data, &status) == nil {
-				authenticated = status.LoggedIn && status.AuthMethod == "oauth_token" && status.SubscriptionType != ""
-			}
-		case "codex":
-			authenticated = strings.TrimSpace(string(out.data)) == "Logged in using ChatGPT"
-		}
+	if err == nil && fleet.CheckAuthOutput(tool, 0, string(out.data)) {
+		return nil
 	}
-	if !authenticated {
-		return delegateFailure("auth", "delegate: "+l.ToolName+" is not logged in with a subscription; log in with the vendor CLI (no metered fallback)")
+	return delegateFailure("auth", "delegate: "+l.ToolName+" is not logged in with a subscription; log in with the vendor CLI (no metered fallback)")
+}
+
+// delegateWorkerEnv projects the subscription-worker environment onto a
+// delegate child AFTER the scrubs: the per-worker config dir plus the vault
+// OAuth token when the tool declares one. Resolution errors are swallowed
+// here — delegateAuth already refused the launch with the specific cause, so
+// the probe below only ever runs when resolution succeeds.
+func delegateWorkerEnv(ctx context.Context, env []string) []string {
+	if delegation(ctx) == nil {
+		return env
 	}
-	return nil
+	l, ok := LaunchFrom(ctx)
+	if !ok {
+		return env
+	}
+	tool, ok := newCatalog().Tool(l.ToolName)
+	if !ok {
+		return env
+	}
+	prepared, err := fleet.PrepareWorkerEnv(os.Environ(), env, tool)
+	if err != nil {
+		return env
+	}
+	return prepared
 }
 
 // os/exec serializes writes when stdout and stderr share this writer.
@@ -276,15 +291,14 @@ type delegateResult struct {
 	Error    *DelegateError `json:"error,omitempty"`
 }
 
-// Pin the login lane for the task as well as the probe. Scrubbing the process
+// delegateLaneArgs pins the login lane for the task as well as the probe,
+// from the tool asset (cli.launch.auth.lane_args). Scrubbing the process
 // environment alone is insufficient when a vendor loads a provider or key
-// helper from its settings. These are documented vendor CLI/config switches.
-func delegateSubscriptionArgs(tool string) []string {
-	switch tool {
-	case "claude":
-		return []string{"--setting-sources", "", "--settings", `{"forceLoginMethod":"claudeai","apiKeyHelper":""}`}
-	case "codex":
-		return []string{"-c", `forced_login_method="chatgpt"`, "-c", `model_provider="openai"`}
+// helper from its settings. These are documented vendor CLI/config switches,
+// now declared per tool instead of switched on the tool name.
+func delegateLaneArgs(toolName string) []string {
+	if tool, ok := newCatalog().Tool(toolName); ok {
+		return tool.CLI.Launch.Auth.LaneArgs
 	}
 	return nil
 }

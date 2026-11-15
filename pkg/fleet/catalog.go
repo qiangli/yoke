@@ -339,6 +339,11 @@ func (c *Catalog) loadTools(all bool) ([]Tool, []error) {
 		if err := r.Entry.ValidateUsageSignals(); err != nil {
 			errs = append(errs, err)
 		}
+		// Likewise a malformed subscription-login check: reported here,
+		// never hidden.
+		if err := r.Entry.ValidateAuth(); err != nil {
+			errs = append(errs, err)
+		}
 		// Likewise a malformed managed pin: reported here, and REFUSED at
 		// launch (BinmgrTool validates again) — never quietly unpinned.
 		if err := r.Entry.CLI.Managed.Validate(r.Entry.Name); err != nil {

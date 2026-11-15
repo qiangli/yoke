@@ -162,6 +162,20 @@ cli:
     workspace_arg: -c sandbox_workspace_write.writable_roots=["{workspace}/.git","{gocache}"] -c sandbox_workspace_write.network_access=true
     steer_exec: codex --no-daemon --model {model}
     prompt_position: last
+    # Subscription login contract (Sprint 584 adapter, Sprint 646 D4-5). The
+    # worker authenticates with the ChatGPT device-code login (headless CLI,
+    # beta), cached with refresh in the worker's config dir (CODEX_HOME) —
+    # never an API key. Operator onboarding is one `codex login --device-auth`
+    # run under the worker environment (the CODEX_HOME `agents workers`
+    # reports); `login status` must print exactly
+    # "Logged in using ChatGPT" (an API-key login prints a different line and
+    # fails the match). Lane args pin the subscription lane on the probe and
+    # on the task: forced ChatGPT login method, OpenAI model provider.
+    auth:
+      check_exec: login status
+      ok_match: ['\ALogged in using ChatGPT\s*\z']
+      lane_args: [-c, 'forced_login_method="chatgpt"', -c, 'model_provider="openai"']
+    config_dir_env: CODEX_HOME
     # MEASURED 2026-09-24 (codex-cli 0.156.1): a directory codex has not seen
     # opens a "Trust this folder? … 1. Trust and continue  2. Quit" dialog, and
     # the answer is saved in ~/.codex/config.toml as

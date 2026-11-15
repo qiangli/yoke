@@ -76,6 +76,7 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 		newVerify(KindAgent, opts, func(c *Catalog, n string) Check {
 			return c.VerifyAgent(n, Probes(nil))
 		}),
+		newWorkersCmd(opts),
 	)
 }
 

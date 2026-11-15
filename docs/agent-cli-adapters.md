@@ -31,7 +31,17 @@ Deferred (follow-ups, not MVP): the per-tool `.bsh` hook runner below — the
 existing code-outer `.bsh` records (`pkg/fleet/bsh.go`, a script whose stdout is
 the record) plus `cli.launch.setup` already let an operator shape a tool without
 a release; `env_markers` wiring (waits for S575 S1, `detect.go` is in the core
-build); auth-check/config-dir fields; native Bedrock client (B2).
+build); native Bedrock client (B2).
+
+Delivered (Sprint 646 O2): the `auth` (`check_exec`, `ok_match`,
+`lane_args`, `token_ref`) and `config_dir_env` fields, declared per tool in
+`pkg/fleet/baseline/tools/{claude,codex,agy,muse}.yaml`. The
+`chat/delegate_guard.go` subscription switches are gone: the probe, the
+success matchers and the lane pinning all read from the asset, and
+`weave/booth.go` prefers the declared `config_dir_env` over its derived
+`TOOLNAME_CONFIG_DIR` fallback. `bashy agents workers` reports the honest
+worker state (ok/missing/expired/plan-limit/offline) from the same checks,
+with a `--probe` mode that records alerts for Sprint 620 comms delivery.
 
 The rest of this document is the original D0 design, kept as the target.
 

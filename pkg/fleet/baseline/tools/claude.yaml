@@ -164,6 +164,22 @@ cli:
     prompt_position: last
     trust_preseed: .claude.json
     trust_clear: "say:1"
+    # Subscription login contract (Sprint 584 adapter, Sprint 646 D4-5). The
+    # worker authenticates with the vault's CLAUDE_CODE_OAUTH_TOKEN (claude
+    # setup-token: browser flow once on any machine, one-year OAuth token,
+    # model-requests-only scope) projected into the environment, with a
+    # per-worker CLAUDE_CONFIG_DIR isolating it from any interactive login on
+    # the same host. Never an API key: the ok_match requires the oauth_token
+    # method AND a subscription type, so an API-key login cannot pass.
+    # Lane args pin the subscription lane on the probe and on the task:
+    # no user/project/local settings load, forceLoginMethod claudeai, and an
+    # empty key helper so no provider key helper can inject a metered key.
+    auth:
+      check_exec: auth status --json
+      ok_match: ['"loggedIn":\s*true', '"authMethod":\s*"oauth_token"', '"subscriptionType":\s*"[^"]+"']
+      lane_args: [--setting-sources, "", --settings, '{"forceLoginMethod":"claudeai","apiKeyHelper":""}']
+      token_ref: claude-code-oauth-token
+    config_dir_env: CLAUDE_CONFIG_DIR
     supports_say: true
     supports_graceful_quit: true
     notes: TUI is steerable; a per-directory trust prompt needs a `say` of "1" (or a pre-seeded .claude.json).

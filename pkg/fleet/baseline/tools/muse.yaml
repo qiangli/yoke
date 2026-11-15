@@ -106,6 +106,28 @@ cli:
       Muse Code needs a Meta sign-in (`muse login`, or `muse auth set
       --api-key-stdin`) AND a Muse Code subscription or billing on dev.meta.ai;
       without one every call fails 402 billing_error.
+    # Subscription login contract (Sprint 584 adapter, Sprint 646 D4-5). The
+    # worker uses the subscription-connected credential from CLI onboarding
+    # (browser sign-in, persisted per computer) — never META_API_KEY and never
+    # a stored API key: the probe runs in a scrubbed environment where no key
+    # variable survives, so only the subscription session can pass. No
+    # status subcommand is documented, so the check is `muse login` itself: a
+    # signed-out CLI prints the device-code prompt ("Open this page to sign
+    # in", "Waiting for approval", measured 2026-11-15) and waits, which the
+    # probe timeout turns into missing. ok_match stays empty on purpose: the
+    # positive-case string is unverified live (open checks C1/E1 for token
+    # lifetimes and per-host Contributor behavior), so a fast exit 0 without
+    # the sign-in prompt is the contract — never a guessed string.
+    # Operator onboarding is one `muse login` under the worker environment
+    # (the XDG_CONFIG_HOME `agents workers` reports).
+    # Contributor mode is pinned OFF on every run via MUSE_CONTRIBUTOR_MODE=0
+    # below (documented env var; the --contributor-mode flag is not accepted
+    # by every pinned build, and env can never be refused as unknown).
+    auth:
+      check_exec: login
+    config_dir_env: MUSE_CONFIG_DIR
+    env:
+      - MUSE_CONTRIBUTOR_MODE=0
     watchdog:
       max_runtime: 45m
       mem_limit: 12g

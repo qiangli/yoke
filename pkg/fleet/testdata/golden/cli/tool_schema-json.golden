@@ -140,9 +140,49 @@
     "description": "ACP agent argv template"
   },
   {
+    "path": "cli.launch.auth",
+    "type": "object",
+    "description": "subscription-login check: check_exec argv, ok_match regexes, lane_args pinning"
+  },
+  {
+    "path": "cli.launch.auth.check_exec",
+    "type": "string",
+    "description": "argv after the binary that reports subscription login state"
+  },
+  {
+    "path": "cli.launch.auth.lane_args",
+    "type": "[]string",
+    "description": "argv pinning the subscription login lane on probe and task"
+  },
+  {
+    "path": "cli.launch.auth.lane_args.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.auth.ok_match",
+    "type": "[]string",
+    "description": "regexes that must all match the check output for a verified login"
+  },
+  {
+    "path": "cli.launch.auth.ok_match.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "cli.launch.auth.token_ref",
+    "type": "string",
+    "description": "vault credential ref projected as the worker subscription token"
+  },
+  {
     "path": "cli.launch.auth_hint",
     "type": "string",
     "description": "interactive authentication guidance"
+  },
+  {
+    "path": "cli.launch.config_dir_env",
+    "type": "string",
+    "description": "environment variable carrying the per-worker config directory"
   },
   {
     "path": "cli.launch.credential",

@@ -361,8 +361,15 @@ func TestNativeDefaultLaunchUnchanged(t *testing.T) {
 		if got := tool.Argv("", "THE PROMPT"); strings.Join(got, "\x00") != strings.Join(argv[name], "\x00") {
 			t.Errorf("%s native argv =\n  %q\nwant\n  %q", name, got, argv[name])
 		}
-		if got := tool.LaunchEnv(fleet.LaunchVars{}); len(got) != 0 {
-			t.Errorf("%s native env = %q, want empty (tool's own default survives)", name, got)
+		// Sprint 646 D5 pins Muse Contributor mode off on every run, so
+		// muse's native launch carries exactly that pair; every other
+		// tool must still render no env.
+		wantEnv := []string(nil)
+		if name == "muse" {
+			wantEnv = []string{"MUSE_CONTRIBUTOR_MODE=0"}
+		}
+		if got := tool.LaunchEnv(fleet.LaunchVars{}); strings.Join(got, "\x00") != strings.Join(wantEnv, "\x00") {
+			t.Errorf("%s native env = %q, want %q", name, got, wantEnv)
 		}
 	}
 }

@@ -17,6 +17,19 @@ import (
 	"github.com/qiangli/yoke/pkg/ladder"
 )
 
+// fakeDelegateVendor stages a fake vendor CLI on PATH and runs the delegate
+// flow against the REAL embedded tool asset for the four subscription
+// workers (claude, codex, agy, muse), so the test covers each vendor's
+// declared auth.check_exec, ok_match, lane_args and config_dir_env. ycode
+// keeps its synthetic override (its real exec is `bashy genie …`, which
+// would recurse instead of running the fake).
+//
+// The fake speaks the vendor's real check protocol and asserts the real
+// lane args (claude/codex) or the real worker environment (agy/muse, and
+// the config-dir half of claude/codex) on the task. HOME, XDG_CONFIG_HOME
+// and CODEX_HOME point at temp dirs, so no operator config, vault template
+// or cache is ever touched; the claude token is a fake parent-env value
+// that ResolveAgentKey finds without reaching a vault.
 func fakeDelegateVendor(t *testing.T, vendor string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -31,33 +44,60 @@ func fakeDelegateVendor(t *testing.T, vendor string) string {
 	t.Setenv("BASHY_DELEGATE_ALLOW", vendor+":test-model")
 	t.Setenv("BASHY_ATTEST_ID", "receipt-test")
 	t.Setenv("BASHY_LADDER_STORE", filepath.Join(t.TempDir(), "events.jsonl"))
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	if vendor == "claude" {
+		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-test-oauth-token")
+	}
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "launched")
 	t.Setenv("DELEGATE_TEST_MARKER", marker)
 	script := `#!/bin/sh
+VENDOR="` + vendor + `"
 for name in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY DEEPSEEK_API_KEY ANTHROPIC_AUTH_TOKEN AWS_ACCESS_KEY_ID; do
  eval 'value=${'"$name"'-}'
  if [ -n "$value" ]; then echo "metered credential leaked"; exit 19; fi
 done
-# Both the auth probe and task must pin the subscription lane.
-case "$*" in
- *forceLoginMethod*|*forced_login_method*) ;;
- *) echo 'missing subscription guard'; exit 18;;
+probe_ok() {
+ case "$DELEGATE_TEST_MODE" in
+  auth) echo 'not logged in'; exit 1;;
+  metered) echo 'Logged in using an API key'; exit 0;;
+  authhang) sleep 10; exit 0;;
+  startfail) printf '#!/nonexistent/delegate-test-interpreter\n' > "$0";;
+ esac
+}
+case "$VENDOR" in
+ claude)
+  case "$*" in *forceLoginMethod*) ;; *) echo 'missing subscription guard'; exit 18;; esac
+  case "$*" in
+   *"auth status"*) probe_ok; echo '{"loggedIn":true,"authMethod":"oauth_token","subscriptionType":"max"}'; exit 0;;
+  esac;;
+ codex)
+  case "$*" in *forced_login_method*) ;; *) echo 'missing subscription guard'; exit 18;; esac
+  case "$*" in
+   *"login status"*) probe_ok; echo 'Logged in using ChatGPT' >&2; exit 0;;
+  esac;;
+ agy)
+  case "$1" in
+   models) probe_ok; printf 'gemini-1-test-medium\tGemini Test (Medium)\n'; exit 0;;
+  esac;;
+ muse)
+  case "$1" in
+   login) probe_ok; exit 0;;
+  esac;;
 esac
-case "$*" in
- *"auth status"*|*"login status"*)
-  case "$DELEGATE_TEST_MODE" in
-   auth) echo 'not logged in'; exit 1;;
-   metered) echo 'Logged in using an API key'; exit 0;;
-   authhang) sleep 10; exit 0;;
-   startfail) printf '#!/nonexistent/delegate-test-interpreter\n' > "$0";;
-  esac
-  if [ "` + vendor + `" = claude ]; then
-   echo '{"loggedIn":true,"authMethod":"oauth_token","subscriptionType":"max"}'
-  else
-   echo 'Logged in using ChatGPT' >&2
-  fi
-  exit 0;;
+# Task path: the worker environment must carry the per-worker config dir
+# (and the subscription token / contributor pin where declared).
+case "$VENDOR" in
+ claude) [ -n "$CLAUDE_CONFIG_DIR" ] || { echo 'missing worker config dir'; exit 17; }
+  [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo 'missing worker token'; exit 17; };;
+ codex) [ -n "$CODEX_HOME" ] || { echo 'missing worker config dir'; exit 17; };;
+ agy) [ -n "$AGY_CONFIG_DIR" ] || { echo 'missing worker config dir'; exit 17; };;
+ muse) [ -n "$MUSE_CONFIG_DIR" ] || { echo 'missing worker config dir'; exit 17; }
+  [ "$MUSE_CONTRIBUTOR_MODE" = 0 ] || { echo 'contributor mode not pinned off'; exit 17; };;
 esac
 printf task > "$DELEGATE_TEST_MARKER"
 case "$DELEGATE_TEST_MODE" in
@@ -73,14 +113,29 @@ echo delegated
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cat := newCatalog()
-	if err := cat.SaveTool(fleet.Tool{Name: vendor, Aliases: aliasesFor(vendor), Builtin: vendor == "ycode", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: vendor, Launch: fleet.ToolLaunch{Exec: vendor + " --model {model} {prompt}", Env: []string{"OPENAI_API_KEY=recipe-secret"}}}}); err != nil {
+	if vendor == "ycode" {
+		if err := cat.SaveTool(fleet.Tool{Name: vendor, Aliases: aliasesFor(vendor), Builtin: true, Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: vendor, Launch: fleet.ToolLaunch{Exec: vendor + " --model {model} {prompt}", Env: []string{"OPENAI_API_KEY=recipe-secret"}}}}); err != nil {
+			t.Fatal(err)
+		}
+		return marker
+	}
+	// The real embedded asset, minus its managed pin: binmgr would otherwise
+	// resolve (or install) the vendor's release instead of the PATH fake.
+	// Every declared field under test — auth, lane_args, config_dir_env,
+	// env — stays exactly as shipped.
+	tool, ok := cat.Tool(vendor)
+	if !ok {
+		t.Fatalf("embedded tool %q not found", vendor)
+	}
+	tool.CLI.Managed = nil
+	if err := cat.SaveTool(tool); err != nil {
 		t.Fatal(err)
 	}
 	return marker
 }
 
 func TestDelegateVendorContract(t *testing.T) {
-	for _, vendor := range []string{"claude", "codex"} {
+	for _, vendor := range []string{"claude", "codex", "agy", "muse"} {
 		t.Run(vendor, func(t *testing.T) {
 			marker := fakeDelegateVendor(t, vendor)
 			for _, name := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_ACCESS_KEY_ID"} {
@@ -106,6 +161,13 @@ func TestDelegateVendorContract(t *testing.T) {
 				{"auth timeout", "authhang", "timeout", []string{"--timeout=100ms"}, false},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
+					// The probe and task run in a scrubbed environment no
+					// API key survives, so a metered muse login cannot
+					// happen through this path: the case is meaningless
+					// for a tool with no key spelling in its check.
+					if vendor == "muse" && tc.mode == "metered" {
+						t.Skip("muse has no metered login spelling in a scrubbed probe env")
+					}
 					_ = os.Remove(marker)
 					t.Setenv("BASHY_LADDER_STORE", filepath.Join(t.TempDir(), "events.jsonl"))
 					t.Setenv("DELEGATE_TEST_MODE", tc.mode)

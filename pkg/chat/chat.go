@@ -698,6 +698,10 @@ func agentCommand(ctx context.Context, agent string, args []string, cwd string) 
 	cmd.Env = agentChildEnv(ctx)
 	if delegation(ctx) != nil {
 		cmd.Env = scrubDelegateEnv(cmd.Env)
+		// The subscription-worker projection runs after the scrubs, from
+		// the launcher's raw environment: the per-worker config dir plus
+		// the vault subscription token a token-declaring tool needs.
+		cmd.Env = delegateWorkerEnv(ctx, cmd.Env)
 	}
 	return cmd
 }
@@ -1476,7 +1480,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	}
 	args := append(lnch.Args, prompt)
 	if delegation(ctx) != nil {
-		args = agentlaunch.InsertBeforePrompt(args, delegateSubscriptionArgs(lnch.ToolName))
+		args = agentlaunch.InsertBeforePrompt(args, delegateLaneArgs(lnch.ToolName))
 	}
 	if opt.ExecArgv != nil {
 		args = append([]string(nil), opt.ExecArgv...)
