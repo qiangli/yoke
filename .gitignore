@@ -15,3 +15,6 @@ external/podman/engine/vfkit_embed/vfkit.gz
 external/podman/engine/gvproxy_embed/gvproxy.gz
 
 /dist/
+
+# macOS Finder metadata
+.DS_Store
