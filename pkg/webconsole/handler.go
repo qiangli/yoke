@@ -122,6 +122,23 @@ type Options struct {
 	// "apps". Only the Host tile's cloud-owner bridge reads it.
 	CloudApp string
 
+	// Operators are the identities that may ADMINISTER this host from the
+	// cloud: lowercased emails, matched against the vouched identity of a
+	// tunnel-arrived request. They hold what operatorSession gates — writing
+	// the app registry, host-scoped shaping, and linking a story or todo to a
+	// wish.
+	//
+	// EMPTY MEANS NO ONE. A cloud-arrived caller is then never an operator,
+	// however the cloud tier stamped them, because cloudbox marks every
+	// sharee "admin" (coopauth/guard.go). The on-host caller — loopback, or a
+	// console session — is unaffected: the machine's own user is its operator
+	// without being listed here.
+	//
+	// The embedder fills it. outpost knows the account this host paired with,
+	// and passing it restores the owner's remote administration without
+	// admitting anyone the app happens to be shared with.
+	Operators []string
+
 	// Shape configures shaped apps and the Shape panel (shaped.go).
 	Shape ShapeOptions
 }
@@ -180,8 +197,18 @@ type server struct {
 
 // consoleGuard mirrors meet's: an SSO secret, when configured, makes the vouch
 // HMAC-verified rather than merely present.
-func consoleGuard() *coopauth.Guard {
-	return &coopauth.Guard{Policy: coopauth.Policy{}}
+//
+// The admin allowlist is the host's Operators, and it is populated rather than
+// left empty on purpose: coopauth falls back to the cloud tier when the
+// allowlist is empty, and the cloud tier marks every sharee "admin"
+// (coopauth/guard.go). LoopbackAdmin says what was previously inferred from
+// the absence of a device subject — the on-host caller is the machine's
+// operator.
+func consoleGuard(opts Options) *coopauth.Guard {
+	return &coopauth.Guard{Policy: coopauth.Policy{
+		AdminEmails:   coopauth.AdminSet(opts.Operators...),
+		LoopbackAdmin: true,
+	}}
 }
 
 // Handler returns the console as an http.Handler, plus a closer for whatever it
@@ -208,7 +235,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 	}
 	s := &server{
 		opts:         opts,
-		guard:        consoleGuard(),
+		guard:        consoleGuard(opts),
 		sessions:     opts.Sessions,
 		auth:         opts.Auth,
 		requireLogin: opts.RequireLogin,

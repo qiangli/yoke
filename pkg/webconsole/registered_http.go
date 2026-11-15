@@ -59,9 +59,8 @@ func (s *server) registeredCatalog() *fleet.Catalog {
 }
 
 func (s *server) registryWriter(w http.ResponseWriter, r *http.Request) bool {
-	user, _ := s.userOf(r)
-	if _, _, device := splitDeviceSubject(user); device {
-		http.Error(w, "registered apps require an operator session", http.StatusForbidden)
+	if !s.operatorSession(r) {
+		http.Error(w, "registered apps require an operator session: this host's operators, or the machine's own user", http.StatusForbidden)
 		return false
 	}
 	return true

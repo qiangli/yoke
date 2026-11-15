@@ -740,13 +740,48 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, c)
 }
 
-// operatorSession reports whether the request comes from an operator
-// session rather than a paired device: the admission for making apps,
-// the same one the registry routes apply (registryWriter).
+// operatorSession reports whether the request comes from someone who may
+// ADMINISTER this host: the admission for making apps, for host-scoped
+// shaping, and for linking a story or todo to a wish. registryWriter applies
+// the same predicate, and there is exactly one definition of it.
+//
+// Two kinds of caller, judged differently, because they carry different
+// evidence:
+//
+//   - a CLOUD-ARRIVED caller is an operator only when the host's Operators
+//     name their vouched identity. The allowlist is read directly, never
+//     Identity.IsAdmin(), because coopauth falls back to the cloud tier when
+//     the allowlist is empty and cloudbox marks every sharee "admin"
+//     (coopauth/guard.go). Empty list, no cloud operator.
+//   - an ON-HOST caller — loopback, or a console session — is the machine's
+//     own user, and is an operator unless the session belongs to a paired
+//     device. A phone that was handed a device grant is not an operator.
+//
+// Before this, the single test was "not a paired device", which was sound
+// while those were the only two sessions that existed. It admitted every
+// cloud sharee the moment they could reach these routes (todo d871ac00b808).
 func (s *server) operatorSession(r *http.Request) bool {
+	if coopauth.ArrivedViaCloud(r) {
+		id, ok := coopauth.IdentityOf(r)
+		if !ok {
+			return false
+		}
+		return s.namedOperator(id.User) || s.namedOperator(id.Email)
+	}
 	user, _ := s.userOf(r)
 	_, _, device := splitDeviceSubject(user)
 	return !device
+}
+
+// namedOperator reports whether this email is on the host's operator
+// allowlist. Case and surrounding space are ignored; an empty address never
+// matches.
+func (s *server) namedOperator(email string) bool {
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e == "" || s.guard == nil {
+		return false
+	}
+	return s.guard.Policy.AdminEmails[e]
 }
 
 func (s *server) candidateFor(w http.ResponseWriter, r *http.Request) (*shapedApp, Candidate, string, bool) {

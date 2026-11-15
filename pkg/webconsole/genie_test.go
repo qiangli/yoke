@@ -82,6 +82,12 @@ func TestGenieButtonOnEveryShapedAppPage(t *testing.T) {
 		Ctx: context.Background(), RequireLogin: true,
 		Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
 		Panels:   []Panel{notes},
+		// alice is this host's OWNER, arriving through the cloud — she shapes
+		// the console itself and is read for new-app intent, both of which are
+		// operator work. Naming her is how a real host says so; before todo
+		// d871ac00b808 was fixed, every cloud caller was taken for the
+		// operator and no host had to declare anything.
+		Operators: []string{"alice@example.test"},
 		Shape: ShapeOptions{
 			Home: home, WorkRoot: filepath.Join(t.TempDir(), "shape-work"), Runner: shapedFixtureRunner(t),
 			Level: contain.LevelProcess, Delegate: shaper,
