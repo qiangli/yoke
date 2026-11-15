@@ -152,8 +152,27 @@ func readOutpostAgentName(path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	// Deliberately not a JSON decode into a shared struct: this package must
-	// not depend on the daemon's schema to answer "am I paired".
+	// The canonical name is the cloudbox identity pairing (`cloudbox.host`,
+	// written by pair-once). A host paired with the master but attached to no
+	// satellite has ONLY that; reading just "agent_name" (the legacy tunnel
+	// pairing, or an attachment's tunnel) made such a host fall back to the OS
+	// hostname, so its conductor ignored every pull directive addressed to it
+	// (Sprint 646 e2e). A minimal local struct, not the daemon's schema.
+	var named struct {
+		AgentName string `json:"agent_name"`
+		Cloudbox  *struct {
+			Host string `json:"host"`
+		} `json:"cloudbox"`
+	}
+	if json.Unmarshal(data, &named) == nil {
+		if named.Cloudbox != nil && strings.TrimSpace(named.Cloudbox.Host) != "" {
+			return strings.TrimSpace(named.Cloudbox.Host), true
+		}
+		if name := strings.TrimSpace(named.AgentName); name != "" {
+			return name, true
+		}
+	}
+	// Older or partial files: the first "agent_name" anywhere.
 	const key = `"agent_name"`
 	i := strings.Index(string(data), key)
 	if i < 0 {
