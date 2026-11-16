@@ -1,6 +1,7 @@
 package browsercmd
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -86,5 +87,25 @@ func TestSetupLiveUsesTheStoreWhenListed(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
 		t.Fatalf("--unpacked did not extract: %v", err)
+	}
+}
+
+// With no hub running, pause/resume record the gate and status reads it.
+func TestHubGateCommandsWithoutAHub(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	out, errb, code := runTool(t, "--live-port", "1", "hub", "pause")
+	if code != 0 || !strings.Contains(out, "paused") || !strings.Contains(out, "next hub") {
+		t.Fatalf("pause: exit %d out %q err %q", code, out, errb)
+	}
+	out, _, code = runTool(t, "--json", "--live-port", "1", "hub", "status")
+	var st struct {
+		State      string `json:"state"`
+		HubRunning bool   `json:"hub_running"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &st) != nil || st.State != "paused" || st.HubRunning {
+		t.Fatalf("status: exit %d %q", code, out)
+	}
+	if out, _, code = runTool(t, "--live-port", "1", "hub", "resume"); code != 0 || !strings.Contains(out, ": on") {
+		t.Fatalf("resume: exit %d %q", code, out)
 	}
 }

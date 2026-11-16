@@ -1,6 +1,6 @@
 name: browser-hub
 kind: service
-description: Live-mode browser hub — lets agents drive the owner's real, logged-in Chrome through the Bashy MV3 extension (`bashy browser --mode live ...`); start it from the outpost admin when needed
+description: Live-mode browser hub — lets agents drive the owner's real, logged-in Chrome through the Bashy MV3 extension (`bashy browser --mode live ...`) and serves copy sheets; always on with outpost, switched on/off logically from the tray or `bashy browser hub pause|resume`
 exec: [bashy, browser, --mode, live, --live-port, "{port}", hub]
 ports:
   - name: ws
@@ -15,4 +15,4 @@ restart:
   policy: on-failure
   backoff: {min: 1s, max: 30s, healthy_after: 30s}
   start_limit: {burst: 5, interval: 5m}
-enabled: false
+enabled: true

@@ -613,6 +613,7 @@ type Status struct {
 	Message       string `json:"message,omitempty"`
 	LastTabURL    string `json:"last_tab_url,omitempty"`
 	OwnedInThisPS bool   `json:"hub_owned_by_this_process"`
+	Paused        bool   `json:"paused"`
 }
 
 // LiveStatus probes the hub on port without binding one. It never
@@ -645,6 +646,7 @@ func LiveStatus(ctx context.Context, port int) Status {
 		Version      string `json:"version"`
 		MethodsCount int    `json:"methods_count"`
 		Stale        bool   `json:"stale"`
+		Paused       bool   `json:"paused"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		st.Message = fmt.Sprintf("hub on 127.0.0.1:%d returned an unreadable /connected payload: %v", port, err)
@@ -654,9 +656,12 @@ func LiveStatus(ctx context.Context, port int) Status {
 	st.ExtVersion = payload.Version
 	st.MethodsCount = payload.MethodsCount
 	st.Stale = payload.Stale
+	st.Paused = payload.Paused
 	// "Reachable" means an action issued right now would reach a page.
-	st.Reachable = st.Connected && !st.Stale
+	st.Reachable = st.Connected && !st.Stale && !st.Paused
 	switch {
+	case st.Paused:
+		st.Message = pausedMessage
 	case !st.Connected:
 		st.Message = "hub is up but no extension is attached — open the extension popup on your target tab and click Connect (first-time setup: bashy browser setup live)"
 	case st.Stale:

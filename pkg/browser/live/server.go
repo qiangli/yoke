@@ -44,6 +44,10 @@ type hub struct {
 	// sheets maps a copy-sheet token to its file (see sheets.go).
 	sheets map[string]string
 
+	// port and gate: the logical on/off gate (see gate.go), loaded at start.
+	port int
+	gate GateState
+
 	// refusedLogged keeps a refused profile's retries from repeating the
 	// refusal line; reset when the connection changes.
 	refusedLogged bool
@@ -64,6 +68,7 @@ type hub struct {
 
 func newHub(port int) *hub {
 	return &hub{
+		port:      port,
 		addr:      fmt.Sprintf("127.0.0.1:%d", port),
 		up:        websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
 		pending:   make(map[int64]chan wsResponse),
@@ -79,6 +84,9 @@ func (h *hub) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("live: bind %s: %w (pass --port to pick a different one)", h.addr, err)
 	}
+	h.mu.Lock()
+	h.gate = loadGate(h.port)
+	h.mu.Unlock()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -98,6 +106,7 @@ func (h *hub) start(ctx context.Context) error {
 			"min_version":   LiveExtensionMinVersion,
 			"stale":         stale,
 			"install_type":  h.ExtInstallType(),
+			"paused":        h.isPaused(),
 		})
 	})
 	// /dispatch is the cross-process bridge: a client in a separate
@@ -105,6 +114,7 @@ func (h *hub) start(ctx context.Context) error {
 	// own hub. The hub owner forwards over the websocket and returns the
 	// extension's response synchronously. 30s ceiling per call.
 	mux.HandleFunc("/dispatch", h.handleDispatch)
+	mux.HandleFunc("/gate", h.handleGate)
 	mux.HandleFunc("/sheet", h.handleSheetRegister)
 	mux.HandleFunc("/sheet/", h.handleSheet)
 	h.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
@@ -145,6 +155,10 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	// (todo 105a358a). So only an explicit popup Connect (?takeover=1)
 	// replaces it; any other dial is refused while a connection is up.
 	takeover := r.URL.Query().Get("takeover") == "1"
+	if h.isPaused() {
+		closeWithCode(conn, CloseHubPaused, pausedMessage)
+		return
+	}
 	h.mu.Lock()
 	if h.conn != nil && !takeover {
 		logOnce := !h.refusedLogged
@@ -462,6 +476,9 @@ func (h *hub) awaitHello(ctx context.Context) error {
 // cancellation. Gated by awaitHello so we never dispatch against a
 // pre-handshake extension.
 func (h *hub) call(ctx context.Context, method string, params map[string]any) (wsResponse, error) {
+	if h.isPaused() {
+		return wsResponse{}, errors.New(pausedMessage)
+	}
 	if guardFollowUp(method) {
 		h.awaitExtension(ctx, GuardReconnectWait)
 	}
@@ -550,6 +567,11 @@ func (h *hub) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Method == "" {
 		http.Error(w, "method required", http.StatusBadRequest)
+		return
+	}
+	if h.isPaused() {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": pausedMessage})
 		return
 	}
 

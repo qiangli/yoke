@@ -20,6 +20,12 @@ import (
 // to ws://127.0.0.1:<port>/ws; subsequent `bashy browser --mode live
 // <action>` calls (or POSTs to /dispatch) drive the connected tab.
 func browserHub(rc *tool.RunContext, ctx context.Context, args []string, livePort int, asJSON bool) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "pause", "resume", "status":
+			return browserHubGate(rc, ctx, args[0], livePort, asJSON)
+		}
+	}
 	fs := flag.NewFlagSet("hub", flag.ContinueOnError)
 	fs.SetOutput(rc.Err)
 	// The global --live-port is the hub port: the top-level parser takes
@@ -186,4 +192,54 @@ func copyToClipboard(text string) error {
 	}
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
+}
+
+// browserHubGate handles `bashy browser hub pause|resume|status`: the hub's
+// logical on/off gate. The hub process keeps running (outpost's browser-hub
+// service or a terminal `bashy browser hub`); paused, it refuses the
+// extension, agent calls and copy sheets. An agent may resume it when a task
+// needs the browser; the change is logged by the hub. With no hub running
+// the state is recorded and the next hub on that port starts with it.
+func browserHubGate(rc *tool.RunContext, ctx context.Context, verb string, port int, asJSON bool) int {
+	by := strings.TrimSpace(os.Getenv("BASHY_AGENT"))
+	if by == "" {
+		by = "cli"
+	}
+	var g live.GateState
+	var err error
+	running := true
+	switch verb {
+	case "status":
+		g, err = live.GateStatus(ctx, port)
+		if err != nil {
+			running = false
+			g, err = live.ReadGate(port), nil
+		}
+	default:
+		g, err = live.SetGate(ctx, port, verb == "pause", by)
+		if err != nil && strings.HasPrefix(err.Error(), "no live hub") {
+			running = false
+			g, err = live.WriteGate(port, verb == "pause", by)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(rc.Err, "browser hub %s: %v\n", verb, err)
+		return 1
+	}
+	state := "on"
+	if g.Paused {
+		state = "paused"
+	}
+	if asJSON {
+		return writeJSON(rc, map[string]any{"port": port, "state": state, "paused": g.Paused, "by": g.By, "at": g.At, "hub_running": running})
+	}
+	fmt.Fprintf(rc.Out, "browser hub on 127.0.0.1:%d: %s", port, state)
+	if g.By != "" {
+		fmt.Fprintf(rc.Out, " (set by %s)", g.By)
+	}
+	fmt.Fprintln(rc.Out)
+	if !running {
+		fmt.Fprintln(rc.Out, "(no hub running; the next hub on this port starts in this state)")
+	}
+	return 0
 }

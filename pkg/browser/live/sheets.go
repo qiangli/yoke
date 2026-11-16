@@ -57,6 +57,10 @@ func (h *hub) handleSheetRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	if h.isPaused() {
+		http.Error(w, pausedMessage, http.StatusServiceUnavailable)
+		return
+	}
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -89,6 +93,10 @@ func (h *hub) handleSheetRegister(w http.ResponseWriter, r *http.Request) {
 func (h *hub) handleSheet(w http.ResponseWriter, r *http.Request) {
 	if !loopbackHost(r) {
 		http.NotFound(w, r)
+		return
+	}
+	if h.isPaused() {
+		http.Error(w, pausedMessage, http.StatusServiceUnavailable)
 		return
 	}
 	token := strings.TrimPrefix(r.URL.Path, "/sheet/")

@@ -31,6 +31,7 @@ let takeoverNext = false;
 let hubBusy = "";
 const CLOSE_HUB_BUSY = 4409;
 const CLOSE_TAKEN_OVER = 4410;
+const CLOSE_HUB_PAUSED = 4423; // the user turned the hub off (tray or `bashy browser hub pause`)
 
 // --- entry: open/close commands from popup ---
 
@@ -167,7 +168,7 @@ function openWS() {
   ws.onclose = (ev) => {
     ws = null;
     chrome.alarms.clear("ycode-live-keepalive");
-    if (ev && (ev.code === CLOSE_HUB_BUSY || ev.code === CLOSE_TAKEN_OVER)) {
+    if (ev && (ev.code === CLOSE_HUB_BUSY || ev.code === CLOSE_TAKEN_OVER || ev.code === CLOSE_HUB_PAUSED)) {
       // Another profile holds the hub. Keep retrying slowly so this one
       // resumes when that one leaves, without evicting it.
       hubBusy = ev.reason || "another browser profile is connected";

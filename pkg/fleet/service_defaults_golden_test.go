@@ -35,7 +35,7 @@ var serviceDefaultsGolden = map[string]serviceDefaultGolden{
 	"bashy-mcp":     {true, "default-on: authenticated tunnel endpoint for the vendor gateway sync route", nil},
 	"actrunner":     {false, "opt-in: the runner joins only when the operator points it at work", kv{"forge_unit": "loom", "labels": "host:host", "sandbox": "false", "docker_host": ""}},
 	"apps":          {true, "default-on: paired hosts need the human front door after an upgrade", kv{"pair": "false", "launcher": ""}},
-	"browser-hub":   {false, "opt-in: drives the owner's real logged-in Chrome; started from the outpost admin when needed", nil},
+	"browser-hub":   {true, "default-on (S529.10, operator 2026-11-16): the hub only listens on loopback and the extension acts only after the user presses Connect; on/off is the hub's logical gate (tray or `bashy browser hub pause|resume`), not process control", nil},
 	"events":        {false, "opt-in: the event bus has no subscriber until the operator wires one", nil},
 	"files":         {true, "default-on: pre-418 FilesOn defaulted on; embedded file manager is base host", kv{"scope": "", "allow_write": "false"}},
 	"headlamp":      {false, "opt-in: the cluster dashboard needs an operator-attached cluster", kv{"kubeconfig": "", "namespace": "headlamp", "target": "svc/headlamp"}},
