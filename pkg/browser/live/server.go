@@ -41,6 +41,9 @@ type hub struct {
 	// reconnect starts a fresh handshake.
 	helloReceived chan struct{}
 
+	// sheets maps a copy-sheet token to its file (see sheets.go).
+	sheets map[string]string
+
 	// refusedLogged keeps a refused profile's retries from repeating the
 	// refusal line; reset when the connection changes.
 	refusedLogged bool
@@ -102,6 +105,8 @@ func (h *hub) start(ctx context.Context) error {
 	// own hub. The hub owner forwards over the websocket and returns the
 	// extension's response synchronously. 30s ceiling per call.
 	mux.HandleFunc("/dispatch", h.handleDispatch)
+	mux.HandleFunc("/sheet", h.handleSheetRegister)
+	mux.HandleFunc("/sheet/", h.handleSheet)
 	h.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := h.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

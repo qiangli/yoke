@@ -11,17 +11,21 @@ package browsercmd
 // reported as withheld, so an agent cannot stage a secret for pasting.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/pkg/browser/live"
 	"github.com/qiangli/yoke/pkg/browser/wire"
 	"github.com/qiangli/yoke/pkg/sensitive"
 )
@@ -207,7 +211,7 @@ func copySheetSlug(title string) string {
 }
 
 // browserCopySheet handles `bashy browser copysheet FILE|-`.
-func browserCopySheet(rc *tool.RunContext, args []string, out string, noOpen, asJSON bool) int {
+func browserCopySheet(rc *tool.RunContext, args []string, out string, port int, noOpen, asJSON bool) int {
 	if len(args) != 1 {
 		fmt.Fprintln(rc.Err, "browser copysheet: want exactly one operand: a JSON file, or - for stdin")
 		return 2
@@ -235,19 +239,16 @@ func browserCopySheet(rc *tool.RunContext, args []string, out string, noOpen, as
 	for _, sec := range s.Sections {
 		fields += len(sec.Fields)
 	}
-	opened := false
-	fileURL := filepath.ToSlash(out)
-	if !strings.HasPrefix(fileURL, "/") {
-		fileURL = "/" + fileURL // C:/x → /C:/x
+	openedAs := ""
+	if !noOpen {
+		openedAs = openSheet(port, out)
 	}
-	if !noOpen && hooks.openURL("file://"+fileURL) == nil {
-		opened = true
-	}
+	opened := openedAs != ""
 	if asJSON {
 		if withheld == nil {
 			withheld = []withheldField{}
 		}
-		return writeJSON(rc, map[string]any{"success": true, "path": out, "fields": fields, "withheld": withheld, "opened": opened})
+		return writeJSON(rc, map[string]any{"success": true, "path": out, "fields": fields, "withheld": withheld, "opened": opened, "opened_as": openedAs})
 	}
 	fmt.Fprintln(rc.Out, out)
 	for _, w := range withheld {
@@ -258,13 +259,7 @@ func browserCopySheet(rc *tool.RunContext, args []string, out string, noOpen, as
 
 // copySheetDir is where sheets are written by default. A variable only so
 // tests can point it at a temp dir.
-var copySheetDir = func() string {
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		dir = os.TempDir()
-	}
-	return filepath.Join(dir, "bashy", "copysheet")
-}
+var copySheetDir = live.SheetDir
 
 // ExitCopySheetQueued is the exit status of a type/select that bashy could
 // not perform because the page refuses scripting, so it queued the value on
@@ -308,7 +303,7 @@ func drivenTabURL(ctx context.Context, c urlReader) string {
 // queueCopyField is the default fallback for a type/select the page refused:
 // the value goes onto that page's copy sheet (opened on its first field and
 // refreshing itself after), and the caller learns the human must paste it.
-func queueCopyField(rc *tool.RunContext, ctx context.Context, c urlReader, a wire.Action, cause string, noOpen, asJSON bool) (int, bool) {
+func queueCopyField(rc *tool.RunContext, ctx context.Context, c urlReader, a wire.Action, cause string, port int, noOpen, asJSON bool) (int, bool) {
 	if (a.Type != wire.ActionType && a.Type != wire.ActionSelect) || !unscriptablePage(cause) {
 		return 0, false
 	}
@@ -361,11 +356,7 @@ func queueCopyField(rc *tool.RunContext, ctx context.Context, c urlReader, a wir
 	}
 	path := base + ".html"
 	if fresh && !noOpen {
-		fileURL := filepath.ToSlash(path)
-		if !strings.HasPrefix(fileURL, "/") {
-			fileURL = "/" + fileURL
-		}
-		_ = hooks.openURL("file://" + fileURL)
+		openSheet(port, path)
 	}
 	held := len(withheld) > 0 && withheld[len(withheld)-1].Label == label
 	tell := copySheetTellUser(path)
@@ -389,4 +380,67 @@ func queueCopyField(rc *tool.RunContext, ctx context.Context, c urlReader, a wir
 func copySheetTellUser(path string) string {
 	return "I can't fill this page: the browser doesn't let extensions or automation type into it. " +
 		"I opened a page with each value ready (" + path + "); keep it beside the form and use its Copy buttons to paste each value into the field with the same label."
+}
+
+// openSheetBeside asks the live hub to serve the sheet and the extension to
+// open it beside the driven tab (split view on Chrome 155+). It returns
+// "split" or "beside"; an error means no hub, no extension, or an extension
+// too old for open_beside, and the caller opens the file instead.
+func openSheetBeside(port int, path string) (string, error) {
+	if port <= 0 {
+		return "", fmt.Errorf("no live hub port")
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	post := func(endpoint string, body any, out any) error {
+		b, _ := json.Marshal(body)
+		resp, err := client.Post(base+endpoint, "application/json", bytes.NewReader(b))
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("%s: %s", endpoint, resp.Status)
+		}
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	var reg struct {
+		URL string `json:"url"`
+	}
+	if err := post("/sheet", map[string]string{"path": path}, &reg); err != nil || reg.URL == "" {
+		return "", fmt.Errorf("hub does not serve sheets: %v", err)
+	}
+	var disp struct {
+		Result struct {
+			Split bool `json:"split"`
+		} `json:"result"`
+		Error string `json:"error"`
+	}
+	if err := post("/dispatch", map[string]any{"method": "open_beside", "params": map[string]any{"url": reg.URL}}, &disp); err != nil {
+		return "", err
+	}
+	if disp.Error != "" {
+		return "", fmt.Errorf("%s", disp.Error)
+	}
+	if disp.Result.Split {
+		return "split", nil
+	}
+	return "beside", nil
+}
+
+// openSheet opens a written sheet the best way available: beside the driven
+// tab through the live hub, else the file in Chrome. It returns how it was
+// opened ("split", "beside", "file") or "" when nothing opened.
+func openSheet(port int, path string) string {
+	if how, err := hooks.openBeside(port, path); err == nil {
+		return how
+	}
+	fileURL := filepath.ToSlash(path)
+	if !strings.HasPrefix(fileURL, "/") {
+		fileURL = "/" + fileURL // C:/x -> /C:/x
+	}
+	if hooks.openURL("file://"+fileURL) == nil {
+		return "file"
+	}
+	return ""
 }

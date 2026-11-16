@@ -218,6 +218,9 @@ const SUPPORTED_METHODS = [
   "clipboard_read", "clipboard_write",
   "cookies_get", "storage_get", "capabilities",
   "dispatch_event",
+  // open_beside opens a hub-served copy sheet next to the driven tab:
+  // Chrome's split view when available, otherwise the adjacent tab.
+  "open_beside",
   // The sensitive-input guard (guard.js): the hub's gate preflights every
   // type with guard_field and refuses type/select/keypress when this
   // extension does not advertise it; guard_focus hands a refused field to
@@ -548,6 +551,8 @@ async function dispatch(method, params) {
 
 async function dispatchOnTab(method, params, tabId) {
   switch (method) {
+    case "open_beside":
+      return openBeside(tabId, params);
     case "navigate":
       return navigate(tabId, params.url);
     case "back":
@@ -2098,4 +2103,29 @@ async function lighthouse(tabId) {
     },
   });
   return { data: result || "{}" };
+}
+
+// openBeside opens a copy sheet served by THIS hub (http://127.0.0.1:PORT/
+// sheet/TOKEN, nothing else) beside the driven tab, so the human pastes with
+// the sheet and the form side by side. Chrome 155+ splits the two tabs
+// (tabs.create splitWithTabId, no extra permission); older browsers, or a
+// tab that is already split, get the sheet as the adjacent tab instead.
+async function openBeside(tabId, params) {
+  const url = String((params && params.url) || "");
+  const port = connectedPort || DEFAULT_PORT;
+  const allowed = [`http://127.0.0.1:${port}/sheet/`, `http://localhost:${port}/sheet/`];
+  if (!allowed.some((p) => url.startsWith(p))) {
+    throw new Error("open_beside: only this hub's copy-sheet URLs may be opened");
+  }
+  const tab = await chrome.tabs.get(tabId);
+  try {
+    const sheet = await chrome.tabs.create({ url, splitWithTabId: tab.id });
+    // Report split only when Chrome actually paired the tabs: a browser
+    // that predates split view may accept the option and ignore it.
+    const split = typeof sheet.splitViewId === "number" && sheet.splitViewId !== -1;
+    return { split, sheet_tab_id: sheet.id };
+  } catch (e) {
+    const sheet = await chrome.tabs.create({ url, windowId: tab.windowId, index: tab.index + 1, active: true });
+    return { split: false, sheet_tab_id: sheet.id, reason: String((e && e.message) || e) };
+  }
 }

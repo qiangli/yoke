@@ -168,7 +168,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case "setup":
 		return browserSetup(rc, operands[1:], *asJSON, *noOpen, *unpacked)
 	case "copysheet":
-		return browserCopySheet(rc, operands[1:], *output, *noOpen, *asJSON)
+		return browserCopySheet(rc, operands[1:], *output, *livePort, *noOpen, *asJSON)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
 	case "skills":
@@ -229,7 +229,7 @@ func run(rc *tool.RunContext, args []string) int {
 	} else if res != nil && !res.Success {
 		cause = res.Error
 	}
-	if code, ok := queueCopyField(rc, ctx, client, action, cause, *noOpen, *asJSON); ok {
+	if code, ok := queueCopyField(rc, ctx, client, action, cause, *livePort, *noOpen, *asJSON); ok {
 		return code
 	}
 	if err != nil {

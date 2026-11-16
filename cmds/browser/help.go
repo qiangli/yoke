@@ -269,6 +269,12 @@ var subcommands = map[string]subcommand{
 			"(SSN/ITIN, EIN, routing, card, IBAN) or a secret-labelled field",
 			"(password, PIN, one-time code, CVV, API key, …) shows",
 			"\"enter this yourself\" and is listed in withheld.",
+			"Opening: with a live hub and extension connected, the hub serves the",
+			"sheet on an unguessable 127.0.0.1 URL and the extension opens it beside",
+			"the driven tab, in Chrome's split view on Chrome 155+ (opened_as split),",
+			"else as the adjacent tab (beside); without a hub the file opens (file).",
+			"Tip: keep the sheet and the form side by side (split view) and paste",
+			"down the page; a copied field greys out so you can see what is left.",
 		},
 	},
 	"setup": {

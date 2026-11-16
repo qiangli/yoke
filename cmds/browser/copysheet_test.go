@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ func isolateCopySheet(t *testing.T) (dir string, opened *[]string) {
 	copySheetDir = func() string { return dir }
 	var urls []string
 	hooks.openURL = func(u string) error { urls = append(urls, u); return nil }
+	hooks.openBeside = func(int, string) (string, error) { return "", errors.New("no hub") }
 	return dir, &urls
 }
 
@@ -152,7 +154,7 @@ func TestUnscriptableTypeQueuesOnTheCopySheet(t *testing.T) {
 	run := func(a wire.Action) (string, int) {
 		var out, errb bytes.Buffer
 		rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}}
-		code, ok := queueCopyField(rc, context.Background(), c, a, cause, false, false)
+		code, ok := queueCopyField(rc, context.Background(), c, a, cause, 0, false, false)
 		if !ok {
 			t.Fatalf("%+v not queued", a)
 		}
@@ -190,17 +192,17 @@ func TestUnscriptableTypeQueuesOnTheCopySheet(t *testing.T) {
 
 	var out2, errb2 bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out2, Err: &errb2}}
-	if _, ok := queueCopyField(rc, context.Background(), c, wire.Action{Type: wire.ActionType, Selector: "#q", Text: "x"}, "no element matches selector", false, false); ok {
+	if _, ok := queueCopyField(rc, context.Background(), c, wire.Action{Type: wire.ActionType, Selector: "#q", Text: "x"}, "no element matches selector", 0, false, false); ok {
 		t.Fatal("an ordinary failure must not be queued")
 	}
-	if _, ok := queueCopyField(rc, context.Background(), c, wire.Action{Type: wire.ActionClick, Selector: "#q"}, cause, false, false); ok {
+	if _, ok := queueCopyField(rc, context.Background(), c, wire.Action{Type: wire.ActionClick, Selector: "#q"}, cause, 0, false, false); ok {
 		t.Fatal("only type/select carry a value to paste")
 	}
 	// --json carries the sentence the agent relays; --no-open on a new page
 	// opens nothing.
 	var out3 bytes.Buffer
 	rc3 := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out3, Err: &errb2}}
-	code, ok := queueCopyField(rc3, context.Background(), fakeTabs{url: "https://second.example/form"}, wire.Action{Type: wire.ActionType, Selector: "#city", Text: "Springfield"}, cause, true, true)
+	code, ok := queueCopyField(rc3, context.Background(), fakeTabs{url: "https://second.example/form"}, wire.Action{Type: wire.ActionType, Selector: "#city", Text: "Springfield"}, cause, 0, true, true)
 	var env struct {
 		OutcomeClass string `json:"outcome_class"`
 		TellUser     string `json:"tell_user"`
@@ -210,5 +212,24 @@ func TestUnscriptableTypeQueuesOnTheCopySheet(t *testing.T) {
 	}
 	if len(*opened) != 1 {
 		t.Fatal("--no-open opened the new page's sheet")
+	}
+}
+
+// With a connected hub the sheet opens beside the form, not as a file.
+func TestCopySheetOpensBesideTheFormThroughTheHub(t *testing.T) {
+	_, opened := isolateCopySheet(t)
+	var gotPort int
+	hooks.openBeside = func(port int, path string) (string, error) { gotPort = port; return "split", nil }
+	in := writeSheetInput(t, map[string]any{"fields": []map[string]any{{"label": "Name", "value": "Ada"}}})
+	out, errb, code := runTool(t, "--json", "--live-port", "58099", "copysheet", in)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	var env struct {
+		OpenedAs string `json:"opened_as"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	if env.OpenedAs != "split" || gotPort != 58099 || len(*opened) != 0 {
+		t.Fatalf("opened_as=%q port=%d file opens=%v", env.OpenedAs, gotPort, *opened)
 	}
 }

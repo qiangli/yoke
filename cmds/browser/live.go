@@ -57,15 +57,17 @@ func browserHub(rc *tool.RunContext, ctx context.Context, args []string, livePor
 // setupHooks are the desktop side effects of `setup live`, swappable so
 // tests never launch Chrome or touch the clipboard.
 type setupHooks struct {
-	openExtensions func() error            // open chrome://extensions in Chrome
-	openURL        func(url string) error  // open a web page in Chrome
-	reveal         func(dir string) error  // show the folder in Finder/Explorer
-	copyText       func(text string) error // put the path on the clipboard
+	openExtensions func() error                                // open chrome://extensions in Chrome
+	openURL        func(url string) error                      // open a web page in Chrome
+	openBeside     func(port int, path string) (string, error) // serve a sheet via the hub, open it beside the form
+	reveal         func(dir string) error                      // show the folder in Finder/Explorer
+	copyText       func(text string) error                     // put the path on the clipboard
 }
 
 var hooks = setupHooks{
 	openExtensions: func() error { return openInChrome("chrome://extensions") },
 	openURL:        openInChrome,
+	openBeside:     openSheetBeside,
 	reveal:         revealFolder,
 	copyText:       copyToClipboard,
 }
