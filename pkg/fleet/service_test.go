@@ -63,7 +63,7 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 		"apps": 22749, "meet": 8637, "llm": 24556, "loom": 31880,
 		"zot": 5000, "seaweedfs": 8333, "kopia": 51515, "otel-stack": 31415,
 		"browser-hub":      58082,
-		"browser-hub-edge": 58083,
+		"browser-hub-edge": 58084,
 	}
 	cat := New(serviceOpts(root)...)
 	for name, want := range ports {

@@ -42,10 +42,21 @@ import (
 // connects to.
 const DefaultPort = 58082
 
-// EdgePort is Microsoft Edge's hub port: each browser's extension dials its
-// own hub, so Chrome (DefaultPort) and Edge stay connected at once
-// (`bashy browser --browser edge …`, outpost's browser-hub-edge service).
-const EdgePort = 58083
+// Each browser dials its own hub so several stay connected at once. The
+// port is 58081 + (the browser's first letter - 'b'): brave 58081, chrome
+// 58082 (DefaultPort), edge 58084 (`bashy browser --browser edge …`,
+// outpost's browser-hub-edge service).
+const EdgePort = 58084
+
+// BrowserPort returns the hub port for a browser name by that rule, or 0
+// for a name it does not know.
+func BrowserPort(name string) int {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "brave", "chrome", "chromium", "edge":
+		return 58081 + int(strings.ToLower(name)[0]-'b')
+	}
+	return 0
+}
 
 // LiveExtensionMinVersion is the minimum acceptable extension version.
 // The hub refuses to dispatch to any older version with an actionable

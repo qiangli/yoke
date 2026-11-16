@@ -8,10 +8,10 @@
 
 importScripts("frames.js"); // frameOrder, locateIndex, totalCount, mergeExtract
 
-// Each browser gets its own hub port so Chrome and Edge can both stay
-// connected: Edge 58083, everything else 58082 (outpost runs a hub on each).
-const IS_EDGE = /\bEdg\//.test((self.navigator && navigator.userAgent) || "");
-const DEFAULT_PORT = IS_EDGE ? 58083 : 58082;
+// Each browser gets its own hub port so several stay connected at once:
+// 58081 + (first letter - 'b') — brave 58081, chrome 58082, edge 58084.
+const UA = (self.navigator && navigator.userAgent) || "";
+const DEFAULT_PORT = /\bEdg\//.test(UA) ? 58084 : (self.navigator && navigator.brave) ? 58081 : 58082;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
 const KEEPALIVE_PERIOD_MIN = 25 / 60; // 25 seconds, expressed in minutes
@@ -123,7 +123,7 @@ async function restoreIntent() {
     if (!liveIntent || !liveIntent.want || wantConnected) return;
     wantConnected = true;
     // A port the user never chose follows this browser's default (an Edge
-    // copy that remembered the old shared 58082 moves to 58083).
+    // copy that remembered the old shared 58082 moves to 58084).
     const { portSetByUser } = await chrome.storage.local.get("portSetByUser");
     connectedPort = (portSetByUser && liveIntent.port) || DEFAULT_PORT;
     if (liveIntent.tabId) activeTabId = liveIntent.tabId; // stale ids fall back in targetTab()

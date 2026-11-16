@@ -36,7 +36,7 @@ var serviceDefaultsGolden = map[string]serviceDefaultGolden{
 	"actrunner":        {false, "opt-in: the runner joins only when the operator points it at work", kv{"forge_unit": "loom", "labels": "host:host", "sandbox": "false", "docker_host": ""}},
 	"apps":             {true, "default-on: paired hosts need the human front door after an upgrade", kv{"pair": "false", "launcher": ""}},
 	"browser-hub":      {true, "default-on (S529.10, operator 2026-11-16): the hub only listens on loopback and the extension acts only after the user presses Connect; on/off is the hub's logical gate (tray or `bashy browser hub pause|resume`), not process control", nil},
-	"browser-hub-edge": {true, "default-on (S529.2, operator 2026-11-16): Edge's own hub on 58083 so Chrome and Edge stay connected at once; same logical gate as browser-hub", nil},
+	"browser-hub-edge": {true, "default-on (S529.2, operator 2026-11-16): Edge's own hub on 58084 (58081 + 'e'-'b') so Chrome and Edge stay connected at once; same logical gate as browser-hub", nil},
 	"events":           {false, "opt-in: the event bus has no subscriber until the operator wires one", nil},
 	"files":            {true, "default-on: pre-418 FilesOn defaulted on; embedded file manager is base host", kv{"scope": "", "allow_write": "false"}},
 	"headlamp":         {false, "opt-in: the cluster dashboard needs an operator-attached cluster", kv{"kubeconfig": "", "namespace": "headlamp", "target": "svc/headlamp"}},

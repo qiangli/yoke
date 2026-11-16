@@ -110,7 +110,7 @@ func TestHubGateCommandsWithoutAHub(t *testing.T) {
 	}
 }
 
-// --browser edge addresses Edge's own hub (58083) unless --live-port wins.
+// --browser picks 58081 + (first letter - 'b'); --live-port wins.
 func TestBrowserEdgePicksTheEdgeHubPort(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
 	port := func(args ...string) float64 {
@@ -122,8 +122,11 @@ func TestBrowserEdgePicksTheEdgeHubPort(t *testing.T) {
 		}
 		return st["port"].(float64)
 	}
-	if p := port("--browser", "edge"); p != 58083 {
-		t.Fatalf("--browser edge port = %v, want 58083", p)
+	if p := port("--browser", "edge"); p != 58084 {
+		t.Fatalf("--browser edge port = %v, want 58084", p)
+	}
+	if p := port("--browser", "brave"); p != 58081 {
+		t.Fatalf("--browser brave port = %v, want 58081", p)
 	}
 	if p := port("--browser", "chrome"); p != 58082 {
 		t.Fatalf("--browser chrome port = %v, want 58082", p)

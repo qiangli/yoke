@@ -28,9 +28,10 @@ if (isWindowed) {
   popoutEl.style.display = "none";
 }
 
-// Each browser has its own hub port: Edge 58083, others 58082. A port the
+// Each browser has its own hub port, 58081 + (first letter - 'b'): brave
+// 58081, chrome 58082, edge 58084. A port the
 // user typed is kept; otherwise the field shows this browser's default.
-const DEFAULT_HUB_PORT = /\bEdg\//.test(navigator.userAgent) ? 58083 : 58082;
+const DEFAULT_HUB_PORT = /\bEdg\//.test(navigator.userAgent) ? 58084 : navigator.brave ? 58081 : 58082;
 portEl.value = DEFAULT_HUB_PORT;
 chrome.storage.local.get(["port", "portSetByUser"], ({ port, portSetByUser }) => {
   if (portSetByUser && typeof port === "number" && port > 0) portEl.value = port;
