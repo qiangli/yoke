@@ -1,0 +1,74 @@
+{
+  "title": "bashy live — Microsoft Edge Add-ons fields",
+  "intro": "Partner Center → Microsoft Edge → Create new extension. Upload ~/Downloads/bashy-live-0.11.6.zip, then paste each value. Logo: ~/Downloads/bashy-live-edge-logo-300.png. Screenshots: ~/Downloads/bashy-live-1/2/3-*.png (1280×800).",
+  "sections": [
+    {
+      "name": "Properties",
+      "fields": [
+        {
+          "label": "Category",
+          "value": "Developer tools"
+        },
+        {
+          "label": "Privacy policy URL",
+          "value": "https://github.com/qiangli/yoke/blob/main/docs/browser-extension-privacy.md"
+        },
+        {
+          "label": "Website URL",
+          "value": "https://github.com/qiangli/bashy"
+        },
+        {
+          "label": "Support contact (URL)",
+          "value": "https://github.com/qiangli/yoke/issues"
+        },
+        {
+          "label": "Mature content",
+          "value": "No"
+        }
+      ]
+    },
+    {
+      "name": "Store listing (English)",
+      "fields": [
+        {
+          "label": "Description",
+          "value": "bashy live is the companion that lets bashy, the agentic shell on your computer, work on web pages in your real, signed-in browser.\n\nFill in forms: tell bashy what to enter and it fills the fields for you, on the sites where you are already signed in. Before it types into a password, payment or other secret field, it asks you first.\n\nIt can also read a page's text, click, scroll, take screenshots and, when you ask, read a site's cookies after you sign in.\n\nHow it works: run \"bashy browser hub\", then press Connect in this extension's popup on the tab you want bashy to work on. The extension talks only to bashy on your machine (127.0.0.1). It contacts no other server, has no analytics and runs no remote code. Typed and clipboard values are logged by length only.\n\nOpen source (Apache-2.0): https://github.com/qiangli/yoke",
+          "note": "Edge requires at least 250 characters."
+        },
+        {
+          "label": "Short description",
+          "value": "bashy's companion for web pages: lets bashy on your computer read pages and fill in forms in this browser. Talks only to 127.0.0.1.",
+          "note": "If the form has a short-description field."
+        },
+        {
+          "label": "Search terms",
+          "value": "bashy\nform filling\nbrowser automation\nagent\nlocal automation\ncopy paste\nproductivity",
+          "note": "One per line, up to 7 terms."
+        }
+      ]
+    },
+    {
+      "name": "Availability",
+      "fields": [
+        {
+          "label": "Visibility",
+          "value": "Hidden",
+          "note": "Edge's word for unlisted: installable by link, not in search. Public later."
+        },
+        {
+          "label": "Markets",
+          "value": "All markets"
+        }
+      ]
+    },
+    {
+      "name": "Submit",
+      "fields": [
+        {
+          "label": "Notes for certification",
+          "value": "bashy live is a companion for bashy, a local command-line program; on its own the extension stays idle. To test: (1) install bashy (https://github.com/qiangli/bashy), (2) run `bashy browser hub` (Edge uses port 58084: `bashy browser --browser edge hub`), (3) open any page with a form, click the extension icon and press Connect this tab, (4) run `bashy browser --browser edge --mode live navigate https://example.com` or `type '#field' 'text'`. The extension talks only to 127.0.0.1 (the user's own bashy), sends nothing to any server and runs no remote code. Before typing into password, payment or other secret fields bashy asks the user first. The debugger permission is used for trusted keystrokes, background-tab screenshots and reading the driven tab's network/console when the user asks; host access is needed because the user chooses the sites at run time."
+        }
+      ]
+    }
+  ]
+}
