@@ -600,7 +600,8 @@ func gatewayRunEffects(d gatewayDirective) (effects, gated []string, err error) 
 	if !ok || len(entry.Effects) == 0 {
 		return nil, nil, fmt.Errorf("unknown atlas verb %q", d.Args.Argv[0])
 	}
-	return entry.Effects, gatewayGatedEffects(entry.Effects), nil
+	effects = atlas.NarrowEffects(d.Args.Argv, entry.Effects)
+	return effects, gatewayGatedEffects(effects), nil
 }
 
 func (g *gatewayConductor) cancel(ctx context.Context, d gatewayDirective) error {

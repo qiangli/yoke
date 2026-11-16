@@ -308,6 +308,39 @@ func ResolveOutputShape(argv []string) OutputShape {
 	return ShapeResult
 }
 
+// readOnlySubcommands lists the subcommands of mixed verbs that only read.
+// Atlas effects are per verb and record the worst case over the whole
+// surface, so `desktop get` would otherwise inherit desktop's write and
+// `shape show` shape's destroy/spend, and every gateway or MCP call to
+// them would need an approval. Positive-only and small: a subcommand not
+// listed keeps the verb's worst case. Subcommands that run code (shape
+// verify, shape preview) are deliberately absent.
+var readOnlySubcommands = map[string]map[string]bool{
+	"desktop": {"schema": true, "get": true, "catalog": true, "history": true, "allowance": true, "pages": true, "result": true},
+	"shape":   {"show": true, "diff": true},
+	"todo":    {"list": true, "show": true},
+	"sprint":  {"show": true, "board": true},
+}
+
+// NarrowEffects returns the effects that govern argv. For a listed read-only
+// subcommand of a mixed verb it keeps only base's read-side effects (pure,
+// read, net); otherwise it returns base unchanged. It never adds an effect.
+func NarrowEffects(argv []string, base []string) []string {
+	if len(argv) < 2 || !readOnlySubcommands[argv[0]][argv[1]] {
+		return base
+	}
+	out := []string{}
+	for _, e := range base {
+		if e == EffPure || e == EffRead || e == EffNet {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, EffRead)
+	}
+	return out
+}
+
 // Idiom is one curated composite: commands naturally used together.
 type Idiom struct {
 	ID       string   `json:"id"`

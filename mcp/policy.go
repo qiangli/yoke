@@ -229,7 +229,7 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				return next(ctx, method, req)
 			}
 			record.Command = in.Name
-			record.Effects = (*Policy)(nil).commandEffects(in.Name)
+			record.Effects = atlas.NarrowEffects(append([]string{in.Name}, in.Args...), (*Policy)(nil).commandEffects(in.Name))
 			if denial := p.Check(in.Name, record.Effects); denial != nil {
 				if res, ok := p.gatedResult(in.Name, record.Effects); ok {
 					record.Denial = denial.Error()
@@ -241,7 +241,11 @@ func (p *Policy) middleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 				return res, nil
 			}
 		default:
-			record.Effects = p.commandEffects(record.Command)
+			var verb struct {
+				Args []string `json:"args"`
+			}
+			_ = json.Unmarshal(call.Params.Arguments, &verb)
+			record.Effects = atlas.NarrowEffects(append([]string{record.Command}, verb.Args...), p.commandEffects(record.Command))
 			if denial := p.Check(record.Command, record.Effects); denial != nil {
 				if res, ok := p.gatedResult(record.Command, record.Effects); ok {
 					record.Denial = denial.Error()
