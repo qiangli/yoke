@@ -444,3 +444,48 @@ func openSheet(port int, path string) string {
 	}
 	return ""
 }
+
+// browserBeside handles `bashy browser beside FILE.html` (S529.12): any
+// agent-made view (a summary, a poster-style digest, a translation, notes)
+// opened beside the original page. The file is copied into the sheet dir so
+// the live hub may serve it, then opened like a copy sheet: Chrome split
+// view next to the driven tab, else the adjacent tab, else the file.
+func browserBeside(rc *tool.RunContext, args []string, port int, noOpen, asJSON bool) int {
+	if len(args) != 1 {
+		fmt.Fprintln(rc.Err, "browser beside: want exactly one operand: an .html file")
+		return 2
+	}
+	src := args[0]
+	if !filepath.IsAbs(src) && rc.Dir != "" {
+		src = filepath.Join(rc.Dir, src)
+	}
+	ext := strings.ToLower(filepath.Ext(src))
+	if ext != ".html" && ext != ".htm" {
+		fmt.Fprintln(rc.Err, "browser beside: the view must be a self-contained .html page")
+		return 2
+	}
+	b, err := os.ReadFile(src)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "browser beside: %v\n", err)
+		return 1
+	}
+	dir := copySheetDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(rc.Err, "browser beside: %v\n", err)
+		return 1
+	}
+	out := filepath.Join(dir, "view-"+copySheetSlug(strings.TrimSuffix(filepath.Base(src), filepath.Ext(src)))+".html")
+	if err := os.WriteFile(out, b, 0o600); err != nil {
+		fmt.Fprintf(rc.Err, "browser beside: %v\n", err)
+		return 1
+	}
+	openedAs := ""
+	if !noOpen {
+		openedAs = openSheet(port, out)
+	}
+	if asJSON {
+		return writeJSON(rc, map[string]any{"success": true, "path": out, "opened": openedAs != "", "opened_as": openedAs})
+	}
+	fmt.Fprintln(rc.Out, out)
+	return 0
+}

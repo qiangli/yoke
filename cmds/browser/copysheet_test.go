@@ -233,3 +233,25 @@ func TestCopySheetOpensBesideTheFormThroughTheHub(t *testing.T) {
 		t.Fatalf("opened_as=%q port=%d file opens=%v", env.OpenedAs, gotPort, *opened)
 	}
 }
+
+func TestBesideOpensAViewNextToThePage(t *testing.T) {
+	dir, _ := isolateCopySheet(t)
+	var gotPath string
+	hooks.openBeside = func(port int, path string) (string, error) { gotPath = path; return "split", nil }
+	src := filepath.Join(t.TempDir(), "Poster Digest.html")
+	_ = os.WriteFile(src, []byte("<h1>digest</h1>"), 0o644)
+	out, errb, code := runTool(t, "--json", "beside", src)
+	var env struct {
+		Path     string `json:"path"`
+		OpenedAs string `json:"opened_as"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &env) != nil || env.OpenedAs != "split" || filepath.Dir(env.Path) != dir || gotPath != env.Path {
+		t.Fatalf("exit %d out %q err %q", code, out, errb)
+	}
+	if b, _ := os.ReadFile(env.Path); string(b) != "<h1>digest</h1>" {
+		t.Fatal("view not copied into the sheet dir")
+	}
+	if _, _, code := runTool(t, "beside", filepath.Join(t.TempDir(), "notes.md")); code != 2 {
+		t.Fatalf("a non-HTML view: exit %d, want 2", code)
+	}
+}

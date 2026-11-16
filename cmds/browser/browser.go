@@ -35,7 +35,7 @@ var cmd = &tool.Tool{
 		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
 		"\n" +
 		"Subcommands: status stop navigate extract text eval dispatch-event click type select wait-for-selector\n" +
-		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login copysheet\n" +
+		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login copysheet beside\n" +
 		"Each has its OWN page: `browser <subcommand> --help` documents its operands,\n" +
 		"which modes implement it, and its output contract.\n" +
 		"(--json emits {success,title,url,content,error}; `bashy fetch URL` is the non-browser HTTP client.)\n" +
@@ -167,6 +167,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return browserHub(rc, ctx, operands[1:], *livePort, *asJSON)
 	case "setup":
 		return browserSetup(rc, operands[1:], *asJSON, *noOpen, *unpacked)
+	case "beside":
+		return browserBeside(rc, operands[1:], *livePort, *noOpen, *asJSON)
 	case "copysheet":
 		return browserCopySheet(rc, operands[1:], *output, *livePort, *noOpen, *asJSON)
 	case "fetch":

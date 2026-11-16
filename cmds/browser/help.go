@@ -250,6 +250,20 @@ var subcommands = map[string]subcommand{
 		Mode: "live",
 		Out:  "progress on stdout, diagnostics on stderr (this is the ONLY subcommand that logs)",
 	},
+	"beside": {
+		Name: "beside", Args: "[--no-open] <view.html>",
+		One:  "open an agent-made view (summary, poster-style digest, translation, notes) beside the original page",
+		Mode: "any",
+		Out:  "the view's served path on stdout; --json emits {success,path,opened,opened_as}",
+		Body: []string{
+			"The agent writes ONE self-contained HTML page (inline CSS, no external",
+			"scripts) in whatever format suits the reader, e.g. a poster-style digest",
+			"of a long article, a summary, a translation, notes or a comparison table.",
+			"With a live hub and extension connected it opens in Chrome's split view",
+			"beside the driven tab (opened_as split; else beside, else the file).",
+			"Same mechanism as `copysheet`.",
+		},
+	},
 	"copysheet": {
 		Name: "copysheet", Args: "[--output PATH] [--no-open] <file.json|->",
 		One:  "write a copy/paste page for a form bashy can read but not fill, and open it beside the live page",
