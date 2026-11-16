@@ -55,4 +55,8 @@ type extHello struct {
 	Version     string   `json:"version"`
 	Methods     []string `json:"methods,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
+	// InstallType is chrome.management.getSelf().installType: "development"
+	// for a Load-unpacked copy, "normal" for a store install; empty from
+	// extensions older than 0.11.0.
+	InstallType string `json:"install_type,omitempty"`
 }

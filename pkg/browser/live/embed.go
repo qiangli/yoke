@@ -72,6 +72,11 @@ func DefaultExtractDir() string {
 
 // EmbeddedVersion is the version of the extension shipped in this
 // binary (its manifest.json).
+// ChromeWebStoreURL is the extension's Chrome Web Store page. Empty until
+// the listing is published (todo b4e290d6); while empty, `browser setup
+// live` keeps the Load-unpacked path.
+var ChromeWebStoreURL = ""
+
 func EmbeddedVersion() string {
 	b, err := extensionFS.ReadFile("extension/manifest.json")
 	if err != nil {

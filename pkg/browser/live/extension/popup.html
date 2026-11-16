@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>ycode live</title>
+  <title>bashy live</title>
   <style>
     body { font: 13px -apple-system, system-ui, sans-serif; width: 420px; margin: 0; padding: 12px; box-sizing: border-box; }
     body.windowed { width: 100%; min-width: 360px; height: 100vh; display: flex; flex-direction: column; }
@@ -41,8 +41,8 @@
   </style>
 </head>
 <body>
-  <h1>ycode live <span class="version" id="version"></span></h1>
-  <label for="port">ycode port</label>
+  <h1>bashy live <span class="version" id="version"></span></h1>
+  <label for="port">bashy hub port</label>
   <input id="port" type="number" min="1" max="65535" value="58082" />
   <div style="margin-top: 10px;">
     <button id="connect">Connect this tab</button>
@@ -60,7 +60,7 @@
   </div>
   <div class="hint">
     Pin this extension and click <strong>Connect this tab</strong> on
-    whichever tab you want ycode to drive. The websocket connects to
+    whichever tab you want bashy to drive. The websocket connects to
     <code>127.0.0.1:&lt;port&gt;</code>.
   </div>
   <script src="popup.js"></script>

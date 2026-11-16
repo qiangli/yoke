@@ -3,7 +3,7 @@ id: b4e290d640e7
 kind: feature
 title: 'S529.1 Chrome Web Store listing: publish the live extension so install is one click (no Developer mode / Load unpacked)'
 seq: 2825
-status: todo
+status: doing
 priority: p1
 labels:
     - browser

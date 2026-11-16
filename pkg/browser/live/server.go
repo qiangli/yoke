@@ -34,6 +34,7 @@ type hub struct {
 	extVersion     string
 	extMethods     []string
 	extPermissions []string
+	extInstallType string
 
 	// helloReceived is closed when the current connection's `_hello`
 	// frame has been parsed. Re-created on every handleWS, so each
@@ -93,6 +94,7 @@ func (h *hub) start(ctx context.Context) error {
 			"methods_count": len(methods),
 			"min_version":   LiveExtensionMinVersion,
 			"stale":         stale,
+			"install_type":  h.ExtInstallType(),
 		})
 	})
 	// /dispatch is the cross-process bridge: a client in a separate
@@ -158,6 +160,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	h.extVersion = ""
 	h.extMethods = nil
 	h.extPermissions = nil
+	h.extInstallType = ""
 	h.helloReceived = make(chan struct{})
 	h.mu.Unlock()
 	logInfo("live: extension connected", "remote", r.RemoteAddr, "takeover", takeover)
@@ -300,12 +303,13 @@ func (h *hub) handleUnsolicited(resp wsResponse) {
 	h.extVersion = hi.Version
 	h.extMethods = hi.Methods
 	h.extPermissions = hi.Permissions
+	h.extInstallType = hi.InstallType
 	hr := h.helloReceived
 	h.mu.Unlock()
 	if firstHello && hr != nil {
 		close(hr)
 	}
-	logInfo("live: extension hello", "version", hi.Version, "methods", len(hi.Methods))
+	logInfo("live: extension hello", "version", hi.Version, "methods", len(hi.Methods), "install_type", hi.InstallType)
 	if dir, ok := h.planReload(hi); ok {
 		go h.hotReload(dir, hi.Version)
 	}
@@ -318,6 +322,14 @@ func (h *hub) handleUnsolicited(resp wsResponse) {
 func (h *hub) planReload(hi extHello) (string, bool) {
 	want := EmbeddedVersion()
 	if hi.Version == "" || want == "" || !versionLess(hi.Version, want) {
+		return "", false
+	}
+	// Only an unpacked copy runs the folder the hub refreshes. A store
+	// install is updated by the store; reloading it would just restart the
+	// same version (todo b4e290d6).
+	if hi.InstallType != "" && hi.InstallType != "development" {
+		logInfo("live: extension is older than this bashy; the store updates it",
+			"version", hi.Version, "shipped", want, "install_type", hi.InstallType)
 		return "", false
 	}
 	if !slices.Contains(hi.Methods, "reload") {
@@ -373,6 +385,15 @@ func (h *hub) ExtVersion() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.extVersion
+}
+
+// ExtInstallType returns the connected extension's install type
+// ("development" for Load unpacked, "normal" for a store install), or ""
+// before its _hello or from an extension older than 0.11.0.
+func (h *hub) ExtInstallType() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.extInstallType
 }
 
 // ExtMethods returns the dispatch table reported by the extension's

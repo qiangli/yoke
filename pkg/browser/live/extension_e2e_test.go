@@ -154,6 +154,11 @@ func startExtensionE2E(t *testing.T, fixtures map[string]string, path string) (*
 	if got, want := svc.hub.ExtVersion(), EmbeddedVersion(); got != want {
 		t.Fatalf("connected extension v%s, shipped v%s", got, want)
 	}
+	// A --load-extension copy is an unpacked one: the hub must see it as
+	// "development" so it keeps hot-reloading it (store installs are not).
+	if got := svc.hub.ExtInstallType(); got != "development" {
+		t.Fatalf("hello install_type = %q, want development", got)
+	}
 	return svc, ctx
 }
 
@@ -212,7 +217,7 @@ func ourWorker(t *testing.T, ctx context.Context) (target.ID, string) {
 		var name string
 		err := chromedp.Run(wctx, chromedp.Evaluate(`chrome.runtime.getManifest().name`, &name))
 		cancel()
-		if err == nil && name == "ycode-live" {
+		if err == nil && name == "bashy live" {
 			return ti.TargetID, ti.URL[:strings.LastIndex(ti.URL, "/")+1]
 		}
 	}

@@ -39,8 +39,15 @@ func TestPackExtensionZipIsReproducible(t *testing.T) {
 			t.Errorf("zip lacks %s at its root (Web Store needs manifest.json at top)", want)
 		}
 	}
-	if names["README.md"] {
-		t.Error("developer README shipped in the release zip")
+	for _, dev := range []string{"README.md", "page.go", "stitch_test.cjs"} {
+		if names[dev] {
+			t.Errorf("developer file %s shipped in the release zip", dev)
+		}
+	}
+	for _, icon := range []string{"icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png"} {
+		if !names[icon] {
+			t.Errorf("zip lacks %s (the manifest and the store listing need it)", icon)
+		}
 	}
 }
 

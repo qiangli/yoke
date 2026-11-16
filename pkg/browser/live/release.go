@@ -63,17 +63,22 @@ func CheckReleaseVersion() (string, error) {
 	return v, nil
 }
 
+// devOnlyFile reports an embedded extension file the browser never loads.
+func devOnlyFile(p string) bool {
+	return p == "extension/README.md" || strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.cjs")
+}
+
 // PackExtensionZip returns a reproducible zip of the embedded extension,
 // rooted at the extension directory (manifest.json at the top, as the
-// Chrome Web Store requires). README.md is developer documentation and is
-// not shipped.
+// Chrome Web Store requires). Developer-only files are not shipped: the
+// README, the Go embed shim (page.go) and the JS tests (*_test.cjs).
 func PackExtensionZip() ([]byte, error) {
 	var names []string
 	err := fs.WalkDir(extensionFS, "extension", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && p != "extension/README.md" {
+		if !d.IsDir() && !devOnlyFile(p) {
 			names = append(names, p)
 		}
 		return nil

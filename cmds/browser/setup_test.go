@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/browser/live"
 )
 
 func TestSetupLiveWalksTheHumanThrough(t *testing.T) {
@@ -53,5 +55,36 @@ func TestSetupLiveNoOpenAndBestEffort(t *testing.T) {
 	out, _, code := runTool(t, "setup", "live", filepath.Join(t.TempDir(), "b"))
 	if code != 0 || calls != 3 || !strings.Contains(out, "1. chrome://extensions") || strings.Contains(out, "(opened") {
 		t.Fatalf("best-effort desktop steps: exit %d calls %d\n%s", code, calls, out)
+	}
+}
+
+// With a store listing, setup sends the human to the store (one click, the
+// store keeps it current); --unpacked keeps the developer path.
+func TestSetupLiveUsesTheStoreWhenListed(t *testing.T) {
+	savedHooks, savedURL := hooks, live.ChromeWebStoreURL
+	t.Cleanup(func() { hooks, live.ChromeWebStoreURL = savedHooks, savedURL })
+	live.ChromeWebStoreURL = "https://chromewebstore.google.com/detail/example"
+	var opened string
+	hooks = setupHooks{
+		openExtensions: func() error { t.Fatal("store path opened chrome://extensions"); return nil },
+		openURL:        func(u string) error { opened = u; return nil },
+		reveal:         func(string) error { return nil },
+		copyText:       func(string) error { return nil },
+	}
+	dir := filepath.Join(t.TempDir(), "ext")
+	out, errOut, code := runTool(t, "setup", "live", dir)
+	if code != 0 || opened != live.ChromeWebStoreURL || !strings.Contains(out, "1. Add to Chrome") {
+		t.Fatalf("store path: exit %d opened %q\n%s%s", code, opened, out, errOut)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("store path must not extract the unpacked copy")
+	}
+	hooks.openExtensions = func() error { return nil }
+	out, _, code = runTool(t, "--unpacked", "setup", "live", dir)
+	if code != 0 || !strings.Contains(out, "1. chrome://extensions") {
+		t.Fatalf("--unpacked: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+		t.Fatalf("--unpacked did not extract: %v", err)
 	}
 }

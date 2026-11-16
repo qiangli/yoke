@@ -2,8 +2,9 @@
 
 Lets `bashy browser --mode live` drive **this** Chrome — your real,
 logged-in profile — through a local WebSocket to `bashy browser hub`.
-(The manifest name `ycode-live` and the folder `ycode-chrome-ext` are
-kept so an extension loaded before the bashy migration keeps working.)
+(The download folder `ycode-chrome-ext` keeps its pre-bashy name so an
+extension loaded from it keeps working; the manifest name is `bashy live`
+since 0.11.0.)
 
 ## License
 
@@ -22,8 +23,16 @@ bundles.
 3. On the tab to drive, click the extension icon → **Connect this tab**.
 
 Developer mode + Load unpacked is the one human step left; it goes away
-with a Chrome Web Store listing (the `chrome-ext-*` release targets
-build the upload package).
+with the Chrome Web Store listing. Once `live.ChromeWebStoreURL` is set,
+`bashy browser setup live` opens the store page instead, and
+`--unpacked` keeps this path for development. The `chrome-ext-release`
+dag target builds the upload zip; the listing text, permission
+justifications and operator steps are in `docs/chrome-web-store-listing.md`
+and the privacy policy in `docs/browser-extension-privacy.md`.
+
+A store install is updated by the store: the extension reports its
+install type in `_hello`, and the hub hot-reloads only unpacked
+(`development`) copies.
 
 ## After the first Connect
 

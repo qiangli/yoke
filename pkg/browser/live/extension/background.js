@@ -135,19 +135,31 @@ function openWS() {
     // _hello envelope — id == 0, method == "_hello", result carries
     // {version, methods, permissions}. The hub uses this to detect
     // version drift without a separate round-trip.
+    // install_type lets the hub tell a store install (updated by the
+    // store) from an unpacked copy (hot-reloaded from the bashy folder).
+    // getSelf needs no "management" permission.
+    const sock = ws;
+    const sendHello = (installType) => {
+      try {
+        const manifest = chrome.runtime.getManifest();
+        sock.send(JSON.stringify({
+          id: 0,
+          method: "_hello",
+          result: {
+            version: manifest.version,
+            methods: SUPPORTED_METHODS,
+            permissions: manifest.permissions || [],
+            install_type: installType,
+          },
+        }));
+      } catch (e) {
+        console.warn("ycode-live: _hello send failed", e);
+      }
+    };
     try {
-      const manifest = chrome.runtime.getManifest();
-      ws.send(JSON.stringify({
-        id: 0,
-        method: "_hello",
-        result: {
-          version: manifest.version,
-          methods: SUPPORTED_METHODS,
-          permissions: manifest.permissions || [],
-        },
-      }));
+      chrome.management.getSelf().then((self) => sendHello(self.installType || ""), () => sendHello(""));
     } catch (e) {
-      console.warn("ycode-live: _hello send failed", e);
+      sendHello("");
     }
   };
   ws.onmessage = onMessage;

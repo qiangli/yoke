@@ -54,3 +54,16 @@ func TestPlanReloadOncePerVersion(t *testing.T) {
 		t.Fatal("a current extension must not be reloaded")
 	}
 }
+
+// A store install is updated by the store, not from the folder the hub
+// refreshes, so only an unpacked ("development") copy is hot-reloaded.
+func TestPlanReloadSkipsStoreInstalls(t *testing.T) {
+	h := newHub(0)
+	h.reloadDir = t.TempDir()
+	if _, ok := h.planReload(extHello{Version: "0.7.9", Methods: []string{"reload"}, InstallType: "normal"}); ok {
+		t.Fatal("a store install must not be hot-reloaded")
+	}
+	if _, ok := h.planReload(extHello{Version: "0.7.9", Methods: []string{"reload"}, InstallType: "development"}); !ok {
+		t.Fatal("a stale unpacked copy must still be hot-reloaded")
+	}
+}

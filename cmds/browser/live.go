@@ -58,11 +58,17 @@ func browserHub(rc *tool.RunContext, ctx context.Context, args []string, livePor
 // tests never launch Chrome or touch the clipboard.
 type setupHooks struct {
 	openExtensions func() error            // open chrome://extensions in Chrome
+	openURL        func(url string) error  // open a web page in Chrome
 	reveal         func(dir string) error  // show the folder in Finder/Explorer
 	copyText       func(text string) error // put the path on the clipboard
 }
 
-var hooks = setupHooks{openExtensions: openChromeExtensions, reveal: revealFolder, copyText: copyToClipboard}
+var hooks = setupHooks{
+	openExtensions: func() error { return openInChrome("chrome://extensions") },
+	openURL:        openInChrome,
+	reveal:         revealFolder,
+	copyText:       copyToClipboard,
+}
 
 // browserSetup handles `bashy browser setup live` — extract the embedded
 // extension and walk the human through the one-time Load unpacked step:
@@ -71,13 +77,25 @@ var hooks = setupHooks{openExtensions: openChromeExtensions, reveal: revealFolde
 // After that the extension reconnects and upgrades itself (the hub
 // refreshes the folder and asks it to reload). --no-open skips the
 // desktop actions (headless hosts, scripts).
-func browserSetup(rc *tool.RunContext, args []string, asJSON, noOpen bool) int {
+func browserSetup(rc *tool.RunContext, args []string, asJSON, noOpen, unpacked bool) int {
 	mode := "live"
 	if len(args) > 0 {
 		mode = args[0]
 	}
 	switch mode {
 	case "live":
+		if store := live.ChromeWebStoreURL; store != "" && !unpacked {
+			fmt.Fprintf(rc.Out, "install bashy live from the Chrome Web Store: %s\n", store)
+			if !noOpen && hooks.openURL(store) == nil {
+				fmt.Fprintln(rc.Out, "(opened the store page)")
+			}
+			fmt.Fprintln(rc.Out, "one-time, in Chrome:")
+			fmt.Fprintln(rc.Out, "  1. Add to Chrome")
+			fmt.Fprintln(rc.Out, "  2. on the tab to drive, click the extension icon → Connect this tab")
+			fmt.Fprintln(rc.Out, "then: bashy browser hub. The store keeps it current.")
+			fmt.Fprintln(rc.Out, "(developing the extension? `bashy browser setup live --unpacked` loads this binary's copy)")
+			return 0
+		}
 		dst := live.DefaultExtractDir()
 		if len(args) > 1 {
 			dst = args[1]
@@ -122,8 +140,7 @@ func browserSetup(rc *tool.RunContext, args []string, asJSON, noOpen bool) int {
 	}
 }
 
-func openChromeExtensions() error {
-	const url = "chrome://extensions"
+func openInChrome(url string) error {
 	switch goruntime.GOOS {
 	case "darwin":
 		return exec.Command("open", "-a", "Google Chrome", url).Run()
