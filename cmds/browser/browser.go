@@ -94,6 +94,7 @@ func run(rc *tool.RunContext, args []string) int {
 	mode := fs.String("mode", "solo", "browser mode: solo (zero-setup headless Chrome), probe, or live")
 	probeURL := fs.String("probe-url", probe.DefaultURL, "Chrome remote debugging URL for probe mode")
 	livePort := fs.Int("live-port", live.DefaultPort, "loopback port of the live-mode hub")
+	browserName := fs.String("browser", "", "live mode: chrome or edge — that browser's hub port (chrome 58082, edge 58083) unless --live-port is given")
 	chromePath := fs.String("chrome-path", "", "Chrome/Chromium/Edge executable path (normally auto-detected or provisioned)")
 	userDataDir := fs.String("user-data-dir", "", "browser profile directory (probe defaults to a persistent bashy cache path)")
 	headed := fs.Bool("headed", false, "run solo Chrome headed instead of headless")
@@ -132,6 +133,18 @@ func run(rc *tool.RunContext, args []string) int {
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if *browserName != "" {
+		portSet := fs.Changed("live-port")
+		switch strings.ToLower(*browserName) {
+		case "chrome", "chromium", "brave":
+		case "edge":
+			if !portSet {
+				*livePort = live.EdgePort
+			}
+		default:
+			return tool.UsageError(rc, cmd, "--browser %q: expected chrome or edge", *browserName)
+		}
 	}
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing subcommand; expected one of: %s", strings.Join(subcommandNames(), ", "))

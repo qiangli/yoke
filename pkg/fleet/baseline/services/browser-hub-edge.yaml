@@ -1,0 +1,18 @@
+name: browser-hub-edge
+kind: service
+description: Live-mode browser hub for Microsoft Edge on port 58083 (Chrome and other browsers use browser-hub on 58082), so both browsers stay connected at once; always on with outpost, switched on/off logically from the tray or `bashy browser --browser edge hub pause|resume`
+exec: [bashy, browser, --mode, live, --live-port, "{port}", hub]
+ports:
+  - name: ws
+    port: 58083
+    bind: loopback
+health:
+  tcp: true
+  interval: 10s
+  timeout: 2s
+  failures: 3
+restart:
+  policy: on-failure
+  backoff: {min: 1s, max: 30s, healthy_after: 30s}
+  start_limit: {burst: 5, interval: 5m}
+enabled: true

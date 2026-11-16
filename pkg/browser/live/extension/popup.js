@@ -28,8 +28,15 @@ if (isWindowed) {
   popoutEl.style.display = "none";
 }
 
-chrome.storage.local.get(["port"], ({ port }) => {
-  if (typeof port === "number" && port > 0) portEl.value = port;
+// Each browser has its own hub port: Edge 58083, others 58082. A port the
+// user typed is kept; otherwise the field shows this browser's default.
+const DEFAULT_HUB_PORT = /\bEdg\//.test(navigator.userAgent) ? 58083 : 58082;
+portEl.value = DEFAULT_HUB_PORT;
+chrome.storage.local.get(["port", "portSetByUser"], ({ port, portSetByUser }) => {
+  if (portSetByUser && typeof port === "number" && port > 0) portEl.value = port;
+});
+portEl.addEventListener("change", () => {
+  chrome.storage.local.set({ portSetByUser: parseInt(portEl.value, 10) !== DEFAULT_HUB_PORT });
 });
 
 function setStatus(cls, text) {
@@ -49,7 +56,7 @@ async function refreshStatus() {
 }
 
 connectBtn.addEventListener("click", async () => {
-  const port = parseInt(portEl.value, 10) || 58082;
+  const port = parseInt(portEl.value, 10) || DEFAULT_HUB_PORT;
   await chrome.storage.local.set({ port });
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabId = tabs.length > 0 ? tabs[0].id : null;

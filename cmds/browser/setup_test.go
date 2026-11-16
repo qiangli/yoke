@@ -109,3 +109,29 @@ func TestHubGateCommandsWithoutAHub(t *testing.T) {
 		t.Fatalf("resume: exit %d %q", code, out)
 	}
 }
+
+// --browser edge addresses Edge's own hub (58083) unless --live-port wins.
+func TestBrowserEdgePicksTheEdgeHubPort(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	port := func(args ...string) float64 {
+		t.Helper()
+		out, errb, code := runTool(t, append([]string{"--json"}, append(args, "hub", "status")...)...)
+		var st map[string]any
+		if code != 0 || json.Unmarshal([]byte(out), &st) != nil {
+			t.Fatalf("%v: exit %d %q %q", args, code, out, errb)
+		}
+		return st["port"].(float64)
+	}
+	if p := port("--browser", "edge"); p != 58083 {
+		t.Fatalf("--browser edge port = %v, want 58083", p)
+	}
+	if p := port("--browser", "chrome"); p != 58082 {
+		t.Fatalf("--browser chrome port = %v, want 58082", p)
+	}
+	if p := port("--browser", "edge", "--live-port", "59999"); p != 59999 {
+		t.Fatalf("--live-port must win, got %v", p)
+	}
+	if _, _, code := runTool(t, "--browser", "safari", "hub", "status"); code != 2 {
+		t.Fatalf("unknown browser: exit %d, want 2", code)
+	}
+}

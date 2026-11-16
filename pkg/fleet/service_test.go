@@ -14,7 +14,7 @@ import (
 
 // Sprint 418 S15 (story d1d045dd536f): service units in the registry rings.
 
-var builtinUnits = []string{"actrunner", "apps", "bashy-mcp", "browser-hub", "events", "files", "headlamp", "index", "kopia", "lan-inference", "llm", "loom", "meet",
+var builtinUnits = []string{"actrunner", "apps", "bashy-mcp", "browser-hub", "browser-hub-edge", "events", "files", "headlamp", "index", "kopia", "lan-inference", "llm", "loom", "meet",
 	"ollama", "ollama-pool", "otel", "otel-stack", "podman", "sandbox", "schedule", "sdlc", "seaweedfs", "shard", "warm", "weave-conduct", "ycode", "zot"}
 
 func serviceOpts(root string) []Option {
@@ -62,7 +62,8 @@ func TestBuiltinServiceSeedsAreEmbeddedAndValid(t *testing.T) {
 	ports := map[string]int{
 		"apps": 22749, "meet": 8637, "llm": 24556, "loom": 31880,
 		"zot": 5000, "seaweedfs": 8333, "kopia": 51515, "otel-stack": 31415,
-		"browser-hub": 58082,
+		"browser-hub":      58082,
+		"browser-hub-edge": 58083,
 	}
 	cat := New(serviceOpts(root)...)
 	for name, want := range ports {

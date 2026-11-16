@@ -42,6 +42,11 @@ import (
 // connects to.
 const DefaultPort = 58082
 
+// EdgePort is Microsoft Edge's hub port: each browser's extension dials its
+// own hub, so Chrome (DefaultPort) and Edge stay connected at once
+// (`bashy browser --browser edge …`, outpost's browser-hub-edge service).
+const EdgePort = 58083
+
 // LiveExtensionMinVersion is the minimum acceptable extension version.
 // The hub refuses to dispatch to any older version with an actionable
 // "reload at chrome://extensions" error. Reported by the extension's
