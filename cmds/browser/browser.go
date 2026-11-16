@@ -35,7 +35,7 @@ var cmd = &tool.Tool{
 		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
 		"\n" +
 		"Subcommands: status stop navigate extract text eval dispatch-event click type select wait-for-selector\n" +
-		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login\n" +
+		"  screenshot cookies-get scroll keyboard-press back tabs fetch hub setup login copysheet\n" +
 		"Each has its OWN page: `browser <subcommand> --help` documents its operands,\n" +
 		"which modes implement it, and its output contract.\n" +
 		"(--json emits {success,title,url,content,error}; `bashy fetch URL` is the non-browser HTTP client.)\n" +
@@ -104,7 +104,7 @@ func run(rc *tool.RunContext, args []string) int {
 	loginTimeout := fs.Duration("timeout", 2*time.Minute, "login polling timeout")
 
 	// screenshot output contract
-	output := fs.String("output", "", "screenshot: write the PNG here and print only the path")
+	output := fs.String("output", "", "screenshot: write the PNG here and print only the path; copysheet: write the page here")
 	base64Out := fs.Bool("base64", false, "screenshot: emit inline base64 instead of writing a file")
 	fullPage := fs.Bool("full-page", false, "screenshot: capture beyond the viewport")
 	settleMs := fs.Int("settle-ms", 0, "screenshot: ms to wait for a paint before capturing (default 150)")
@@ -113,7 +113,7 @@ func run(rc *tool.RunContext, args []string) int {
 	index := fs.Int("index", 0, "click/type: element index from `extract` (1-based)")
 	matchText := fs.String("text", "", "click: match an element by its visible text")
 	scope := fs.String("scope", "", "extract/click: CSS selector constraining the search root")
-	noOpen := fs.Bool("no-open", false, "setup live: do not open Chrome/the folder or touch the clipboard")
+	noOpen := fs.Bool("no-open", false, "setup live / copysheet: do not open Chrome/the folder or touch the clipboard")
 	unpacked := fs.Bool("unpacked", false, "setup live: extract this binary's copy for Load unpacked even when a store listing exists")
 	includeHidden := fs.Bool("include-hidden", false, "extract/click: keep elements that are present but not displayed")
 	limit := fs.Int("limit", 0, "extract: max elements to return (default 50)")
@@ -167,6 +167,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return browserHub(rc, ctx, operands[1:], *livePort, *asJSON)
 	case "setup":
 		return browserSetup(rc, operands[1:], *asJSON, *noOpen, *unpacked)
+	case "copysheet":
+		return browserCopySheet(rc, operands[1:], *output, *noOpen, *asJSON)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
 	case "skills":
@@ -221,6 +223,15 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	defer client.Close()
 	res, err := client.Execute(ctx, action)
+	cause := ""
+	if err != nil {
+		cause = err.Error()
+	} else if res != nil && !res.Success {
+		cause = res.Error
+	}
+	if code, ok := queueCopyField(rc, ctx, client, action, cause, *noOpen, *asJSON); ok {
+		return code
+	}
 	if err != nil {
 		return printNoBrowser(rc, *asJSON, *mode, err)
 	}

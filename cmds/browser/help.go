@@ -128,14 +128,14 @@ var subcommands = map[string]subcommand{
 		Name: "type", Args: "<selector> <text...> | --from-ask ID <selector>",
 		One:  "focus an element and set its value",
 		Mode: "solo, probe, live",
-		Out:  "envelope with content=\"typed\"; a guarded field or value ends in content guard:filled-by-human or guard:human-typed (exit 0), guard:skipped (exit 4), guard:stopped (exit 5) or guard:fill-mismatch (exit 6, a by-reference fill the page did not keep), --json outcome_class guard_* + reason",
-		Body: guardHelp,
+		Out:  "envelope with content=\"typed\"; a guarded field or value ends in content guard:filled-by-human or guard:human-typed (exit 0), guard:skipped (exit 4), guard:stopped (exit 5) or guard:fill-mismatch (exit 6, a by-reference fill the page did not keep), --json outcome_class guard_* + reason; a page that refuses scripting ends in copysheet:queued (exit 7)",
+		Body: append(append([]string{}, guardHelp...), copySheetFallbackHelp...),
 	},
 	"select": {
 		Name: "select", Args: "<selector> | <index> | --index N | --text LABEL  <option...>",
 		One:  "pick an option in a dropdown, combobox, listbox or radio group",
 		Mode: "live",
-		Out:  "envelope with content=\"selected\" and data.selected; an option that is absent or does not stick is success:false naming what the widget shows",
+		Out:  "envelope with content=\"selected\" and data.selected; an option that is absent or does not stick is success:false naming what the widget shows; a page that refuses scripting ends in copysheet:queued (exit 7, see `type --help`)",
 		Body: []string{
 			"Works on a native <select>, a radio group (target the group or any member),",
 			"and custom ARIA listboxes/comboboxes: opens the widget, types to filter when",
@@ -250,6 +250,27 @@ var subcommands = map[string]subcommand{
 		Mode: "live",
 		Out:  "progress on stdout, diagnostics on stderr (this is the ONLY subcommand that logs)",
 	},
+	"copysheet": {
+		Name: "copysheet", Args: "[--output PATH] [--no-open] <file.json|->",
+		One:  "write a copy/paste page for a form bashy can read but not fill, and open it beside the live page",
+		Mode: "any",
+		Out:  "the page path on stdout; --json emits {success,path,fields,withheld,opened}",
+		Body: []string{
+			"Prepare a form for a human: the agent reads the form and prepares every",
+			"value, the human reviews and pastes. Use it on its own whenever the user",
+			"wants to see or check the values first (a preview, even on a page bashy",
+			"could fill), and it is what type/select fall back to on pages that refuse",
+			"automation (the Chrome Web Store, chrome:// pages; see `type --help`).",
+			"Input JSON: {\"title\",\"intro\",\"sections\":[{\"name\",\"fields\":[{\"label\",\"value\",\"note\"}]}]}",
+			"or a flat {\"fields\":[{\"section\",\"label\",\"value\",\"note\"}]}.",
+			"The page has one Copy button per field; a copied field greys out.",
+			"Default path: the user cache dir, bashy/copysheet/<title>.html (0600).",
+			"Guarded values are never written: a value the guard would refuse",
+			"(SSN/ITIN, EIN, routing, card, IBAN) or a secret-labelled field",
+			"(password, PIN, one-time code, CVV, API key, …) shows",
+			"\"enter this yourself\" and is listed in withheld.",
+		},
+	},
 	"setup": {
 		Name: "setup", Args: "[--no-open] [--unpacked] [live|probe|solo] [dir]",
 		One:  "print/extract what a mode needs before first use",
@@ -292,6 +313,21 @@ func printSubHelp(rc *tool.RunContext, name string) bool {
 	}
 	fmt.Fprintf(rc.Out, "\nSee 'browser --help' for the global flags, or coreutils/docs/browser.md.\n")
 	return true
+}
+
+// copySheetFallbackHelp documents the default fallback of type/select on a
+// page the browser will not let anything script.
+var copySheetFallbackHelp = []string{
+	"",
+	"PAGES THAT REFUSE SCRIPTING (the Chrome Web Store, chrome:// pages, other",
+	"extensions' pages): bashy cannot type there, so instead of failing it queues",
+	"the value on that page's copy sheet (`browser copysheet`), opens the sheet",
+	"on the first queued field (it refreshes itself as more arrive), prints",
+	"copysheet:queued and exits 7 (--json outcome_class copysheet_queued, path,",
+	"tell_user). The agent does not retry: it queues the remaining fields the",
+	"same way, then TELLS THE USER, in the words of tell_user, that it cannot",
+	"fill the page and opened a page of values to copy and paste. Guarded values",
+	"are never queued; their field says \"enter this yourself\".",
 }
 
 // unknownSubcommand names the valid set. An error that knows a verb is

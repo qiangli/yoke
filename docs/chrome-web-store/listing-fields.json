@@ -1,0 +1,109 @@
+{
+  "title": "bashy live — Chrome Web Store fields",
+  "intro": "Paste each value into the matching field of the developer dashboard. Upload the zip from `bashy dag chrome-ext-release` and the screenshots in docs/chrome-web-store/.",
+  "sections": [
+    {
+      "name": "Store listing",
+      "fields": [
+        {
+          "label": "Description",
+          "value": "bashy live is the companion that lets bashy, the agentic shell on your computer, work on web pages in your real, signed-in browser.\n\nFill in forms: tell bashy what to enter and it fills the fields for you, on the sites where you are already signed in. Before it types into a password, payment or other secret field, it asks you first.\n\nIt can also read a page's text, click, scroll, take screenshots and, when you ask, read a site's cookies after you sign in.\n\nHow it works: run \"bashy browser hub\", then press Connect in this extension's popup on the tab you want bashy to work on. The extension talks only to bashy on your machine (127.0.0.1). It contacts no other server, has no analytics and runs no remote code. Typed and clipboard values are logged by length only.\n\nOpen source (Apache-2.0): https://github.com/qiangli/yoke"
+        },
+        {
+          "label": "Category",
+          "value": "Developer Tools"
+        },
+        {
+          "label": "Language",
+          "value": "English"
+        },
+        {
+          "label": "Screenshots (upload in this order, from Downloads)",
+          "value": "bashy-live-1-fill-in-forms.png\nbashy-live-2-asks-before-secrets.png\nbashy-live-3-connect-a-tab.png"
+        },
+        {
+          "label": "Homepage URL",
+          "value": "https://github.com/qiangli/bashy"
+        },
+        {
+          "label": "Support URL",
+          "value": "https://github.com/qiangli/yoke/issues"
+        }
+      ]
+    },
+    {
+      "name": "Privacy",
+      "fields": [
+        {
+          "label": "Single purpose",
+          "value": "A companion for bashy: lets the bashy program on the user's own computer work on web pages in the user's browser (fill in forms, read page content, click, take screenshots) over a local 127.0.0.1 connection, at the user's request."
+        },
+        {
+          "label": "tabs",
+          "value": "List, open, switch and address the tabs bashy is asked to drive."
+        },
+        {
+          "label": "activeTab",
+          "value": "Act on the tab the user connects from the popup."
+        },
+        {
+          "label": "scripting",
+          "value": "Inject the extension's own bundled page script to read text and fill, click or scroll elements."
+        },
+        {
+          "label": "Host permission (<all_urls>)",
+          "value": "The user decides which sites bashy drives; the extension cannot know them in advance. It acts only while the user has connected it, and only on the tabs bashy is asked to drive."
+        },
+        {
+          "label": "debugger",
+          "value": "Send trusted keystrokes and text input that sites accept only from a real user; capture screenshots of a background tab and full-page screenshots without stealing focus; read the driven tab's network requests, console messages and performance trace when the user asks bashy to debug that page. Attached only to tabs bashy is driving, only while the user has connected the extension."
+        },
+        {
+          "label": "cookies",
+          "value": "Read a site's cookies, including HttpOnly ones, when the user asks bashy to complete a login and capture its session."
+        },
+        {
+          "label": "clipboardRead",
+          "value": "Paste actions the user requests through bashy."
+        },
+        {
+          "label": "clipboardWrite",
+          "value": "Copy actions the user requests through bashy."
+        },
+        {
+          "label": "storage",
+          "value": "Remember the user's Connect choice, port and tab."
+        },
+        {
+          "label": "alarms",
+          "value": "Keep the local connection alive and reconnect after the browser suspends the service worker."
+        },
+        {
+          "label": "Remote code",
+          "value": "No, I am not using remote code. All JavaScript ships in the package."
+        },
+        {
+          "label": "Data usage (tick these; you certify them)",
+          "value": "Website content\nWeb history\nAuthentication information\n\nCertify: not sold to third parties · not used for unrelated purposes · not used for creditworthiness or lending"
+        },
+        {
+          "label": "Privacy policy URL",
+          "value": "https://github.com/qiangli/yoke/blob/main/docs/browser-extension-privacy.md"
+        }
+      ]
+    },
+    {
+      "name": "Distribution",
+      "fields": [
+        {
+          "label": "Visibility",
+          "value": "Unlisted"
+        },
+        {
+          "label": "Regions",
+          "value": "All regions"
+        }
+      ]
+    }
+  ]
+}
