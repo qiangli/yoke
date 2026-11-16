@@ -71,8 +71,9 @@ go test $(go list ./... | grep -v /external/)
 scripts/crossvet.sh          # cross-OS compile gate; run alongside go test
 ```
 
-Flat siblings: `../coreutils`, `../sh`, `../filebrowser` (replace
-directives in `go.mod`). Inside the dhnt umbrella they are submodules; a
+Flat siblings: `../coreutils`, `../sh` (replace directives in `go.mod`).
+The files panel's File Browser fork (qiangli/filebrowser-quantum) is a
+versioned module, not a sibling. Inside the dhnt umbrella they are submodules; a
 standalone clone puts them next door.
 
 ## Consumers

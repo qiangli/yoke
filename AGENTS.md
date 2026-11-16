@@ -21,7 +21,7 @@ This Go module (`github.com/qiangli/yoke`) is bashy's agentic userland: everythi
 - `go vet <pkgs>` runs static checks; mirror CI by using `go list ./...`, excluding `/external/`, then adding `external/gotoolchain`, `external/act`, and `external/gh`.
 - `gofmt -w <files>` formats changed Go files before review.
 
-Use Go from `go.mod`. The module replaces `github.com/qiangli/coreutils` with sibling `../coreutils`, `mvdan.cc/sh/v3` with `../sh` and the File Browser fork with `../filebrowser`; standalone clones need those checkouts. CI initializes the `external/ollama/src` and `external/podman/src` submodules.
+Use Go from `go.mod`. The module replaces `github.com/qiangli/coreutils` with sibling `../coreutils`, and `mvdan.cc/sh/v3` with `../sh`; standalone clones need those checkouts. The File Browser fork (qiangli/filebrowser-quantum) is a versioned module. CI initializes the `external/ollama/src` and `external/podman/src` submodules.
 
 ## Coding Style & Naming Conventions
 

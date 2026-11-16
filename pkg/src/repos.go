@@ -17,7 +17,7 @@ var allowedRepos = map[string]string{
 	"outpost":     "https://github.com/qiangli/outpost",
 	"coreutils":   "https://github.com/qiangli/coreutils",
 	"sh":          "https://github.com/qiangli/sh",
-	"filebrowser": "https://github.com/qiangli/filebrowser",
+	"filebrowser": "https://github.com/qiangli/filebrowser-quantum",
 }
 
 // AllowedRepos returns the fetchable OSS repo names, sorted.
