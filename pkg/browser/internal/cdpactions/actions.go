@@ -148,7 +148,10 @@ func Navigate(ctx context.Context, url string) (*wire.Result, error) {
 		chromedp.Navigate(url),
 		chromedp.Title(&title),
 		chromedp.Location(&currentURL),
-		chromedp.Text("body", &body, chromedp.NodeVisible),
+		// ByQuery, not chromedp's default plain-text search: "body" as text
+		// also matches CSS like `body{...}`, a node with no box model, and
+		// NodeVisible then waits on it until the deadline (todo f1cd947e).
+		chromedp.Text("body", &body, chromedp.NodeVisible, chromedp.ByQuery),
 	)
 	if err != nil {
 		return &wire.Result{Error: err.Error()}, nil
