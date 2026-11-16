@@ -52,7 +52,7 @@
         },
         {
           "label": "Host permission (<all_urls>)",
-          "value": "The user decides which sites bashy drives; the extension cannot know them in advance. It acts only while the user has connected it, and only on the tabs bashy is asked to drive."
+          "value": "bashy live lets the bashy program on the user's own computer complete multi-step tasks on websites the user chooses at run time, such as filling a form across several pages. activeTab is insufficient: its grant ends when the tab navigates, and every task navigates (form steps, sign-in redirects, confirmation pages), so access would be lost after the first step. A fixed site list is not possible: the user decides which sites bashy works on, and those are unknown when the extension is published. The extension acts only after the user presses Connect in its popup, only on the tabs bashy is asked to drive, and it talks only to bashy on 127.0.0.1. It sends nothing to any server and runs no remote code."
         },
         {
           "label": "debugger",

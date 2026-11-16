@@ -18,3 +18,5 @@ Removes the last manual install step (Sprint 511/512 follow-up). Uses the S512.3
 
 
 Update 2026-11-16 (operator): store description gains "Works better with (optional): the bashy tray and outpost", linking both; the required parts are the extension and the bashy command. Hub gate and served sheets: S529.10, S529.7.
+
+Submitted for review 2026-11-16 (operator): item lfbmlehkecabhobacnppikmhgmpnfclm, extension 0.11.1 (zip sha256 b7a80da5...), Unlisted, publisher DHNT Inc (trader verification pending: CP 575 + utility bill). Host-permission justification strengthened against the dashboard advice (activeTab / site list rejected). Open: review outcome; then set live.ChromeWebStoreURL and close.
