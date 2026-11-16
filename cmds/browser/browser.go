@@ -94,7 +94,7 @@ func run(rc *tool.RunContext, args []string) int {
 	mode := fs.String("mode", "solo", "browser mode: solo (zero-setup headless Chrome), probe, or live")
 	probeURL := fs.String("probe-url", probe.DefaultURL, "Chrome remote debugging URL for probe mode")
 	livePort := fs.Int("live-port", live.DefaultPort, "loopback port of the live-mode hub")
-	browserName := fs.String("browser", "", "live mode: brave, chrome or edge — that browser's hub port, 58081 + (first letter - 'b'): brave 58081, chrome 58082, edge 58084; --live-port wins")
+	browserName := fs.String("browser", "", "live mode: brave, chrome, edge or safari — that browser's hub port, 58081 + (first letter - 'b'): brave 58081, chrome 58082, edge 58084; safari is reserved 58100; --live-port wins")
 	chromePath := fs.String("chrome-path", "", "Chrome/Chromium/Edge executable path (normally auto-detected or provisioned)")
 	userDataDir := fs.String("user-data-dir", "", "browser profile directory (probe defaults to a persistent bashy cache path)")
 	headed := fs.Bool("headed", false, "run solo Chrome headed instead of headless")
@@ -138,7 +138,7 @@ func run(rc *tool.RunContext, args []string) int {
 		portSet := fs.Changed("live-port")
 		p := live.BrowserPort(*browserName)
 		if p == 0 {
-			return tool.UsageError(rc, cmd, "--browser %q: expected brave, chrome or edge", *browserName)
+			return tool.UsageError(rc, cmd, "--browser %q: expected brave, chrome, edge or safari", *browserName)
 		}
 		if !portSet {
 			*livePort = p

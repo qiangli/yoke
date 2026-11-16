@@ -48,12 +48,19 @@ const DefaultPort = 58082
 // outpost's browser-hub-edge service).
 const EdgePort = 58084
 
-// BrowserPort returns the hub port for a browser name by that rule, or 0
-// for a name it does not know.
+// SafariPort is reserved for a future Safari build (operator 2026-11-16), an
+// explicit exception to the letter rule.
+const SafariPort = 58100
+
+// BrowserPort returns the hub port for a browser name by that rule (Safari:
+// SafariPort), or 0 for a name it does not know.
 func BrowserPort(name string) int {
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
 	case "brave", "chrome", "chromium", "edge":
-		return 58081 + int(strings.ToLower(name)[0]-'b')
+		return 58081 + int(n[0]-'b')
+	case "safari":
+		return SafariPort
 	}
 	return 0
 }

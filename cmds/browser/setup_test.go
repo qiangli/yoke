@@ -134,7 +134,10 @@ func TestBrowserEdgePicksTheEdgeHubPort(t *testing.T) {
 	if p := port("--browser", "edge", "--live-port", "59999"); p != 59999 {
 		t.Fatalf("--live-port must win, got %v", p)
 	}
-	if _, _, code := runTool(t, "--browser", "safari", "hub", "status"); code != 2 {
+	if p := port("--browser", "safari"); p != 58100 {
+		t.Fatalf("--browser safari port = %v, want the reserved 58100", p)
+	}
+	if _, _, code := runTool(t, "--browser", "netscape", "hub", "status"); code != 2 {
 		t.Fatalf("unknown browser: exit %d, want 2", code)
 	}
 }
