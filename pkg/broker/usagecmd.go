@@ -50,7 +50,7 @@ func newUsageCmd() *cobra.Command {
 			}
 			principal := ""
 			if peer != "" {
-				if !ValidPeerName(peer) {
+				if !ValidPeerName(peer) && !validSelfPeerName(peer) {
 					return fmt.Errorf("llm usage: invalid peer name %q", peer)
 				}
 				principal = PeerPrincipalPrefix + peer

@@ -66,7 +66,7 @@ func (g DoorGrant) validate() error {
 		return fmt.Errorf("unsupported grant schema %q (want %s)", g.Schema, GrantSchemaVersion)
 	case !ValidPeerName(strings.ToLower(g.Door)):
 		return errors.New("grant has no valid door host name")
-	case !ValidPeerName(g.Peer):
+	case !ValidPeerName(g.Peer) && !validSelfPeerName(g.Peer):
 		return errors.New("grant has no valid peer name")
 	case !strings.HasPrefix(g.Credential, "bpeer_"):
 		return errors.New("grant carries no peer credential")
@@ -205,6 +205,24 @@ func ensureCloudboxApp(ctx context.Context, host, cloudbox string, port int) (st
 // already is. It needs no cloudbox: a host attached to a satellite serves
 // its apps through the attachment, not a legacy pairing.
 func ensureLocalApp(ctx context.Context, port int) error {
+	return ensureLocalAppTrust(ctx, port, selfServiceEnabled())
+}
+
+// selfServiceEnabled reports whether the owner opted the door into member
+// self-service, which needs the app's signed cloud identity.
+func selfServiceEnabled() bool {
+	path, err := peersPath()
+	if err != nil {
+		return false
+	}
+	ss, err := LoadSelfService(SelfServiceFile(path))
+	return err == nil && ss.Enabled
+}
+
+// ensureLocalAppTrust is ensureLocalApp that also keeps the app's
+// trust_cloud_identity on when trust is true (self-service needs the
+// outpost-signed caller email; the door still authenticates inference).
+func ensureLocalAppTrust(ctx context.Context, port int, trust bool) error {
 	out, err := outpostRun(ctx, nil, "apps", "list", "--json")
 	if err != nil {
 		return err
@@ -216,6 +234,7 @@ func ensureLocalApp(ctx context.Context, port int) error {
 			Port         int    `json:"port"`
 			Enabled      bool   `json:"enabled"`
 			RequireLogin bool   `json:"require_login"`
+			Trust        bool   `json:"trust_cloud_identity"`
 		} `json:"apps"`
 	}
 	if err := json.Unmarshal(out, &list); err != nil {
@@ -227,12 +246,16 @@ func ensureLocalApp(ctx context.Context, port int) error {
 	// loopback host counts as present; anything else is re-added below.
 	present := false
 	for _, a := range list.Apps {
-		if a.Name == doorServiceName && a.Port == port && a.Enabled && !a.RequireLogin && bareLoopbackHost(a.Host) {
+		if a.Name == doorServiceName && a.Port == port && a.Enabled && !a.RequireLogin && bareLoopbackHost(a.Host) && (a.Trust || !trust) {
 			present = true
 		}
 	}
 	if !present {
-		if _, err := outpostRun(ctx, nil, "apps", "add", doorServiceName, "--url", fmt.Sprintf("http://127.0.0.1:%d", port)); err != nil {
+		args := []string{"apps", "add", doorServiceName, "--url", fmt.Sprintf("http://127.0.0.1:%d", port)}
+		if trust {
+			args = append(args, "--trust-cloud-identity")
+		}
+		if _, err := outpostRun(ctx, nil, args...); err != nil {
 			return err
 		}
 	}

@@ -331,6 +331,10 @@ func (b *Broker) authorize(r *http.Request, pathToken string) (peerAuthorization
 // ServeHTTP is the door.
 func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	params, rest := splitParams(r.URL.Path)
+	if rest == SelfServicePath && params["k"] == "" {
+		b.serveSelfService(w, r)
+		return
+	}
 	ri := &reqInfo{params: params, started: b.opts.Now()}
 	ri.rec = Record{Time: ri.started, Method: r.Method, Path: rest, Class: ClassInteractive.String()}
 	cw := newCaptureWriter(w)

@@ -64,22 +64,20 @@ func SetPeerLimits(path, name string, lim PeerLimits, now time.Time) error {
 	if lim.USDMonth < 0 || math.IsNaN(lim.USDMonth) || math.IsInf(lim.USDMonth, 0) || lim.RPM < 0 {
 		return errors.New("broker: limits must be finite and not negative")
 	}
-	ps, err := LoadPeerShares(path)
-	if err != nil {
-		return err
-	}
-	rec, ok := ps.Peers[name]
-	if !ok {
-		return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
-	}
-	if lim.IsZero() {
-		rec.Limits = nil
-	} else {
-		rec.Limits = &lim
-	}
-	rec.Updated = now
-	ps.Peers[name] = rec
-	return savePeerShares(path, ps)
+	return updatePeerShares(path, func(ps *PeerShares) error {
+		rec, ok := ps.Peers[name]
+		if !ok {
+			return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
+		}
+		if lim.IsZero() {
+			rec.Limits = nil
+		} else {
+			rec.Limits = &lim
+		}
+		rec.Updated = now
+		ps.Peers[name] = rec
+		return nil
+	})
 }
 
 // Limit names, as reported in a refusal.

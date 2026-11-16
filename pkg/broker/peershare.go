@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
+
 	"github.com/qiangli/yoke/pkg/boundary"
 )
 
@@ -95,11 +97,47 @@ func savePeerShares(path string, ps PeerShares) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, werr := f.Write(append(data, '\n'))
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp, 0o600)
+	}
+	if werr == nil {
+		werr = os.Rename(tmp, path)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+	}
+	return werr
+}
+
+// updatePeerShares applies fn to the peers file under an exclusive lock, so
+// the owner CLI and the door's self-service route never lose each other's
+// records. Nothing is written when fn fails.
+func updatePeerShares(path string, fn func(*PeerShares) error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	lock, err := lockfile.AcquireWithin(path+".lock", 10*time.Second, lockfile.Holder{Name: "llm peer", Intent: "update peers file"})
+	if err != nil {
+		return fmt.Errorf("broker: peers file busy: %w", err)
+	}
+	defer lock.Release()
+	ps, err := LoadPeerShares(path)
+	if err != nil {
+		return err
+	}
+	if err := fn(&ps); err != nil {
+		return err
+	}
+	return savePeerShares(path, ps)
 }
 
 // MintPeerCredential creates (or rotates) name's credential and returns it.
@@ -112,58 +150,58 @@ func MintPeerCredential(path, name, share string, now time.Time) (string, error)
 // MintPeerCredentialFor is MintPeerCredential plus an optional membership
 // binding. Empty email/circle preserve an existing binding during rotation.
 func MintPeerCredentialFor(path, name, share, email, circle string, now time.Time) (string, error) {
-	if !ValidPeerName(name) {
+	if !ValidPeerName(name) && !validSelfPeerName(name) {
 		return "", fmt.Errorf("broker: invalid peer name %q (want [a-z0-9][a-z0-9._-]*)", name)
 	}
-	ps, err := LoadPeerShares(path)
-	if err != nil {
-		return "", err
+	if share != "" && share != ShareAllow && share != ShareDeny {
+		return "", fmt.Errorf("broker: share must be %s or %s", ShareAllow, ShareDeny)
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	cred := "bpeer_" + hex.EncodeToString(raw)
-	rec, existed := ps.Peers[name]
-	if !existed {
-		rec = PeerShare{Share: ShareDeny, Created: now}
-	} else {
-		rec.Updated = now
-	}
-	if share != "" {
-		if share != ShareAllow && share != ShareDeny {
-			return "", fmt.Errorf("broker: share must be %s or %s", ShareAllow, ShareDeny)
+	err := updatePeerShares(path, func(ps *PeerShares) error {
+		rec, existed := ps.Peers[name]
+		if !existed {
+			rec = PeerShare{Share: ShareDeny, Created: now}
+		} else {
+			rec.Updated = now
 		}
-		rec.Share = share
+		if share != "" {
+			rec.Share = share
+		}
+		if email != "" {
+			rec.Email = strings.ToLower(strings.TrimSpace(email))
+			rec.Circle = strings.TrimSpace(circle)
+		}
+		rec.Hash = hashCredential(cred)
+		ps.Peers[name] = rec
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
-	if email != "" {
-		rec.Email = strings.ToLower(strings.TrimSpace(email))
-		rec.Circle = strings.TrimSpace(circle)
-	}
-	rec.Hash = hashCredential(cred)
-	ps.Peers[name] = rec
-	return cred, savePeerShares(path, ps)
+	return cred, nil
 }
 
 // SetPeerMember changes an existing peer's member binding. Empty email clears
 // the binding and restores legacy owner-tool behavior.
 func SetPeerMember(path, name, email, circle string, now time.Time) error {
-	ps, err := LoadPeerShares(path)
-	if err != nil {
-		return err
-	}
-	rec, ok := ps.Peers[name]
-	if !ok {
-		return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
-	}
-	rec.Email = strings.ToLower(strings.TrimSpace(email))
-	rec.Circle = strings.TrimSpace(circle)
-	if rec.Email == "" {
-		rec.Circle = ""
-	}
-	rec.Updated = now
-	ps.Peers[name] = rec
-	return savePeerShares(path, ps)
+	return updatePeerShares(path, func(ps *PeerShares) error {
+		rec, ok := ps.Peers[name]
+		if !ok {
+			return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
+		}
+		rec.Email = strings.ToLower(strings.TrimSpace(email))
+		rec.Circle = strings.TrimSpace(circle)
+		if rec.Email == "" {
+			rec.Circle = ""
+		}
+		rec.Updated = now
+		ps.Peers[name] = rec
+		return nil
+	})
 }
 
 // SetPeerShare sets an existing peer's share policy.
@@ -171,31 +209,27 @@ func SetPeerShare(path, name, share string, now time.Time) error {
 	if share != ShareAllow && share != ShareDeny {
 		return fmt.Errorf("broker: share must be %s or %s", ShareAllow, ShareDeny)
 	}
-	ps, err := LoadPeerShares(path)
-	if err != nil {
-		return err
-	}
-	rec, ok := ps.Peers[name]
-	if !ok {
-		return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
-	}
-	rec.Share, rec.Updated = share, now
-	ps.Peers[name] = rec
-	return savePeerShares(path, ps)
+	return updatePeerShares(path, func(ps *PeerShares) error {
+		rec, ok := ps.Peers[name]
+		if !ok {
+			return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
+		}
+		rec.Share, rec.Updated = share, now
+		ps.Peers[name] = rec
+		return nil
+	})
 }
 
 // RevokePeer deletes name's credential; a request carrying it is then an
 // unknown bearer (401).
 func RevokePeer(path, name string) error {
-	ps, err := LoadPeerShares(path)
-	if err != nil {
-		return err
-	}
-	if _, ok := ps.Peers[name]; !ok {
-		return fmt.Errorf("broker: no peer %q", name)
-	}
-	delete(ps.Peers, name)
-	return savePeerShares(path, ps)
+	return updatePeerShares(path, func(ps *PeerShares) error {
+		if _, ok := ps.Peers[name]; !ok {
+			return fmt.Errorf("broker: no peer %q", name)
+		}
+		delete(ps.Peers, name)
+		return nil
+	})
 }
 
 // Names lists the peers, sorted.
