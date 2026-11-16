@@ -10,12 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // keyHTTP is the member CLI's HTTP client (a seam for tests). It never
@@ -25,10 +24,11 @@ var keyHTTP = func() *http.Client {
 }
 
 // keyAccountToken is the member's Cloudbox account credential (a seam for
-// tests): BASHY_FLEET_TOKEN / BASHY_API_KEY, else this host's saved one.
+// tests). It is only ever the explicit BASHY_FLEET_TOKEN / BASHY_API_KEY:
+// DOOR_URL names the origin it is sent to, so a host's paired outpost token
+// is never a silent fallback.
 var keyAccountToken = func() string {
-	_, token := fleet.ResolveMaster("", "")
-	return token
+	return firstNonEmpty(os.Getenv("BASHY_FLEET_TOKEN"), os.Getenv("BASHY_API_KEY"))
 }
 
 func newKeyCmd() *cobra.Command {
@@ -42,8 +42,9 @@ func newKeyCmd() *cobra.Command {
 
 You must be an active mutual member of the door owner's account, in a circle
 the owner allowed (` + "`bashy llm self-service on`" + `). Your Cloudbox account token
-(BASHY_FLEET_TOKEN, with the satellites:delegate scope) is exchanged at the
-satellite for a short-lived token that proves who you are; sign in to that
+(BASHY_FLEET_TOKEN, with the satellites:delegate scope) is sent to the
+satellite named in DOOR_URL — use only a door URL its owner gave you — and
+exchanged there for a short-lived token that proves who you are; sign in to that
 satellite once in a browser first. The key is stored owner-only as the door
 grant for HOST and never printed. Running key again rotates it: the previous
 key stops working.`,
@@ -70,6 +71,10 @@ key stops working.`,
 			}
 			g := DoorGrant{Schema: GrantSchemaVersion, Door: host, Peer: strings.TrimPrefix(peer, PeerPrincipalPrefix),
 				CloudboxURL: appURL, Credential: cred, Issued: time.Now().UTC()}
+			// Keep a mesh route an owner share already gave this door.
+			if prev, err := LoadDoorGrant(host); err == nil {
+				g.MeshPeerID, g.MeshService = prev.MeshPeerID, prev.MeshService
+			}
 			if err := SaveDoorGrant(g); err != nil {
 				return fmt.Errorf("llm key: the door issued a new key but it could not be stored (%v); fix that and run `llm key` again to rotate", err)
 			}

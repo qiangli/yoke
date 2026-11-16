@@ -150,6 +150,18 @@ func MintPeerCredential(path, name, share string, now time.Time) (string, error)
 // MintPeerCredentialFor is MintPeerCredential plus an optional membership
 // binding. Empty email/circle preserve an existing binding during rotation.
 func MintPeerCredentialFor(path, name, share, email, circle string, now time.Time) (string, error) {
+	return mintPeer(path, name, share, "", email, circle, now)
+}
+
+// mintSelfPeer mints or rotates a self-service peer: a new record starts
+// shared, a rotation keeps the owner's share policy and limits. The choice
+// is made under the peers-file lock, so a concurrent owner edit wins.
+func mintSelfPeer(path, name, email, circle string, now time.Time) (string, error) {
+	return mintPeer(path, name, "", ShareAllow, email, circle, now)
+}
+
+// mintPeer sets share on every mint, else shareIfNew on a new record only.
+func mintPeer(path, name, share, shareIfNew, email, circle string, now time.Time) (string, error) {
 	if !ValidPeerName(name) && !validSelfPeerName(name) {
 		return "", fmt.Errorf("broker: invalid peer name %q (want [a-z0-9][a-z0-9._-]*)", name)
 	}
@@ -165,6 +177,9 @@ func MintPeerCredentialFor(path, name, share, email, circle string, now time.Tim
 		rec, existed := ps.Peers[name]
 		if !existed {
 			rec = PeerShare{Share: ShareDeny, Created: now}
+			if shareIfNew != "" {
+				rec.Share = shareIfNew
+			}
 		} else {
 			rec.Updated = now
 		}

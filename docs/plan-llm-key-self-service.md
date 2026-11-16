@@ -25,6 +25,10 @@ of this host's outpost app `llm`. It stores that app's SSO secret owner-only
 beside the peers file (`$BASHY_HOME/cligw/self-service.json`). The app stays
 public, so inference keeps using door keys exactly as before.
 
+Self-service needs an outpost that re-signs identity only for tunnel-ingress
+requests (Sprint 648). Older outposts also sign forged requests sent to their
+local listener, so update the outpost before turning self-service on.
+
 A satellite served by an extra outpost instance copies the `llm` entry,
 including its secret, when `outpost-profile up SATELLITE --app llm` runs.
 Re-run that command after `on`.
@@ -44,7 +48,9 @@ bashy llm key https://SATELLITE/matrix/h/HOST/app/llm
 eval "$(bashy llm env --from HOST --via cloudbox)"
 ```
 
-Before the first run, sign in to the satellite once in a browser. The
+Only `BASHY_FLEET_TOKEN` (or `BASHY_API_KEY`) is used, and it is sent to the
+satellite named in the URL. Use only a door URL the owner gave you. Before
+the first run, sign in to the satellite once in a browser. The
 satellite only exchanges tokens for accounts it has admitted.
 
 `llm key` stores the key owner-only as the door grant for `HOST` and never

@@ -159,14 +159,7 @@ func selfServiceMint(ctx context.Context, peersFile string, members MemberAuthor
 	if refusal != nil {
 		return "", "", refusal
 	}
-	// share=allow only on a new record: a rotation keeps the owner's policy.
-	share := ShareAllow
-	if ps, err := LoadPeerShares(peersFile); err == nil {
-		if _, exists := ps.Peers[name]; exists {
-			share = ""
-		}
-	}
-	cred, err := MintPeerCredentialFor(peersFile, name, share, email, circle, now)
+	cred, err := mintSelfPeer(peersFile, name, email, circle, now)
 	if err != nil {
 		return "", "", &selfRefusal{http.StatusInternalServerError, "mint_failed", "could not mint: " + err.Error()}
 	}
