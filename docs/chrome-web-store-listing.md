@@ -24,34 +24,43 @@ out.
 | Field | Value |
 |---|---|
 | Name | bashy live *(from the manifest)* |
-| Summary | Lets bashy on this computer drive this browser. The extension talks only to 127.0.0.1; it sends nothing to any server. *(manifest description, 118/132 chars)* |
+| Summary | bashy's companion for web pages: lets bashy on your computer read pages and fill in forms in this browser. Talks only to 127.0.0.1. *(manifest description, 131/132 chars)* |
 | Category | Developer Tools |
 | Language | English |
-| Icon | `pkg/browser/live/extension/icons/icon-128.png` (bashy brand mark) |
+| Icon | `pkg/browser/live/extension/icons/icon-128.png` (the bashy live mark, `docs/brand/bashy-live/` in the umbrella) |
 | Homepage | https://github.com/qiangli/bashy |
 | Support | https://github.com/qiangli/yoke/issues |
 
 **Description:**
 
-> bashy live connects this browser to bashy, the agentic shell running on
-> your own computer, so bashy can do browser work for you in your real,
-> signed-in profile: open pages, read their text, fill forms, click,
-> take screenshots and read a site's cookies after you sign in.
+> bashy live is the companion that lets bashy, the agentic shell on your
+> computer, work on web pages in your real, signed-in browser.
+>
+> Fill in forms: tell bashy what to enter and it fills the fields for
+> you, on the sites where you are already signed in. Before it types
+> into a password, payment or other secret field, it asks you first.
+>
+> It can also read a page's text, click, scroll, take screenshots and,
+> when you ask, read a site's cookies after you sign in.
 >
 > How it works: run `bashy browser hub`, then press Connect in this
-> extension's popup on the tab you want driven. The extension talks only
-> to bashy on your machine (127.0.0.1). It contacts no other server, has
-> no analytics and runs no remote code.
->
-> Safety: before typing into a password, payment or other secret field,
-> bashy asks you first. Typed and clipboard values are logged by length
-> only.
+> extension's popup on the tab you want bashy to work on. The extension
+> talks only to bashy on your machine (127.0.0.1). It contacts no other
+> server, has no analytics and runs no remote code. Typed and clipboard
+> values are logged by length only.
 >
 > Open source (Apache-2.0): https://github.com/qiangli/yoke
 
-**Screenshots** (1280×800 or 640×400, at least one): still to capture —
-the popup connected to a tab, and a terminal running a `bashy browser`
-command beside the driven page.
+**Screenshots** (1280×800, upload in this order): `docs/chrome-web-store/`
+`1-fill-in-forms.png`, `2-asks-before-secrets.png`, `3-connect-a-tab.png`.
+Captured 2026-11-16 from a real run: bashy built from main drove extension
+0.11.1 in Chrome for Testing through a real hub, filling a demo form. The
+terminal lines are bashy's verbatim output, with two substitutions: the
+local test URL is shown as `northwind-makerspace.example` (a reserved demo
+domain) and the hub port as the default 58082. The popup is the extension's
+own `popup.html` with its Chrome calls answered as connected. The
+checkbox click is left out: its `clicked: no-effect` report is a known
+defect (todo filed alongside).
 
 **Small promo tile** (440×280, optional): skip for an unlisted launch.
 
@@ -59,8 +68,9 @@ command beside the driven page.
 
 **Single purpose:**
 
-> Let the bashy program on the user's own computer automate this browser
-> (navigate, read, fill, click, screenshot) over a local 127.0.0.1
+> A companion for bashy: lets the bashy program on the user's own
+> computer work on web pages in the user's browser (fill in forms, read
+> page content, click, take screenshots) over a local 127.0.0.1
 > connection, at the user's request.
 
 **Permission justifications:**

@@ -6,9 +6,10 @@ repository, Apache-2.0).
 
 ## What the extension does
 
-bashy live lets the bashy program on **your own computer** drive the
-browser you install it in: open pages, read a page's text, fill fields,
-click, take screenshots, read cookies for a site. It acts only after you
+bashy live is bashy's companion for web pages: it lets the bashy program
+on **your own computer** work on pages in the browser you install it in.
+Mostly that means filling in forms; it can also open pages, read a page's
+text, click, take screenshots and read cookies for a site. It acts only after you
 press **Connect** in its popup and only while bashy is running.
 
 ## Where data goes
