@@ -175,10 +175,15 @@ var packages = map[string]Package{
 		"capabilities, one envelope, per-ring caps, never composing. It owned the top-level verb `bashy recall` "+
 		"until 2026-08-05; it is now `bashy kb recall`, because four days of telemetry caught the only agent that "+
 		"ever reached for it unprompted typing exactly that, and being told the verb did not exist"),
-	"lexicon":    cmdPkg("lexicon"),
-	"meet":       cmdPkg("meet"),
-	"webconsole": cmdPkg("app"),
-	"share":      cmdPkg("share"),
+	"lexicon":      cmdPkg("lexicon"),
+	"meet":         cmdPkg("meet"),
+	"webconsole":   cmdPkg("app"),
+	"pagecontrol":  libPkg("app", "the private page/server named-action contract behind live page actions in the app console (webconsole) and the Outpost admin UI: registry, transport, bounded queues, no replay; it has no verb of its own"),
+	"boundary":     libPkg("tool", "the Cloudbox member and grant boundary client behind fleet's member, group, suite, superadmin and desktop subcommands (bashy-owned verbs): it checks explicit grants against the owner's member list and has no verb of its own"),
+	"outpostagent": libPkg("tool", "the shared reading of Outpost's agent.json (canonical portal URLs, the paired account) used by fleet, broker and the Cloudbox account adapter; no verb of its own"),
+	"nfthelper":    libPkg("oci", "the private nft entry point for the managed Podman engine (netavark JSON batches); it serves the oci/sandbox tier and has no verb of its own"),
+	"nativepath":   supPkg("Windows process plumbing: normalizes a POSIX-spelled PATH to native at process start so os/exec finds tools"),
+	"share":        cmdPkg("share"),
 	"qrterm": libPkg("share", "the QR renderer (terminal half-blocks, PNG) behind `share qr` and the "+
 		"`app pair` ticket; a renderer is not a verb — the two doors that print a code own the meaning of it."),
 	"webterm": libPkg("app", "the browser terminal: one pty per websocket, running bashy itself. "+
