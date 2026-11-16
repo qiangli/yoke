@@ -30,6 +30,9 @@ build the upload package).
 - The extension remembers the Connect until you press Disconnect: it
   reconnects by itself after a Chrome restart, a worker restart, or a
   hub restart (a periodic alarm retries while the hub is down).
+- One profile holds the hub at a time. While one is connected, another
+  profile's automatic reconnect is refused and retries slowly (the popup
+  shows "waiting"); press Connect in a profile to take the hub over.
 - Upgrades are zero-touch: when an older extension connects, the hub
   refreshes `~/Downloads/ycode-chrome-ext/` from the binary and asks the
   extension to reload; it reconnects running the new code. (Extensions

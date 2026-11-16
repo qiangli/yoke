@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -187,4 +189,89 @@ func mustJSON(v any) json.RawMessage {
 		panic(fmt.Sprintf("mustJSON: %v", err))
 	}
 	return b
+}
+
+// TestHubProfilesDoNotEvictEachOther pins todo 105a358a: two Chrome
+// profiles, each auto-reconnecting, used to replace each other's socket
+// every second. An automatic dial is refused while a connection is up;
+// only an explicit Connect (?takeover=1) replaces it.
+func TestHubProfilesDoNotEvictEachOther(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	svc := New(port)
+	if err := svc.EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { svc.Close() })
+	waitHealthy(t, port)
+	ws := "ws://" + svc.hub.addr + "/ws"
+
+	dial := func(url string) *websocket.Conn {
+		t.Helper()
+		c, _, err := websocket.DefaultDialer.Dial(url, nil)
+		if err != nil {
+			t.Fatalf("dial %s: %v", url, err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	closeCode := func(c *websocket.Conn) int {
+		t.Helper()
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		for {
+			_, _, err := c.ReadMessage()
+			if err == nil {
+				continue
+			}
+			var ce *websocket.CloseError
+			if errors.As(err, &ce) {
+				return ce.Code
+			}
+			return -1
+		}
+	}
+	current := func() *websocket.Conn {
+		svc.hub.mu.Lock()
+		defer svc.hub.mu.Unlock()
+		return svc.hub.conn
+	}
+	waitCurrent := func(want *websocket.Conn) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if c := current(); c != nil && c.LocalAddr().String() == want.RemoteAddr().String() {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("hub connection is not %s", want.LocalAddr())
+	}
+
+	a := dial(ws)
+	waitCurrent(a)
+
+	b := dial(ws) // profile B's automatic reconnect
+	if got := closeCode(b); got != CloseHubBusy {
+		t.Fatalf("automatic dial while connected: close code %d, want %d", got, CloseHubBusy)
+	}
+	waitCurrent(a)
+
+	c := dial(ws + "?takeover=1") // Connect pressed in profile C
+	waitCurrent(c)
+	if got := closeCode(a); got != CloseTakenOver {
+		t.Fatalf("replaced connection: close code %d, want %d", got, CloseTakenOver)
+	}
+
+	// When the holder leaves, an automatic dial is accepted again.
+	_ = c.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for current() != nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	d := dial(ws)
+	waitCurrent(d)
 }

@@ -40,6 +40,10 @@ type hub struct {
 	// reconnect starts a fresh handshake.
 	helloReceived chan struct{}
 
+	// refusedLogged keeps a refused profile's retries from repeating the
+	// refusal line; reset when the connection changes.
+	refusedLogged bool
+
 	// lastTabURL is the URL the extension last reported. Surfaced in the
 	// "extension not connected" error so a fresh agent can re-attach.
 	lastTabURL string
@@ -128,22 +132,50 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		logWarn("live: upgrade", "error", err)
 		return
 	}
+	// Each Chrome profile runs its own copy of the extension and keeps
+	// reconnecting by itself. If an automatic reconnect could replace the
+	// live connection, two profiles would evict each other every second
+	// (todo 105a358a). So only an explicit popup Connect (?takeover=1)
+	// replaces it; any other dial is refused while a connection is up.
+	takeover := r.URL.Query().Get("takeover") == "1"
 	h.mu.Lock()
-	if h.conn != nil {
-		// Replace any prior connection — the popup reconnects when the
-		// user clicks Connect again.
-		_ = h.conn.Close()
+	if h.conn != nil && !takeover {
+		logOnce := !h.refusedLogged
+		h.refusedLogged = true
+		h.mu.Unlock()
+		closeWithCode(conn, CloseHubBusy, "another browser profile is connected; press Connect in this profile to take over")
+		if logOnce {
+			logInfo("live: refused extension: another browser profile is connected (press Connect in the wanted profile's popup to take it over)",
+				"remote", r.RemoteAddr)
+		}
+		return
 	}
+	if h.conn != nil {
+		closeWithCode(h.conn, CloseTakenOver, "another browser profile took over the hub")
+	}
+	h.refusedLogged = false
 	h.conn = conn
 	h.extVersion = ""
 	h.extMethods = nil
 	h.extPermissions = nil
 	h.helloReceived = make(chan struct{})
 	h.mu.Unlock()
-	logInfo("live: extension connected", "remote", r.RemoteAddr)
+	logInfo("live: extension connected", "remote", r.RemoteAddr, "takeover", takeover)
 
 	go h.readLoop(conn)
 	go h.keepAlive(conn)
+}
+
+// Close codes the hub sends to an extension it will not keep. The
+// extension backs off on either instead of redialing at once.
+const (
+	CloseHubBusy   = 4409 // refused: another profile holds the hub
+	CloseTakenOver = 4410 // replaced: another profile pressed Connect
+)
+
+func closeWithCode(conn *websocket.Conn, code int, reason string) {
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second))
+	_ = conn.Close()
 }
 
 // HubPingInterval paces the hub's keepalive frames. Chrome stops an MV3
@@ -214,6 +246,7 @@ func (h *hub) readLoop(conn *websocket.Conn) {
 		h.mu.Lock()
 		if h.conn == conn {
 			h.conn = nil
+			h.refusedLogged = false
 		}
 		// Fail any in-flight requests for this connection.
 		for id, ch := range h.pending {
@@ -313,10 +346,25 @@ func (h *hub) hotReload(dir, from string) {
 			logInfo("live: refreshed extension folder", "dir", dir)
 		}
 	}
+	h.mu.Lock()
+	old := h.conn
+	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err := h.call(ctx, "reload", nil)
 	logInfo("live: asked extension to reload", "from", from, "to", EmbeddedVersion(), "ack_error", err)
+	if err != nil || old == nil {
+		return
+	}
+	// The reloading worker redials without ?takeover; release its old
+	// socket now so that dial is not refused as another profile.
+	h.mu.Lock()
+	if h.conn == old {
+		h.conn = nil
+		h.refusedLogged = false
+	}
+	h.mu.Unlock()
+	_ = old.Close()
 }
 
 // ExtVersion returns the version reported by the extension's _hello

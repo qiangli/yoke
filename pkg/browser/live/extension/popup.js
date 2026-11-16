@@ -41,6 +41,8 @@ async function refreshStatus() {
   const resp = await chrome.runtime.sendMessage({ type: "ycode-live:status" });
   if (resp && resp.connected) {
     setStatus("connected", `connected on port ${resp.port}`);
+  } else if (resp && resp.busy) {
+    setStatus("disconnected", `waiting: ${resp.busy}`);
   } else {
     setStatus("disconnected", "disconnected");
   }

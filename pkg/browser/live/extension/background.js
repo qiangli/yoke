@@ -23,6 +23,14 @@ let activeTabId = null;
 // reconnect loop instead of spinning on ERR_CONNECTION_REFUSED forever.
 let wantConnected = false;
 let reconnectTimer = null;
+// Set by the popup's Connect: the next dial asks the hub to take over from
+// another profile. Automatic reconnects never take over (todo 105a358a).
+let takeoverNext = false;
+// The hub's last refusal (4409: another profile holds it; 4410: another
+// profile took over), shown in the popup; cleared on Connect.
+let hubBusy = "";
+const CLOSE_HUB_BUSY = 4409;
+const CLOSE_TAKEN_OVER = 4410;
 
 // --- entry: open/close commands from popup ---
 
@@ -34,7 +42,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     wantConnected = true;
     reconnectMs = RECONNECT_BASE_MS;
+    takeoverNext = true;
+    hubBusy = "";
     rememberIntent();
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
+      try { ws.close(); } catch (e) { /* ignore */ }
+      ws = null;
+    }
     openWS();
     sendResponse({ status: "connecting", port: connectedPort });
   } else if (msg && msg.type === "ycode-live:disconnect") {
@@ -56,6 +70,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   } else if (msg && msg.type === "ycode-live:status") {
     sendResponse({
       connected: ws !== null && ws.readyState === WebSocket.OPEN,
+      busy: hubBusy,
       port: connectedPort,
       tabId: activeTabId,
     });
@@ -104,7 +119,8 @@ function openWS() {
     return;
   }
   const port = connectedPort || DEFAULT_PORT;
-  const url = `ws://127.0.0.1:${port}/ws`;
+  const url = `ws://127.0.0.1:${port}/ws` + (takeoverNext ? "?takeover=1" : "");
+  takeoverNext = false;
   try {
     ws = new WebSocket(url);
   } catch (err) {
@@ -136,9 +152,17 @@ function openWS() {
   };
   ws.onmessage = onMessage;
   ws.onerror = (e) => console.warn("ycode-live: socket error", e);
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     ws = null;
     chrome.alarms.clear("ycode-live-keepalive");
+    if (ev && (ev.code === CLOSE_HUB_BUSY || ev.code === CLOSE_TAKEN_OVER)) {
+      // Another profile holds the hub. Keep retrying slowly so this one
+      // resumes when that one leaves, without evicting it.
+      hubBusy = ev.reason || "another browser profile is connected";
+      reconnectMs = RECONNECT_MAX_MS;
+    } else {
+      hubBusy = "";
+    }
     scheduleReconnect();
   };
 }
