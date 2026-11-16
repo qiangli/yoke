@@ -33,6 +33,25 @@ const CLOSE_HUB_BUSY = 4409;
 const CLOSE_TAKEN_OVER = 4410;
 const CLOSE_HUB_PAUSED = 4423; // the user turned the hub off (tray or `bashy browser hub pause`)
 
+// Toolbar badge: whether bashy can reach this browser, at a glance.
+// connected: none · paused: OFF (grey) · another profile holds the hub: …
+// (amber) · hub/outpost unreachable: ! (red) · not connecting: none.
+const BADGES = {
+  connected: ["", null, "connected to bashy"],
+  idle: ["", null, "not connected — click Connect this tab"],
+  paused: ["OFF", "#6B7280", "the browser hub is off — turn it on from the tray or run: bashy browser hub resume"],
+  busy: ["…", "#D97706", "another browser profile is using the bashy hub — Connect here to take over"],
+  down: ["!", "#DC2626", "cannot reach the bashy hub (is outpost or `bashy browser hub` running?)"],
+};
+function setBadge(state) {
+  const [text, color, why] = BADGES[state] || BADGES.idle;
+  try {
+    chrome.action.setBadgeText({ text });
+    if (color) chrome.action.setBadgeBackgroundColor({ color });
+    chrome.action.setTitle({ title: "bashy live — " + why });
+  } catch (e) { /* action API unavailable: badge is cosmetic */ }
+}
+
 // --- entry: open/close commands from popup ---
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -67,6 +86,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       ws = null;
     }
     chrome.alarms.clear("ycode-live-keepalive");
+    setBadge("idle");
     sendResponse({ status: "disconnected" });
   } else if (msg && msg.type === "ycode-live:status") {
     sendResponse({
@@ -126,10 +146,12 @@ function openWS() {
     ws = new WebSocket(url);
   } catch (err) {
     console.warn("ycode-live: WebSocket constructor failed", err);
+    setBadge("down");
     scheduleReconnect();
     return;
   }
   ws.onopen = () => {
+    setBadge("connected");
     reconnectMs = RECONNECT_BASE_MS;
     chrome.alarms.clear("ycode-live-reconnect");
     chrome.alarms.create("ycode-live-keepalive", { periodInMinutes: KEEPALIVE_PERIOD_MIN });
@@ -168,6 +190,13 @@ function openWS() {
   ws.onclose = (ev) => {
     ws = null;
     chrome.alarms.clear("ycode-live-keepalive");
+    if (ev && ev.code === CLOSE_HUB_PAUSED) {
+      setBadge("paused");
+    } else if (ev && (ev.code === CLOSE_HUB_BUSY || ev.code === CLOSE_TAKEN_OVER)) {
+      setBadge("busy");
+    } else if (wantConnected) {
+      setBadge("down");
+    }
     if (ev && (ev.code === CLOSE_HUB_BUSY || ev.code === CLOSE_TAKEN_OVER || ev.code === CLOSE_HUB_PAUSED)) {
       // Another profile holds the hub. Keep retrying slowly so this one
       // resumes when that one leaves, without evicting it.
