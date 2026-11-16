@@ -20,3 +20,5 @@ Operator 2026-11-16, two ways around the permission cost: (a) add userScripts la
 
 Operator 2026-11-16: the companion tab is a general building block, not only for shaping: e.g. a summary (or translation, notes) view beside the original page in split view. Candidate verb: `bashy browser beside FILE.html|.md` — the agent writes the page, the hub serves it (sheet dir, token URL) and open_beside puts it next to the driven tab (shipped with the copy-sheet split view, yoke 8cc18c9c).
 Also (operator): a visual, poster-style graphic summary beside long, detailed prose — the companion tab carries any agent-made view (summary, poster, translation, notes) next to the source.
+
+Operator 2026-11-16: make the shaping state visible. Distinguish producer-side shaping only from consumer-side shaping active, and show whether the user is signed in to dhnt.io (the cloudbox account), so users know which mode applies. Surface it in the extension (badge or popup line, beside the S529.10 hub badge) and in the tray (status line/tooltip), from one shared state the hub reports.
