@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -155,3 +156,23 @@ func closeCodeOf(c *websocket.Conn) int {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+// A started hub has already written the control token (0600) that the tray
+// reads; before 2026-11-16 it appeared only after the first CLI gate change,
+// so the tray's first click failed with "no hub control token".
+func TestHubCreatesTheControlTokenAtStart(t *testing.T) {
+	isolateGate(t)
+	port := freePort(t)
+	svc := New(port)
+	if err := svc.EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { svc.Close() })
+	st, err := os.Stat(gateTokenPath())
+	if err != nil {
+		t.Fatalf("token not created at start: %v", err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("token mode %v, want 0600", st.Mode().Perm())
+	}
+}

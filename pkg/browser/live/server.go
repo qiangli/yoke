@@ -87,6 +87,12 @@ func (h *hub) start(ctx context.Context) error {
 	h.mu.Lock()
 	h.gate = loadGate(h.port)
 	h.mu.Unlock()
+	// Create the gate control token now: its controllers (the tray, which
+	// only reads it, and `bashy browser hub pause|resume`) need it to exist
+	// before the first change, and the hub is the one that owns it.
+	if _, err := ControlToken(); err != nil {
+		logWarn("live: gate control token", "error", err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
