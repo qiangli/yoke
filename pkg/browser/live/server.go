@@ -364,12 +364,12 @@ func (h *hub) planReload(hi extHello) (string, bool) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.reloaded[hi.Version] {
+	if h.reloaded[hi.Version+"|"+hi.Instance] {
 		logWarn("live: extension still stale after a reload; it was loaded from another folder — run `bashy browser setup live`",
 			"version", hi.Version, "shipped", want)
 		return "", false
 	}
-	h.reloaded[hi.Version] = true
+	h.reloaded[hi.Version+"|"+hi.Instance] = true
 	return h.reloadDir, true
 }
 

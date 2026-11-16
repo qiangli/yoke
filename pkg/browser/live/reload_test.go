@@ -67,3 +67,22 @@ func TestPlanReloadSkipsStoreInstalls(t *testing.T) {
 		t.Fatal("a stale unpacked copy must still be hot-reloaded")
 	}
 }
+
+// Two profiles on the same stale version are two copies: each is reloaded
+// once (before, the second was taken for a copy loaded from another folder).
+func TestPlanReloadOncePerInstance(t *testing.T) {
+	h := newHub(0)
+	h.reloadDir = t.TempDir()
+	a := extHello{Version: "0.7.9", Methods: []string{"reload"}, InstallType: "development", Instance: "profile-a"}
+	b := a
+	b.Instance = "profile-b"
+	if _, ok := h.planReload(a); !ok {
+		t.Fatal("first profile not reloaded")
+	}
+	if _, ok := h.planReload(b); !ok {
+		t.Fatal("second profile on the same version not reloaded")
+	}
+	if _, ok := h.planReload(a); ok {
+		t.Fatal("a copy still stale after its reload must not loop")
+	}
+}

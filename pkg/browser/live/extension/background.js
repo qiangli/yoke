@@ -168,7 +168,18 @@ function openWS() {
     // store) from an unpacked copy (hot-reloaded from the bashy folder).
     // getSelf needs no "management" permission.
     const sock = ws;
-    const sendHello = (installType) => {
+    const sendHello = async (installType) => {
+      // One id per installed copy (per profile), so the hub can tell two
+      // profiles on the same version apart and reload each once.
+      let instance = "";
+      try {
+        const got = await chrome.storage.local.get("instanceId");
+        instance = got.instanceId || "";
+        if (!instance) {
+          instance = crypto.randomUUID();
+          await chrome.storage.local.set({ instanceId: instance });
+        }
+      } catch (e) { /* storage unavailable: per-version reload only */ }
       try {
         const manifest = chrome.runtime.getManifest();
         sock.send(JSON.stringify({
@@ -179,6 +190,7 @@ function openWS() {
             methods: SUPPORTED_METHODS,
             permissions: manifest.permissions || [],
             install_type: installType,
+            instance,
           },
         }));
       } catch (e) {

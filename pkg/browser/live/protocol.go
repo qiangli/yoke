@@ -59,4 +59,7 @@ type extHello struct {
 	// for a Load-unpacked copy, "normal" for a store install; empty from
 	// extensions older than 0.11.0.
 	InstallType string `json:"install_type,omitempty"`
+	// Instance identifies one installed copy (one per browser profile),
+	// so the hub reloads each stale copy once; empty before 0.11.6.
+	Instance string `json:"instance,omitempty"`
 }
