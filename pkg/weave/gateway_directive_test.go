@@ -259,6 +259,13 @@ func TestGatewayRunEffectGate(t *testing.T) {
 				t.Fatalf("record = %+v", r)
 			}
 			if tc.needsSearch {
+				// The approval event is posted after the record reaches its
+				// state, so a single snapshot raced it under load ("gated run
+				// emitted no approval event"). Wait for it.
+				deadline := time.Now().Add(10 * time.Second)
+				for !hasApprovalEvent(c.snapshot()) && time.Now().Before(deadline) {
+					time.Sleep(10 * time.Millisecond)
+				}
 				found := false
 				for _, emitted := range c.snapshot() {
 					if emitted.Kind != "approval" {
@@ -575,4 +582,13 @@ func TestGatewayUnansweredDenial(t *testing.T) {
 	if !ok || dec.Verdict != ask.VerdictDeny || dec.Via != ask.ViaTimeout {
 		t.Fatalf("unanswered approval was not denied: %+v %v", dec, ok)
 	}
+}
+
+func hasApprovalEvent(events []AppendEventReq) bool {
+	for _, e := range events {
+		if e.Kind == "approval" {
+			return true
+		}
+	}
+	return false
 }
