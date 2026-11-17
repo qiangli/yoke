@@ -268,7 +268,10 @@ func serveLive(hub *dagrun.Hub, ws *websocket.Conn, att *dagrun.Attachment, clie
 	defer func() {
 		att.Close()
 		if clientGone && !terminal && !evicted && !viewer {
-			_ = hub.Detach(clientID, time.Now())
+			// Only this connection's own attachment: after a reconnect the
+			// same client id holds a newer one, which a late break here
+			// must not drop.
+			_ = hub.DetachAttachment(att, time.Now())
 		}
 	}()
 	if len(replay) > 0 {

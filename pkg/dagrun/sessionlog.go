@@ -354,10 +354,27 @@ func (h *Hub) Attach(clientID string, since int64, now time.Time, opts ...Attach
 // Detach records a client disconnect and drops its live stream. The session
 // keeps running holderless (detached).
 func (h *Hub) Detach(clientID string, now time.Time) error {
+	return h.detach(clientID, nil, now)
+}
+
+// DetachAttachment records a's holder disconnect unless another attachment
+// already holds the session. A connection whose break is noticed after its
+// client has reconnected (same client id, newer attachment) must not detach
+// the newer one; then it is a no-op. a itself is usually closed by now
+// (Close clears the holder), so only a different live holder skips.
+func (h *Hub) DetachAttachment(a *Attachment, now time.Time) error {
+	return h.detach(a.clientID, a, now)
+}
+
+func (h *Hub) detach(clientID string, only *Attachment, now time.Time) error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return ErrHubClosed
+	}
+	if only != nil && h.holder != nil && h.holder != only {
+		h.mu.Unlock()
+		return nil
 	}
 	next, err := h.session.Detach(clientID, now)
 	if err != nil {

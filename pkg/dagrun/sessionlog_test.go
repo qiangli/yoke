@@ -453,3 +453,61 @@ func TestSessionHubSnapshotIsolation(t *testing.T) {
 		t.Fatalf("Session() aliases ExitCode: got %d, want 7", *again.ExitCode)
 	}
 }
+
+// TestSessionLateBreakOfOldConnectionKeepsReconnectedHolder: the client drops
+// its connection and reconnects with the same id before the server notices
+// the old socket broke. The old connection's cleanup (Close, then
+// DetachAttachment) must not drop the newer attachment: it still sees output
+// and the exit. Found as a 10-minute hang of the attach reconnect test under
+// load, where Detach(clientID) dropped the reconnected stream.
+func TestSessionLateBreakOfOldConnectionKeepsReconnectedHolder(t *testing.T) {
+	hub, now := newSlogHub(t, "client-a")
+	oldAtt, err := hub.Attach("client-a", 0, now)
+	if err != nil {
+		t.Fatalf("first attach: %v", err)
+	}
+	newAtt, err := hub.Attach("client-a", 0, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("reconnect attach: %v", err)
+	}
+	defer newAtt.Close()
+
+	// The old connection's break is noticed only now.
+	_ = oldAtt.Close()
+	if err := hub.DetachAttachment(oldAtt, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("late DetachAttachment: %v", err)
+	}
+	if got := hub.Session().State; got != StateRunning {
+		t.Fatalf("state after the old connection's late break = %q, want running", got)
+	}
+
+	if _, err := hub.Append([]byte("two")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if got := slogReadN(t, newAtt, 3, "reconnected stream"); string(got) != "two" {
+		t.Fatalf("reconnected stream = %q, want %q", got, "two")
+	}
+	if err := hub.RecordExit(0, now.Add(3*time.Second)); err != nil {
+		t.Fatalf("RecordExit: %v", err)
+	}
+	if err := slogReadErr(t, newAtt, "reconnected post-exit"); !errors.Is(err, io.EOF) {
+		t.Fatalf("reconnected post-exit read = %v, want EOF", err)
+	}
+}
+
+// TestSessionDetachAttachmentRecordsARealDisconnect: with no newer holder,
+// the connection's own cleanup still records the disconnect.
+func TestSessionDetachAttachmentRecordsARealDisconnect(t *testing.T) {
+	hub, now := newSlogHub(t, "client-a")
+	att, err := hub.Attach("client-a", 0, now)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	_ = att.Close()
+	if err := hub.DetachAttachment(att, now.Add(time.Second)); err != nil {
+		t.Fatalf("DetachAttachment: %v", err)
+	}
+	if got := hub.Session().State; got != StateDetached {
+		t.Fatalf("state = %q, want detached", got)
+	}
+}
