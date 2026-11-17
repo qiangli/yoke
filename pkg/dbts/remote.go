@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -322,6 +323,9 @@ func promLabels(labels map[string]string) string {
 	for k := range labels {
 		keys = append(keys, k)
 	}
+	// Deterministic order: map iteration is random, and an unsorted render
+	// gave the same series different label orders line to line.
+	sort.Strings(keys)
 	var b strings.Builder
 	for i, k := range keys {
 		if i > 0 {
