@@ -40,8 +40,8 @@ require (
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
-	github.com/qiangli/bonsai v0.0.0-20261025102716-d14bdab6ed94
-	github.com/qiangli/coreutils v0.0.0-20261027072617-211789fadf75
+	github.com/qiangli/bonsai v0.0.0-20261103194740-24dd0f47247e
+	github.com/qiangli/coreutils v0.0.0-20261112194059-6dd7a3ee1858
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
@@ -407,7 +407,7 @@ require (
 // checkout. Same convention as ycode/outpost/bashy. coreutils is the
 // certified POSIX package this module was split out of (Sprint 208); yoke
 // imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261025021234-6663c93a2d3c
+replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261112194059-a4141771a3dc
 
 // gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
 // hosting qiangli/gotreesitter, module path kept as upstream's) with the
@@ -418,14 +418,14 @@ replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261025021234-6663c93
 // five grammars embedded), which a module-path rename could not reach. See
 // the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
 // surviving 201 attributions.
-replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261013004852-f03173f827ed
+replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261103194740-9471d547a17c
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261027072617-211789fadf75
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261112194059-6dd7a3ee1858
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
