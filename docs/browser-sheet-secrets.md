@@ -20,8 +20,17 @@ agent's output, stdout, or a log line.
 
 The store (`$BASHY_HOME/browser/sheet-secrets/`, directory 0700, one 0600
 file per name) is local-only: it is never synced and is not the cloudbox
-vault (operator decision, S529.8). S529.8 adds the sheet input box that
-writes it.
+vault (operator decision, S529.8).
+
+**Entry (S529.8).** A named secret with no stored value shows an entry box.
+The human types the value there and saves it, which POSTs it to the same
+endpoint (`op: put`) under the same Origin, fetch-metadata and token rules.
+With **Remember** the value goes into the store, for later sheets. Without
+it, the value is held once (`.once/NAME`, 0600) for a fill by reference: the
+first `TakeSheetSecret` consumes it (an atomic rename, so it is taken at most
+once), and it lapses after 15 minutes. Either way the response, the
+`copysheet --json` output (`pending` names) and the hub log carry only the
+name, and the hub adds the value to its redaction set.
 
 ## Assets
 

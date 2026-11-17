@@ -3,11 +3,12 @@ id: f2a5e32d48bc
 kind: feature
 title: S529.8 sheet input fields with Remember (local-only store)
 seq: 3120
-status: todo
+status: assigned
 priority: p1
 labels:
     - browser
 created: 2026-11-16T17:06:20.396405Z
+assignee: claude-opus5.5-s529
 sprint: 529
 sprint_id: 61593fcd-15ea-578f-b8ca-527620119de2
 sprint_title: 'bashy browser extension: store distribution + cross-browser (Chrome Web Store, Edge/Windows, Safari)'

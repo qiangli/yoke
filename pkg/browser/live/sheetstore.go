@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 )
 
 // sheetSecretName is the allowed shape of a secret name: it is a file name,
@@ -59,6 +60,10 @@ func PutSheetSecret(name, value string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
+	return writeAtomic0600(p, value)
+}
+
+func writeAtomic0600(p, value string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".tmp-*")
 	if err != nil {
 		return err
@@ -78,14 +83,78 @@ func PutSheetSecret(name, value string) error {
 	return os.Rename(tmp.Name(), p)
 }
 
-// DeleteSheetSecret removes name; a missing name is not an error.
+// onceTTL bounds how long a not-remembered answer waits to be used.
+const onceTTL = 15 * time.Minute
+
+func sheetOncePath(name string) (string, error) {
+	if !ValidSheetSecretName(name) {
+		return "", fmt.Errorf("invalid secret name %q", name)
+	}
+	return filepath.Join(SheetSecretDir(), ".once", name), nil
+}
+
+// PutSheetOnce holds a value the human entered without Remember: a one-use
+// 0600 sink under name, consumed by the first TakeSheetSecret and dropped
+// after onceTTL.
+func PutSheetOnce(name, value string) error {
+	p, err := sheetOncePath(name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	return writeAtomic0600(p, value)
+}
+
+// SheetSecretStored reports whether name has a value: remembered, or held
+// once and not yet expired.
+func SheetSecretStored(name string) bool {
+	if p, err := sheetSecretPath(name); err == nil {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	if p, err := sheetOncePath(name); err == nil {
+		if fi, err := os.Stat(p); err == nil && time.Since(fi.ModTime()) < onceTTL {
+			return true
+		}
+	}
+	return false
+}
+
+// TakeSheetSecret returns name's value for a fill by reference: a one-use
+// answer first (consumed: removed before the value is returned, so it is
+// taken at most once), else the remembered value.
+func TakeSheetSecret(name string) (string, error) {
+	p, err := sheetOncePath(name)
+	if err != nil {
+		return "", err
+	}
+	claimed := p + fmt.Sprintf(".taken-%d", time.Now().UnixNano())
+	if err := os.Rename(p, claimed); err == nil {
+		b, rerr := os.ReadFile(claimed)
+		fi, serr := os.Stat(claimed)
+		os.Remove(claimed)
+		if rerr == nil && serr == nil && time.Since(fi.ModTime()) < onceTTL {
+			return string(b), nil
+		}
+	}
+	return GetSheetSecret(name)
+}
+
+// DeleteSheetSecret removes name (remembered and held once); a missing name
+// is not an error.
 func DeleteSheetSecret(name string) error {
 	p, err := sheetSecretPath(name)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	o, _ := sheetOncePath(name)
+	for _, f := range []string{p, o} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }

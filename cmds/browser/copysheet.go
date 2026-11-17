@@ -200,7 +200,7 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 48px}h1{font-size:21px;marg
 .f{background:var(--card);border-radius:10px;padding:10px 14px;margin:8px 0;box-shadow:0 1px 3px #0002;transition:opacity .2s}
 .f.done{opacity:.5}.h{display:flex;justify-content:space-between;align-items:center;gap:12px}.h b{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;margin:6px 0 0}.note{color:var(--mute);font-size:13px;margin-top:4px}
-.held{color:var(--warn);font-size:14px;margin-top:6px}.btns{display:flex;gap:6px}button.ghost{background:transparent;color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.held{color:var(--warn);font-size:14px;margin-top:6px}.btns{display:flex;gap:6px}.entry{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px}.entry[hidden]{display:none}.sv{flex:1 1 220px;min-width:0;padding:6px 8px;border-radius:6px;border:1px solid var(--mute);background:var(--bg);color:var(--ink);font:inherit}.rm{color:var(--mute);font-size:13px}button.ghost{background:transparent;color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
 button{flex:none;border:0;border-radius:6px;background:var(--acc);color:#fff;padding:6px 14px;font:inherit;cursor:pointer}button.ok{background:var(--ok)}
 </style></head><body><main><h1>`)
 	b.WriteString(esc(s.Title))
@@ -216,7 +216,7 @@ button{flex:none;border:0;border-radius:6px;background:var(--acc);color:#fff;pad
 		}
 		for _, f := range sec.Fields {
 			if f.Secret != "" {
-				fmt.Fprintf(&b, `<div class="f" data-secret="%s" data-k="%s"><div class="h"><b>%s</b><span class="btns"><button type="button" class="ghost" data-act="reveal">Reveal</button><button type="button" data-act="copy">Copy</button></span></div><pre class="mask">••••••••</pre><div class="note sx">Secret <code>%s</code>: shown on Reveal, never stored in this page.</div>`, esc(f.Secret), esc(f.Label), esc(f.Label), esc(f.Secret))
+				fmt.Fprintf(&b, `<div class="f" data-secret="%s" data-k="%s"><div class="h"><b>%s</b><span class="btns"><button type="button" class="ghost" data-act="reveal">Reveal</button><button type="button" data-act="copy">Copy</button></span></div><pre class="mask">••••••••</pre><div class="entry" hidden><input type="password" class="sv" autocomplete="off" spellcheck="false" aria-label="%s"><label class="rm"><input type="checkbox" class="remember"> Remember on this computer</label><button type="button" data-act="save">Save</button></div><div class="note sx">Secret <code>%s</code>: shown on Reveal, never stored in this page.</div>`, esc(f.Secret), esc(f.Label), esc(f.Label), esc(f.Label), esc(f.Secret))
 			} else if reason, ok := held[sec.Name+"\x00"+f.Label]; ok {
 				fmt.Fprintf(&b, `<div class="f"><div class="h"><b>%s</b></div><div class="held">Enter this yourself: bashy does not prepare guarded values (%s).</div>`, esc(f.Label), esc(reason))
 			} else {
@@ -241,14 +241,23 @@ document.querySelectorAll('[data-secret]').forEach(f=>{if(state[f.dataset.k]==='
 function progress(){const d=document.querySelectorAll('[data-copy].done,[data-secret].done').length;document.getElementById('progress').textContent=d+' of '+total+' copied';}
 // Secrets by reference: the value comes from the bashy hub on a click and is
 // never kept in this page (storage keeps only "copied").
-async function secret(name){if(location.protocol!=='http:')throw new Error('Open this sheet through bashy (the browser hub) to use secrets.');
- const r=await fetch(location.pathname+'/secret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name}),cache:'no-store'});
- const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('hub refused: '+r.status));return j.value;}
+async function hub(body){if(location.protocol!=='http:')throw new Error('Open this sheet through bashy (the browser hub) to use secrets.');
+ const r=await fetch(location.pathname+'/secret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('hub refused: '+r.status));return j;}
+// A named secret with no stored value asks the human for it (S529.8):
+// Remember keeps it on this computer; otherwise bashy holds it once.
+document.querySelectorAll('[data-secret]').forEach(async f=>{try{const j=await hub({op:'status',name:f.dataset.secret});
+ if(!j.stored){f.classList.add('ask');f.querySelector('pre').hidden=true;f.querySelector('.entry').hidden=false;f.querySelector('.sx').textContent='Enter it here: bashy gets only the name '+f.dataset.secret+', never the value.';}}catch(_){}});
 let lastSecret=0;
 document.addEventListener('click',async e=>{const btn=e.target.closest('[data-secret] button');if(!btn)return;
- const f=btn.closest('[data-secret]'),pre=f.querySelector('pre'),note=f.querySelector('.sx');
- try{const v=await secret(f.dataset.secret);
-  if(btn.dataset.act==='reveal'){pre.textContent=v;pre.classList.remove('mask');setTimeout(()=>{pre.textContent='••••••••';pre.classList.add('mask')},10000);return;}
+ const f=btn.closest('[data-secret]'),pre=f.querySelector('pre'),note=f.querySelector('.sx'),inp=f.querySelector('.sv');
+ try{const ask=f.classList.contains('ask');
+  if(btn.dataset.act==='save'){if(!inp.value)throw new Error('Type the value first.');
+   const remember=f.querySelector('.remember').checked;const j=await hub({op:'put',name:f.dataset.secret,value:inp.value,remember});
+   note.style.color='';note.textContent=remember?'Saved on this computer as '+f.dataset.secret+'; later sheets can show it.':'Held once for bashy as '+f.dataset.secret+' (not remembered).';return;}
+  if(btn.dataset.act==='reveal'){if(ask){inp.type=inp.type==='password'?'text':'password';if(inp.type==='text')setTimeout(()=>{inp.type='password'},10000);return;}
+   const v=(await hub({name:f.dataset.secret})).value;pre.textContent=v;pre.classList.remove('mask');setTimeout(()=>{pre.textContent='••••••••';pre.classList.add('mask')},10000);return;}
+  const v=ask?inp.value:(await hub({name:f.dataset.secret})).value;if(!v)throw new Error('Nothing to copy yet.');
   const mine=++lastSecret;await navigator.clipboard.writeText(v);
   btn.textContent='Copied';btn.classList.add('ok');f.classList.add('done');state[f.dataset.k]='secret:'+f.dataset.secret;save(state);progress();
   setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('ok')},1500);
@@ -316,7 +325,13 @@ func browserCopySheet(rc *tool.RunContext, args []string, out string, port int, 
 		if secrets == nil {
 			secrets = []string{}
 		}
-		return writeJSON(rc, map[string]any{"success": true, "path": out, "fields": fields, "withheld": withheld, "secrets": secrets, "opened": opened, "opened_as": openedAs})
+		pending := []string{}
+		for _, n := range secrets {
+			if !live.SheetSecretStored(n) {
+				pending = append(pending, n)
+			}
+		}
+		return writeJSON(rc, map[string]any{"success": true, "path": out, "fields": fields, "withheld": withheld, "secrets": secrets, "pending": pending, "opened": opened, "opened_as": openedAs})
 	}
 	fmt.Fprintln(rc.Out, out)
 	for _, w := range withheld {

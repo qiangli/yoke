@@ -3,6 +3,7 @@ package live
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,5 +167,87 @@ func TestSheetStoreNamesAndModes(t *testing.T) {
 	_ = DeleteSheetSecret("k")
 	if _, err := GetSheetSecret("k"); err != ErrNoSheetSecret {
 		t.Fatalf("after delete: %v", err)
+	}
+}
+
+func putSecret(h *hub, token, name, value string, remember bool) *httptest.ResponseRecorder {
+	b, _ := json.Marshal(map[string]any{"op": "put", "name": name, "value": value, "remember": remember})
+	r := httptest.NewRequest(http.MethodPost, "/sheet/"+token+"/secret", bytes.NewReader(b))
+	r.Host = hubAddr
+	r.Header.Set("Origin", "http://"+hubAddr)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.handleSheet(w, r)
+	return w
+}
+
+func status(h *hub, token, name string) bool {
+	w := askSecret(h, token, name, func(r *http.Request) {
+		b, _ := json.Marshal(map[string]string{"op": "status", "name": name})
+		r.Body = io.NopCloser(bytes.NewReader(b))
+	})
+	var j struct{ Stored bool }
+	_ = json.Unmarshal(w.Body.Bytes(), &j)
+	return j.Stored
+}
+
+// S529.8: the human enters a value in the sheet. Remember keeps it across
+// hub restarts; without Remember it is held once and taken at most once. The
+// agent-facing response carries the name only, and nothing reaches the log.
+func TestSheetEntryRememberAndOnce(t *testing.T) {
+	var logBuf bytes.Buffer
+	SetLogger(NewWriterLogger(&logBuf))
+	t.Cleanup(func() { SetLogger(nil) })
+	h, token := secretHub(t)
+
+	if status(h, token, "unset") {
+		t.Fatal("unset reported stored")
+	}
+	w := putSecret(h, token, "unset", "typed-once-value", false)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "typed-once") || !strings.Contains(w.Body.String(), `"ref":"unset"`) {
+		t.Fatalf("put once: %d %s", w.Code, w.Body)
+	}
+	if !status(h, token, "unset") {
+		t.Fatal("held-once value not reported")
+	}
+	if w := askSecret(h, token, "unset", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("a held-once value was revealed through get: %d", w.Code)
+	}
+	if v, err := TakeSheetSecret("unset"); err != nil || v != "typed-once-value" {
+		t.Fatalf("take = %q %v", v, err)
+	}
+	if _, err := TakeSheetSecret("unset"); err != ErrNoSheetSecret {
+		t.Fatalf("taken twice: %v", err)
+	}
+
+	if w := putSecret(h, token, "unset", "remembered-value", true); w.Code != http.StatusOK {
+		t.Fatalf("put remember: %d", w.Code)
+	}
+	if out := string(h.redactServed(json.RawMessage(`"remembered-value"`))); strings.Contains(out, "remembered") {
+		t.Fatalf("entered value not redacted: %s", out)
+	}
+	// A restarted hub (new process state, same store) still has it.
+	h2 := newHub(0)
+	h2.addr = hubAddr
+	b, _ := json.Marshal(map[string]string{"path": filepath.Join(sheetDir(), "form.html")})
+	r := httptest.NewRequest(http.MethodPost, "/sheet", bytes.NewReader(b))
+	r.Host = hubAddr
+	rw := httptest.NewRecorder()
+	h2.handleSheetRegister(rw, r)
+	var reg struct{ URL string }
+	_ = json.Unmarshal(rw.Body.Bytes(), &reg)
+	tok2 := strings.TrimPrefix(reg.URL, "http://"+hubAddr+"/sheet/")
+	var got struct{ Value string }
+	_ = json.Unmarshal(askSecret(h2, tok2, "unset", nil).Body.Bytes(), &got)
+	if got.Value != "remembered-value" {
+		t.Fatalf("remembered value lost across restart: %q", got.Value)
+	}
+	if w := putSecret(h, token, "other", "x-value", true); w.Code != http.StatusForbidden {
+		t.Fatalf("put to an undeclared name: %d", w.Code)
+	}
+	for _, v := range []string{"typed-once-value", "remembered-value"} {
+		if strings.Contains(logBuf.String(), v) {
+			t.Fatalf("value in hub log:\n%s", logBuf.String())
+		}
 	}
 }

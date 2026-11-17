@@ -260,6 +260,7 @@ func TestBesideOpensAViewNextToThePage(t *testing.T) {
 // field is not withheld, and the envelope lists names, never a value.
 func TestCopySheetSecretByReference(t *testing.T) {
 	isolateCopySheet(t)
+	t.Setenv("BASHY_HOME", t.TempDir())
 	in := writeSheetInput(t, map[string]any{"fields": []map[string]any{
 		{"label": "API key", "secret": "openai-key"},
 		{"label": "Company", "value": "Example Co"},
@@ -271,12 +272,13 @@ func TestCopySheetSecretByReference(t *testing.T) {
 	var env struct {
 		Path     string   `json:"path"`
 		Secrets  []string `json:"secrets"`
+		Pending  []string `json:"pending"`
 		Withheld []any    `json:"withheld"`
 	}
 	_ = json.Unmarshal([]byte(out), &env)
 	page, _ := os.ReadFile(env.Path)
 	s := string(page)
-	if len(env.Secrets) != 1 || env.Secrets[0] != "openai-key" || len(env.Withheld) != 0 {
+	if len(env.Secrets) != 1 || env.Secrets[0] != "openai-key" || len(env.Pending) != 1 || len(env.Withheld) != 0 {
 		t.Fatalf("envelope = %s", out)
 	}
 	if !strings.Contains(s, `<meta name="bashy-sheet-secrets" content="openai-key">`) || !strings.Contains(s, `data-secret="openai-key"`) || !strings.Contains(s, "Reveal") {

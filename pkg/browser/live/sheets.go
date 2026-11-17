@@ -225,9 +225,12 @@ func (h *hub) handleSheetSecret(w http.ResponseWriter, r *http.Request, token st
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Op       string `json:"op"` // "" or "get", "status", "put"
+		Name     string `json:"name"`
+		Value    string `json:"value"`
+		Remember bool   `json:"remember"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
@@ -235,9 +238,42 @@ func (h *hub) handleSheetSecret(w http.ResponseWriter, r *http.Request, token st
 		http.Error(w, "this sheet did not declare that secret", http.StatusForbidden)
 		return
 	}
-	v, err := GetSheetSecret(req.Name)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	switch req.Op {
+	case "status":
+		_ = json.NewEncoder(w).Encode(map[string]bool{"stored": SheetSecretStored(req.Name)})
+		return
+	case "put":
+		// S529.8: the human entered the value in the sheet. Remember keeps it
+		// in the local store; otherwise it is held once for a fill by
+		// reference. Either way the agent learns only the name.
+		if req.Value == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "empty value"})
+			return
+		}
+		put, how := PutSheetOnce, "held once"
+		if req.Remember {
+			put, how = PutSheetSecret, "remembered"
+		}
+		if err := put(req.Name, req.Value); err != nil {
+			logWarn("live: sheet secret store failed", "name", req.Name)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "store unwritable"})
+			return
+		}
+		h.rememberServed(req.Value)
+		logInfo("live: sheet secret entered", "name", req.Name, "kept", how)
+		_ = json.NewEncoder(w).Encode(map[string]string{"ref": req.Name, "kept": how})
+		return
+	case "", "get":
+	default:
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unknown op"})
+		return
+	}
+	v, err := GetSheetSecret(req.Name)
 	if errors.Is(err, ErrNoSheetSecret) {
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no stored value for " + req.Name})
