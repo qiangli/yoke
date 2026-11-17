@@ -32,6 +32,19 @@ once), and it lapses after 15 minutes. Either way the response, the
 `copysheet --json` output (`pending` names) and the hub log carry only the
 name, and the hub adds the value to its redaction set.
 
+**Fill by reference (S529.9).** When the guard would need several values
+from the human, the agent lists them as named secrets on one sheet; the
+human enters them there; the agent fills each field with
+`browser type --from-sheet NAME <target>`. The guard records and claims its
+usual per-field admission (so the live hub's `guard_fill` check holds),
+takes the value itself (a held-once entry is consumed) and fills and
+verifies by reference, as for `--from-ask`. The hub records the driven tab's
+site when it registers the sheet; an entry saved there carries that site,
+the sheet tells the human which site it is for, and the guard refuses a
+fill on any other site (`from-sheet:other-site`) or for an entry with no
+site. This keeps an agent from carrying a value the human entered for one
+site to another.
+
 ## Assets
 
 The secret values in the sheet store.
@@ -44,6 +57,7 @@ The secret values in the sheet store.
 | **Another local user** | The hub listens on loopback only. The store and its directory are owner-only (0600/0700). |
 | **The agent seeing a value by accident** (the main risk: a value landing in the agent's context, transcript or logs) | The agent names secrets, never handles them: `copysheet` output lists names and labels only. The hub **redacts every value it has served** from all extension results passing through it (`text`, `extract`, `eval`, …), replacing it with `[guarded:sheet]`, so reading the sheet while a value is revealed, or reading the form after the human pastes, does not carry it back. Values are never logged. |
 | **A stale or leaked sheet URL** | Sheet tokens expire (30 min after registration). A sheet may ask only for the names it was registered with. Nothing is served while the hub gate is paused (S529.10). |
+| **An agent carrying an entry to another site** | Each entry records the site the sheet was served beside; `--from-sheet` fills only that site and the sheet shows it to the human. |
 | **The clipboard outliving the paste** | After Copy, the page clears the clipboard about 30 s later if it still holds the value (where the browser lets the page read it; otherwise it clears unconditionally). |
 
 ## Out of scope (stated, not solved)

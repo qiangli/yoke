@@ -1,10 +1,14 @@
 package live
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -544,5 +548,63 @@ func TestGuardTargetParamsCarryTheTabAddress(t *testing.T) {
 	}
 	if p := targetParams(wire.Action{Type: wire.ActionType, Selector: "#a"}); p["tab_id"] != nil || p["match_url"] != nil {
 		t.Fatalf("unaddressed params gained an address: %v", p)
+	}
+}
+
+// S529.9 through the live hub: the sheet records the driven page's site,
+// the human's entry carries it, and `type --from-sheet` fills by reference
+// with guard_fill (admitted for that field) — the value reaches the
+// extension's fill and never the result.
+func TestLiveFromSheetFillsByReference(t *testing.T) {
+	guardIsolate(t)
+	sd, gd := t.TempDir(), t.TempDir()
+	savedS, savedG := sheetDir, gateDir
+	sheetDir = func() string { return sd }
+	gateDir = func() string { return gd }
+	t.Cleanup(func() { sheetDir, gateDir = savedS, savedG })
+	guard.SetSheetSource(guard.SheetSource{Site: SheetSecretSite, Take: TakeSheetSecret})
+	t.Cleanup(func() { guard.SetSheetSource(guard.SheetSource{}) })
+
+	field := guard.Field{Guarded: true, Reason: "field:type-password", Question: "Password", Site: "acme.typeform.com"}
+	svc, ext, _ := startHubWithExt(t, "0.9.1", guardedMethods, field)
+	h := svc.hub
+	sheet := filepath.Join(sd, "login.html")
+	_ = os.WriteFile(sheet, []byte(`<meta name="`+SheetSecretsMeta+`" content="pw">`), 0o600)
+	b, _ := json.Marshal(map[string]string{"path": sheet})
+	r := httptest.NewRequest(http.MethodPost, "/sheet", bytes.NewReader(b))
+	r.Host = "127.0.0.1"
+	w := httptest.NewRecorder()
+	h.handleSheetRegister(w, r)
+	var reg struct{ URL string }
+	_ = json.Unmarshal(w.Body.Bytes(), &reg)
+	token := reg.URL[strings.LastIndex(reg.URL, "/")+1:]
+
+	b, _ = json.Marshal(map[string]any{"op": "put", "name": "pw", "value": "Tr0ub4dor-and-3", "remember": false})
+	r = httptest.NewRequest(http.MethodPost, "/sheet/"+token+"/secret", bytes.NewReader(b))
+	r.Host = "127.0.0.1"
+	r.Header.Set("Origin", "http://"+h.addr)
+	r.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	h.handleSheet(w, r)
+	if w.Code != http.StatusOK || SheetSecretSite("pw") != "acme.typeform.com" {
+		t.Fatalf("entry: %d %s site=%q", w.Code, w.Body, SheetSecretSite("pw"))
+	}
+
+	res, err := svc.Execute(context.Background(), wire.Action{Type: wire.ActionType, Selector: "#pw", FromSheet: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OutcomeClass != guard.ClassFilledByHuman || !strings.Contains(res.Data, `"via":"sheet"`) {
+		t.Fatalf("%+v", res)
+	}
+	if out, _ := json.Marshal(res); strings.Contains(string(out), "Tr0ub4dor") {
+		t.Fatalf("the value is in the result: %s", out)
+	}
+	if seen := ext.seen(); strings.Count(seen, `"method":"guard_fill"`) != 1 || !strings.Contains(seen, "Tr0ub4dor-and-3") {
+		t.Fatalf("expected one guard_fill carrying the entry:\n%s", seen)
+	}
+	// Held once: a second fill has nothing to take.
+	if res, _ := svc.Execute(context.Background(), wire.Action{Type: wire.ActionType, Selector: "#pw", FromSheet: "pw"}); res.OutcomeClass != guard.ClassStopped {
+		t.Fatalf("a held-once entry filled twice: %+v", res)
 	}
 }

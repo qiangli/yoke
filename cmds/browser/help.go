@@ -49,6 +49,13 @@ var guardHelp = []string{
 	"value-free data.cause code (not-connected, tab-gone, not-found, refused, …).",
 	"`browser type --from-ask <id> <target>` refills by reference with an answer the",
 	"guard admitted for that same field, once; it never takes text.",
+	"Several guarded values (a login's user, password, one-time code)? Ask once with",
+	"a sheet instead of a dialog per field: list them as named secrets on ONE",
+	"`browser copysheet` ({\"label\",\"secret\":NAME}), opened beside the form; the",
+	"human enters them there (Remember, or held once). Then fill each with",
+	"`browser type --from-sheet NAME <target>`: by reference, verified like",
+	"--from-ask (data.via sheet), only on the site the sheet was opened beside",
+	"(another site stops: from-sheet:other-site), a held-once entry only once.",
 	"Read results pass through; password input values stay suppressed. Sensitive write",
 	"and operator-answer records stay masked. Surrounding prose does not classify a field.",
 }
@@ -125,7 +132,7 @@ var subcommands = map[string]subcommand{
 		},
 	},
 	"type": {
-		Name: "type", Args: "<selector> <text...> | --from-ask ID <selector>",
+		Name: "type", Args: "<selector> <text...> | --from-ask ID <selector> | --from-sheet NAME <selector>",
 		One:  "focus an element and set its value",
 		Mode: "solo, probe, live",
 		Out:  "envelope with content=\"typed\"; a guarded field or value ends in content guard:filled-by-human or guard:human-typed (exit 0), guard:skipped (exit 4), guard:stopped (exit 5) or guard:fill-mismatch (exit 6, a by-reference fill the page did not keep), --json outcome_class guard_* + reason; a page that refuses scripting ends in copysheet:queued (exit 7)",

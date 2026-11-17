@@ -143,6 +143,47 @@ func TakeSheetSecret(name string) (string, error) {
 	return GetSheetSecret(name)
 }
 
+// sheetSitePath is where an entry records the site it was made for (S529.9):
+// a sibling directory, so no secret name can collide with it.
+func sheetSitePath(name string) (string, error) {
+	if !ValidSheetSecretName(name) {
+		return "", fmt.Errorf("invalid secret name %q", name)
+	}
+	return filepath.Join(SheetSecretDir(), ".site", name), nil
+}
+
+// SetSheetSecretSite records the site (host) an entry was made for; "" clears
+// it, and an entry without a site cannot fill a page by reference.
+func SetSheetSecretSite(name, site string) error {
+	p, err := sheetSitePath(name)
+	if err != nil {
+		return err
+	}
+	if site == "" {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	return writeAtomic0600(p, site)
+}
+
+// SheetSecretSite is the site an entry was made for ("" when none).
+func SheetSecretSite(name string) string {
+	p, err := sheetSitePath(name)
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // DeleteSheetSecret removes name (remembered and held once); a missing name
 // is not an error.
 func DeleteSheetSecret(name string) error {
@@ -151,7 +192,8 @@ func DeleteSheetSecret(name string) error {
 		return err
 	}
 	o, _ := sheetOncePath(name)
-	for _, f := range []string{p, o} {
+	st, _ := sheetSitePath(name)
+	for _, f := range []string{p, o, st} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

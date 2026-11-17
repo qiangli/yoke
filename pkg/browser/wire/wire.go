@@ -23,7 +23,11 @@ type Action struct {
 	// answer the sensitive-input guard admitted for this field. The value
 	// is resolved inside the guard at the last moment and never travels in
 	// the action (Text must be empty).
-	FromAsk   string   `json:"from_ask,omitempty"`
+	FromAsk string `json:"from_ask,omitempty"`
+	// FromSheet fills a type BY REFERENCE with the value the human entered
+	// on a served copy sheet under this name (S529.9). Like FromAsk, the
+	// value is resolved inside the guard and Text must be empty.
+	FromSheet string   `json:"from_sheet,omitempty"`
 	Direction string   `json:"direction,omitempty"`
 	Amount    int      `json:"amount,omitempty"`
 	Goal      string   `json:"goal,omitempty"`

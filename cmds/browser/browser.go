@@ -48,6 +48,9 @@ func init() {
 	// The sensitive-input guard asks the operator through pkg/ask's native
 	// forms (pkg/browser/guardask); without this every refusal stops.
 	guardask.Install()
+	// Copy-sheet entries fill by reference too (S529.9): the guard reads
+	// the local sheet store; it does not import pkg/browser/live.
+	guard.SetSheetSource(guard.SheetSource{Site: live.SheetSecretSite, Take: live.TakeSheetSecret})
 }
 
 const noBrowserMessage = "no browser: bashy could not resolve, provision, or launch a Chromium-family browser"
@@ -129,6 +132,7 @@ func run(rc *tool.RunContext, args []string) int {
 	detail := fs.String("detail", "", "dispatch-event: JSON detail for a CustomEvent")
 	on := fs.String("on", "", "dispatch-event: window|document|<css-selector> (default window)")
 	fromAsk := fs.String("from-ask", "", "type: fill the target BY REFERENCE with the operator answer this guard ask id names (no text)")
+	fromSheet := fs.String("from-sheet", "", "type: fill the target BY REFERENCE with the value the human entered on a copy sheet under this secret name (no text; same site only)")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -223,6 +227,7 @@ func run(rc *tool.RunContext, args []string) int {
 		Detail:        *detail,
 		On:            *on,
 		FromAsk:       *fromAsk,
+		FromSheet:     *fromSheet,
 	})
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
@@ -584,6 +589,7 @@ type actionFlags struct {
 	Detail        string
 	On            string
 	FromAsk       string
+	FromSheet     string
 }
 
 // tabActions is the valid set for `tabs`. It is exported through the
@@ -680,19 +686,27 @@ func buildAction(args []string, f actionFlags) (wire.Action, error) {
 		return a, nil
 
 	case "type":
-		if f.FromAsk != "" {
+		if f.FromAsk != "" || f.FromSheet != "" {
 			// By reference: a target, never text — the value is the
-			// operator's answer, resolved inside the guard.
-			a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden, FromAsk: f.FromAsk, TimeoutMs: f.TimeoutMs}
+			// operator's answer (--from-ask) or sheet entry (--from-sheet),
+			// resolved inside the guard.
+			flag := "--from-ask"
+			if f.FromSheet != "" {
+				flag = "--from-sheet"
+			}
+			if f.FromAsk != "" && f.FromSheet != "" {
+				return wire.Action{}, fmt.Errorf("type takes --from-ask or --from-sheet, not both")
+			}
+			a := wire.Action{Type: wire.ActionType, ElementID: f.Index, IncludeHidden: f.IncludeHidden, FromAsk: f.FromAsk, FromSheet: f.FromSheet, TimeoutMs: f.TimeoutMs}
 			if f.Index == 0 {
 				if len(rest) == 0 {
-					return wire.Action{}, fmt.Errorf("type --from-ask requires a target (selector or --index N)")
+					return wire.Action{}, fmt.Errorf("type %s requires a target (selector or --index N)", flag)
 				}
 				a.Selector = rest[0]
 				rest = rest[1:]
 			}
 			if len(rest) > 0 {
-				return wire.Action{}, fmt.Errorf("type --from-ask takes no text: the value is the operator's answer")
+				return wire.Action{}, fmt.Errorf("type %s takes no text: the value is the human's", flag)
 			}
 			return a, nil
 		}

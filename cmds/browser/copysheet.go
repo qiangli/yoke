@@ -247,14 +247,14 @@ async function hub(body){if(location.protocol!=='http:')throw new Error('Open th
 // A named secret with no stored value asks the human for it (S529.8):
 // Remember keeps it on this computer; otherwise bashy holds it once.
 document.querySelectorAll('[data-secret]').forEach(async f=>{try{const j=await hub({op:'status',name:f.dataset.secret});
- if(!j.stored){f.classList.add('ask');f.querySelector('pre').hidden=true;f.querySelector('.entry').hidden=false;f.querySelector('.sx').textContent='Enter it here: bashy gets only the name '+f.dataset.secret+', never the value.';}}catch(_){}});
+ if(!j.stored){f.classList.add('ask');f.querySelector('pre').hidden=true;f.querySelector('.entry').hidden=false;f.dataset.site=j.site||'';f.querySelector('.sx').textContent='Enter it here: bashy gets only the name '+f.dataset.secret+', never the value.'+(j.site?' It can fill '+j.site+' only.':'');}}catch(_){}});
 let lastSecret=0;
 document.addEventListener('click',async e=>{const btn=e.target.closest('[data-secret] button');if(!btn)return;
  const f=btn.closest('[data-secret]'),pre=f.querySelector('pre'),note=f.querySelector('.sx'),inp=f.querySelector('.sv');
  try{const ask=f.classList.contains('ask');
   if(btn.dataset.act==='save'){if(!inp.value)throw new Error('Type the value first.');
    const remember=f.querySelector('.remember').checked;const j=await hub({op:'put',name:f.dataset.secret,value:inp.value,remember});
-   note.style.color='';note.textContent=remember?'Saved on this computer as '+f.dataset.secret+'; later sheets can show it.':'Held once for bashy as '+f.dataset.secret+' (not remembered).';return;}
+   const for_=f.dataset.site?' for '+f.dataset.site:'';note.style.color='';note.textContent=remember?'Saved on this computer as '+f.dataset.secret+for_+'; later sheets can show it.':'Held once for bashy as '+f.dataset.secret+for_+' (not remembered).';return;}
   if(btn.dataset.act==='reveal'){if(ask){inp.type=inp.type==='password'?'text':'password';if(inp.type==='text')setTimeout(()=>{inp.type='password'},10000);return;}
    const v=(await hub({name:f.dataset.secret})).value;pre.textContent=v;pre.classList.remove('mask');setTimeout(()=>{pre.textContent='••••••••';pre.classList.add('mask')},10000);return;}
   const v=ask?inp.value:(await hub({name:f.dataset.secret})).value;if(!v)throw new Error('Nothing to copy yet.');

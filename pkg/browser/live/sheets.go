@@ -9,6 +9,7 @@ package live
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,7 @@ type sheetReg struct {
 	path    string
 	expires time.Time
 	secrets map[string]bool
+	site    string // the driven tab's site when the sheet was served (S529.9)
 }
 
 // SheetSecretsMeta is the <meta name> a copy sheet uses to declare the
@@ -125,6 +127,9 @@ func (h *hub) handleSheetRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	token := hex.EncodeToString(b)
 	reg := &sheetReg{path: p, expires: time.Now().Add(sheetTTL), secrets: sheetSecretNames(p)}
+	if len(reg.secrets) > 0 {
+		reg.site = h.drivenSite(r.Context())
+	}
 	h.mu.Lock()
 	if h.sheets == nil {
 		h.sheets = map[string]*sheetReg{}
@@ -138,6 +143,27 @@ func (h *hub) handleSheetRegister(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"url": "http://" + h.addr + "/sheet/" + token})
+}
+
+// drivenSite asks the extension for the driven page's site (the guard's
+// page-side field check reports it). "" when no extension answers.
+func (h *hub) drivenSite(ctx context.Context) string {
+	if !h.connected() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := h.call(ctx, guardMethod, map[string]any{})
+	if err != nil || resp.Error != "" {
+		return ""
+	}
+	var f struct {
+		Site string `json:"site"`
+	}
+	if json.Unmarshal(resp.Result, &f) != nil {
+		return ""
+	}
+	return f.Site
 }
 
 // lookupSheet returns the live registration for token.
@@ -242,7 +268,7 @@ func (h *hub) handleSheetSecret(w http.ResponseWriter, r *http.Request, token st
 	w.Header().Set("Cache-Control", "no-store")
 	switch req.Op {
 	case "status":
-		_ = json.NewEncoder(w).Encode(map[string]bool{"stored": SheetSecretStored(req.Name)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"stored": SheetSecretStored(req.Name), "site": reg.site})
 		return
 	case "put":
 		// S529.8: the human entered the value in the sheet. Remember keeps it
@@ -257,7 +283,12 @@ func (h *hub) handleSheetSecret(w http.ResponseWriter, r *http.Request, token st
 		if req.Remember {
 			put, how = PutSheetSecret, "remembered"
 		}
-		if err := put(req.Name, req.Value); err != nil {
+		err := put(req.Name, req.Value)
+		if err == nil {
+			// The entry may fill only the site the sheet was served beside.
+			err = SetSheetSecretSite(req.Name, reg.site)
+		}
+		if err != nil {
 			logWarn("live: sheet secret store failed", "name", req.Name)
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "store unwritable"})

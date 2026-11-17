@@ -162,6 +162,9 @@ func Execute(ctx context.Context, b Backend, a wire.Action, next ExecFunc) (*wir
 	if a.FromAsk != "" {
 		return Mask(ctx, fillFromAsk(ctx, b, a)), nil
 	}
+	if a.FromSheet != "" {
+		return Mask(ctx, fillFromSheet(ctx, b, a)), nil
+	}
 	ref, failed := check(ctx, b, a)
 	if failed != nil {
 		return Mask(ctx, failed), nil
