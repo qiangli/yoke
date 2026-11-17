@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -260,15 +261,26 @@ func TestTypedMCPDbLifecycleRequiresDestroyGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Without a destroy grant the call is refused and never executes. Since
+	// yoke 979150de (Sprint 646 O3) a known command's privileged effects
+	// answer the pull-route handoff {state: "gated", effects} instead of
+	// the earlier exit-126 denial text; the approval is raised only on the
+	// pull route.
+	if !res.IsError {
+		t.Fatalf("db_lifecycle ran without a destroy grant: %+v", res)
+	}
 	b, err := json.Marshal(res.StructuredContent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out mcp.RunToolOutput
+	var out mcp.Gated
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.ExitCode != 126 || !strings.Contains(out.Stderr, "effect destroy requires --allow destroy") {
-		t.Fatalf("exit=%d stderr=%q", out.ExitCode, out.Stderr)
+	if out.State != mcp.GatedState || !slices.Contains(out.Effects, "destroy") {
+		t.Fatalf("want a gated handoff naming destroy, got %+v", out)
+	}
+	if len(res.Content) != 1 || !strings.Contains(res.Content[0].(*mcpsdk.TextContent).Text, "not executed") {
+		t.Fatalf("the refusal must say the call was not executed: %+v", res.Content)
 	}
 }
