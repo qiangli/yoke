@@ -8,9 +8,9 @@ priority: p2
 labels:
     - browser
 created: 2026-11-16T18:22:36.467797Z
-sprint: 529
-sprint_id: 61593fcd-15ea-578f-b8ca-527620119de2
-sprint_title: 'bashy browser extension: store distribution + cross-browser (Chrome Web Store, Edge/Windows, Safari)'
+sprint: 650
+sprint_id: b499271e-f373-5b6c-94e9-4f6c1130607d
+sprint_title: 'Consumer content shaping: private POC + provisional #4'
 ---
 
 Operator request 2026-11-16: let a user shape any website they use (layout, hidden clutter, extra buttons, filled defaults, small workflows) through the extension, driven by bashy's shaping flow (bashy shape wish -> an agent drafts the change -> the user previews and keeps it), per site, owned by the user, regenerate-not-merge. Store-policy constraint: MV3 forbids executing code not shipped in the package, so agent-written JS must go through chrome.userScripts (Chrome 120+; needs the userScripts permission AND the user enabling 'Allow User Scripts' for the extension). Adding a permission after publication is the costly update (deeper review; existing users must re-accept, extension disabled until they do), so decide before 0.11.x is widely installed: either add userScripts in the next store update while the install base is ~0, or ship CSS-only shaping first (scripting.insertCSS needs no new permission) and add userScripts later. Spike first: capability matrix (CSS vs userScripts vs DOM edits through existing actions), the preview/keep/undo UX, storage (local-only, per-site, exportable), and how shapes sync with the bashy shaping engine. Cross-browser: userScripts exists in Chrome/Edge; Firefox has userScripts; Safari differs.
