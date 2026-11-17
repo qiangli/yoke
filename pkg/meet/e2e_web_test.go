@@ -92,6 +92,10 @@ func address(t *testing.T, srv *httptest.Server, room, agent, text string) JobRe
 	if job.ID == "" || job.Room != room {
 		t.Fatalf("JobRef = %+v, want an id and room %s", job, room)
 	}
+	// Cleanups run last-in first-out, so this wait finishes before the
+	// fixture's TempDir is removed: a job may still be writing after its
+	// turn is visible (see awaitJobFinished).
+	t.Cleanup(func() { awaitJobFinished(t, job.ID) })
 	return job
 }
 
@@ -169,7 +173,7 @@ func TestE2EInviteASecondAgentMidConversationAndBothReply(t *testing.T) {
 	withFakeAgent(t, "ack")
 	srv := serveTest(t)
 
-	address(t, srv, st.ID, "codex", "first")
+	first := address(t, srv, st.ID, "codex", "first")
 	waitForTurns(t, st.ID, "codex", 1)
 
 	resp, body := doJSON(t, srv, "POST", "/api/rooms/"+st.ID+"/invite",
@@ -178,8 +182,13 @@ func TestE2EInviteASecondAgentMidConversationAndBothReply(t *testing.T) {
 		t.Fatalf("invite: status %d, want 204 (%s)", resp.StatusCode, body)
 	}
 
-	address(t, srv, st.ID, "claude", "second")
+	second := address(t, srv, st.ID, "claude", "second")
 	waitForTurns(t, st.ID, "claude", 1)
+	// A turn is visible before its job stops writing (the seen marker, the
+	// live floor). Returning then raced TempDir cleanup under load:
+	// "unlinkat .../seen: directory not empty". Wait for both jobs.
+	awaitJobFinished(t, first.ID)
+	awaitJobFinished(t, second.ID)
 
 	// The roster the browser reads must show both, or the composer cannot offer
 	// the agent that just spoke.
