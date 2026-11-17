@@ -89,8 +89,11 @@ func capacityFixture(t *testing.T) (*CapacityClient, CapacityRequest) {
 	ssh := filepath.Join(bin, "fixture-ssh")
 	os.WriteFile(ssh, []byte("#!/bin/sh\nshift\nexec \"$@\"\n"), 0700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	client := &CapacityClient{Policy: policy, Resolve: func(name string) (fleet.Host, bool) { return fleet.Host{Name: name}, name == "fixture" }, Transport: func(h fleet.Host) Transport { x := NewSSHTransport(h); x.Command = ssh; return x }}
-	request := CapacityRequest{Version: 1, ID: "run-a", Spec: TaskSpec{SchemaVersion: 1, Task: "fixture-task", Venue: VenueUserland, Distribution: DistributionSingle, CPUPerTask: 1, MemPerTask: 128, Timeout: 5 * time.Second, Match: map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH}}, Body: "printf 'verified fixture output\\n'", DataClass: "fixture-public", Revision: revision, Toolchain: capacityRuntimeToolchain()}
+	// The "remote" end re-execs this test binary; under a loaded full-suite
+	// run that can exceed the 3-5 s production exchange deadlines, so the
+	// fixture allows a minute (failure: "registered target unreachable").
+	client := &CapacityClient{Policy: policy, Resolve: func(name string) (fleet.Host, bool) { return fleet.Host{Name: name}, name == "fixture" }, Transport: func(h fleet.Host) Transport { x := NewSSHTransport(h); x.Command = ssh; return x }, ExchangeTimeout: time.Minute}
+	request := CapacityRequest{Version: 1, ID: "run-a", Spec: TaskSpec{SchemaVersion: 1, Task: "fixture-task", Venue: VenueUserland, Distribution: DistributionSingle, CPUPerTask: 1, MemPerTask: 128, Timeout: time.Minute, Match: map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH}}, Body: "printf 'verified fixture output\\n'", DataClass: "fixture-public", Revision: revision, Toolchain: capacityRuntimeToolchain()}
 	return client, request
 }
 func TestCapacityAuthorizedSSHDispatchVerifiesResult(t *testing.T) {

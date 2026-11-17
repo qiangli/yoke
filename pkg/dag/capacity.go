@@ -96,6 +96,17 @@ type CapacityClient struct {
 	Policy    *CapacityPolicy
 	Resolve   func(string) (fleet.Host, bool)
 	Transport func(fleet.Host) Transport
+	// ExchangeTimeout, when longer, replaces the fixed deadlines on the
+	// observe, plan and probe exchanges. Zero keeps them (3-5 s).
+	// Test fixtures that re-exec a large binary under load set it.
+	ExchangeTimeout time.Duration
+}
+
+func (c *CapacityClient) deadline(d time.Duration) time.Duration {
+	if c.ExchangeTimeout > d {
+		return c.ExchangeTimeout
+	}
+	return d
 }
 
 func CapacityPolicyPath() string {
@@ -205,7 +216,7 @@ func (c *CapacityClient) Observe(ctx context.Context, name string) (json.RawMess
 	if !t.Observe {
 		return nil, errors.New("target observation is not authorized")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, c.deadline(5*time.Second))
 	defer cancel()
 	r, e := c.exchange(ctx, t, capacityWire{Operation: "observe", Worker: t.Worker})
 	if e != nil {
@@ -246,7 +257,7 @@ func capacityCompatible(o *CapacityObservation, r CapacityRequest, now time.Time
 	return o != nil && o.Facts.Validate() == nil && !o.Facts.ObservedAt.After(now) && !o.Facts.Stale(now, 10*time.Second) && o.Facts.Satisfies(r.Spec) && o.HeadroomKnown && o.FreeCPU >= float64(r.Spec.CPUPerTask) && o.FreeMemory >= r.Spec.MemPerTask && o.Revision == r.Revision && o.Toolchain == r.Toolchain
 }
 func (c *CapacityClient) Plan(ctx context.Context, r CapacityRequest) (*CapacityReply, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, c.deadline(5*time.Second))
 	defer cancel()
 	if e := validateCapacityRequest(r); e != nil {
 		return nil, e
@@ -271,7 +282,7 @@ func (c *CapacityClient) Plan(ctx context.Context, r CapacityRequest) (*Capacity
 			plan.Refusals = append(plan.Refusals, t.Worker+": dispatch/data/revision/toolchain permission denied")
 			continue
 		}
-		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		probeCtx, cancel := context.WithTimeout(ctx, c.deadline(3*time.Second))
 		// The task body is never sent during placement inspection.
 		probeRequest := r
 		probeRequest.Body = ""
