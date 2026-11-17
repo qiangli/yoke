@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/yoke/pkg/llmprice"
 )
@@ -327,9 +328,16 @@ func TestAuditFileCarriesCostFields(t *testing.T) {
 		}
 	}
 
-	// Read the audit file back and check the JSON names.
+	// Read the audit file back and check the JSON names. The record is
+	// written after the response is sent, so under load a single read could
+	// see only the first one ("1 priced, 0 unpriced"); wait for both.
+	lines := readLines(t, dir+"/audit.jsonl")
+	for deadline := time.Now().Add(10 * time.Second); len(lines) < 2 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		lines = readLines(t, dir+"/audit.jsonl")
+	}
 	var priced, unpriced int
-	for _, line := range readLines(t, dir+"/audit.jsonl") {
+	for _, line := range lines {
 		var raw map[string]any
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			t.Fatalf("bad audit line %q: %v", line, err)
