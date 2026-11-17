@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -243,7 +244,10 @@ func TestVecCollectionsAndItemsBothModes(t *testing.T) {
 		if c := f.code(OpRm, Input{Collection: "e", ID: "a"}, false); c != "not_found" {
 			t.Fatalf("rm twice: %s", c)
 		}
-		if got := f.search(Input{Collection: "e", Vector: json.RawMessage(`[2,0,0,0]`)}); strings.Contains(got, "a@") {
+		// Compare whole ids: the generated id from the put above is random
+		// hex, and a substring check for "a@" matched it whenever it ended
+		// in "a" (about 1 run in 16).
+		if got := f.search(Input{Collection: "e", Vector: json.RawMessage(`[2,0,0,0]`)}); slices.ContainsFunc(strings.Split(got, ","), func(hit string) bool { return strings.HasPrefix(hit, "a@") }) {
 			t.Fatalf("deleted vector still searchable: %s", got)
 		}
 		// Unknown fields for an op are refused, never ignored; there is no
