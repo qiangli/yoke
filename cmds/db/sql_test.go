@@ -269,3 +269,28 @@ func TestPersistentHoldChildUsesHolderEpisode(t *testing.T) {
 	runChild("select count(*) from t", 0, "")
 	runChild("pragma locking_mode=''", 1, "read_only")
 }
+
+// session stop returns only once the owner has written its "ended" record,
+// so a list or show right after stop agrees. Before, stop was answered
+// first and the record was written later, racing anything that followed.
+func TestSessionStopWaitsForEnded(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_DB_SESSION_DIR", filepath.Join(root, "sessions"))
+	t.Setenv("BASHY_COORD_DIR", filepath.Join(root, "coord"))
+	code, doc := dbRun(t, root, "", "session", "start", "--idle-ttl", "2m")
+	if code != 0 {
+		t.Fatalf("session start: %v", doc)
+	}
+	session := doc["result"].(map[string]any)["id"].(string)
+	code, doc = dbRun(t, root, "", "session", "stop", "--session", session, "--yes")
+	if code != 0 || doc["result"].(map[string]any)["ended"] != true {
+		t.Fatalf("stop must report ended: %d %v", code, doc)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "sessions", session+".json"))
+	if err != nil {
+		t.Fatalf("session record: %v", err)
+	}
+	if !strings.Contains(string(b), `"state":"ended"`) {
+		t.Fatalf("record right after stop: %s", b)
+	}
+}

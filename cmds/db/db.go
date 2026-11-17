@@ -753,6 +753,15 @@ func sessionCommand(rc *tool.RunContext, args []string, id, attachment string, d
 		if err != nil {
 			return failure(o, err).emit(rc, asJSON)
 		}
+		// stop is answered before the owner finishes: wait until it has
+		// written its "ended" record, so `session list` right after stop
+		// agrees, and say so when it did not finish in time.
+		if op == "stop" && res.OK {
+			ended := dblifecycle.WaitEnded(ctx, id, 10*time.Second)
+			if m, ok := res.Result.(map[string]any); ok {
+				m["ended"] = ended
+			}
+		}
 		return ownerOutput(o, res).emit(rc, asJSON)
 	default:
 		return failure(o, fmt.Errorf("%w: session %s", dbstore.ErrUnsupported, op)).emit(rc, asJSON)

@@ -137,6 +137,23 @@ func readInfo(id string) (SessionInfo, error) {
 	return info, nil
 }
 
+// WaitEnded waits until a stopped session's owner has finished: it answers
+// stop at once, then drains in-flight requests, releases holds and writes
+// its final "ended" record. It returns true once that record is written, or
+// false after timeout.
+func WaitEnded(ctx context.Context, id string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if info, err := readInfo(id); err == nil && info.State == "ended" {
+			return true
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func writeInfo(info SessionInfo) error {
 	p, err := infoPath(info.ID)
 	if err != nil {
