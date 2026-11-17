@@ -306,8 +306,20 @@ func launchForMeeting(t *testing.T, tool string, readOnly bool) (agentlaunch.Lau
 		func() *fleet.Catalog { return fleet.New() })
 }
 
+// uncontainedHost makes the launch guard's containment probe report an
+// ordinary host. Both guard tests are about an uncontained host, and a runner
+// that is itself a container (the official build image) would otherwise pass
+// the converse for the wrong reason: a contained host may strip the gate.
+func uncontainedHost(t *testing.T) {
+	t.Helper()
+	prev := agentlaunch.Containerized
+	agentlaunch.Containerized = func() bool { return false }
+	t.Cleanup(func() { agentlaunch.Containerized = prev })
+}
+
 func TestMeetingAgentsLaunchWithoutWeakeningTheHost(t *testing.T) {
 	t.Setenv(chat.UnsafeLaunchEnv, "") // an ordinary host: the guard is armed
+	uncontainedHost(t)
 	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
 	unretiredFakeTool(t, "aider")
 
@@ -361,6 +373,7 @@ func unretiredFakeTool(t *testing.T, name string) {
 // keeping an uncontained host safe — it is just decoration.
 func TestTheGuardIsRealWithoutReadOnly(t *testing.T) {
 	t.Setenv(chat.UnsafeLaunchEnv, "")
+	uncontainedHost(t)
 	t.Setenv("BASHY_FLEET_DIR", t.TempDir())
 
 	if _, err := launchForMeeting(t, "claude", false); err == nil {

@@ -31,6 +31,9 @@ func TestRolesForBoardDoesNotCreateSeatOrRegistry(t *testing.T) {
 func TestRolesForBoard_HolderUUIDAndLegacyName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("BASHY_HOME", t.TempDir())
+	// A stable machine identity, as the CLI tests give theirs: a container
+	// has no /etc/machine-id, and Open rightly refuses to guess one.
+	t.Setenv("BASHY_HOST_ID", "lexicon-test-machine")
 	home := t.TempDir()
 	oldHome := accountHomeFn
 	accountHomeFn = func() (string, string, error) { return home, "account:test", nil }

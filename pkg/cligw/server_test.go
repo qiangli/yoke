@@ -348,19 +348,30 @@ func TestServerRoutesBandByHeadroomAndStampsRoutedHeader(t *testing.T) {
 	}
 
 	// A client can consume the declared Content-Length before the proxy's
-	// audit-tail cleanup finishes. Wait for handlers to return before checking
-	// both accounting records; Close is also safe for the registered cleanup.
+	// audit-tail cleanup finishes. Wait for handlers to return; Close is also
+	// safe for the registered cleanup.
 	ts.http.Close()
-	// Both the decision and the served usage are in usage.jsonl.
-	lines := readUsageLog(t)
+	// Both the decision and the served usage are in usage.jsonl. The usage
+	// line is written by the audit tail's onClose, which runs in its own
+	// goroutine after the body closes, so handlers returning does not mean it
+	// has landed yet: wait for it rather than read once.
+	var lines []string
 	var decisions, usage int
-	for _, line := range lines {
-		if strings.Contains(line, `"ranked"`) {
-			decisions++
+	count := func() bool {
+		lines, decisions, usage = readUsageLog(t), 0, 0
+		for _, line := range lines {
+			if strings.Contains(line, `"ranked"`) {
+				decisions++
+			}
+			if strings.Contains(line, UsageSchemaVersion) {
+				usage++
+			}
 		}
-		if strings.Contains(line, UsageSchemaVersion) {
-			usage++
-		}
+		return decisions >= 2 && usage >= 2
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !count() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
 	}
 	if decisions != 2 || usage != 2 {
 		t.Fatalf("usage.jsonl decisions=%d usage=%d in %v", decisions, usage, lines)
