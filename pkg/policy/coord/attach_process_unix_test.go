@@ -42,24 +42,23 @@ func TestAttachedClaimDiesWithParentAndDoesNotLeakFD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait for a complete pid, not just the file: `echo $$ > file` creates
+	// the file before writing it, and under load a read in between saw ""
+	// (strconv.Atoi: parsing "": invalid syntax).
+	deadline := time.Now().Add(10 * time.Second)
+	var childPID int
 	for {
-		if _, err := os.Stat(marker); err == nil {
-			break
+		if b, err := os.ReadFile(marker); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
+				childPID = pid
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
 			t.Fatal("child command did not start")
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-	b, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childPID, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(childPID, syscall.SIGKILL) })
 
