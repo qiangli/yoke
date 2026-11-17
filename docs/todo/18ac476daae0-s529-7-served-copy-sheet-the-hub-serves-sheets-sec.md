@@ -3,11 +3,12 @@ id: 18ac476daae0
 kind: feature
 title: 'S529.7 served copy sheet: the hub serves sheets; secret fields by reference (reveal/copy), never in the file or the agent'
 seq: 3119
-status: todo
+status: assigned
 priority: p1
 labels:
     - browser
 created: 2026-11-16T17:06:20.187157Z
+assignee: claude-opus5.5-s529
 sprint: 529
 sprint_id: 61593fcd-15ea-578f-b8ca-527620119de2
 sprint_title: 'bashy browser extension: store distribution + cross-browser (Chrome Web Store, Edge/Windows, Safari)'

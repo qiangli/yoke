@@ -41,8 +41,10 @@ type hub struct {
 	// reconnect starts a fresh handshake.
 	helloReceived chan struct{}
 
-	// sheets maps a copy-sheet token to its file (see sheets.go).
-	sheets map[string]string
+	// sheets maps a copy-sheet token to its registration (see sheets.go);
+	// served holds the sheet secret values handed out, for redaction.
+	sheets map[string]*sheetReg
+	served map[string]bool
 
 	// port and gate: the logical on/off gate (see gate.go), loaded at start.
 	port int
@@ -522,6 +524,7 @@ func (h *hub) call(ctx context.Context, method string, params map[string]any) (w
 
 	select {
 	case resp := <-ch:
+		resp.Result = h.redactServed(resp.Result)
 		return resp, nil
 	case <-ctx.Done():
 		return wsResponse{}, ctx.Err()

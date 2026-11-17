@@ -255,3 +255,41 @@ func TestBesideOpensAViewNextToThePage(t *testing.T) {
 		t.Fatalf("a non-HTML view: exit %d, want 2", code)
 	}
 }
+
+// A field may name a secret (S529.7): the sheet carries the name only, the
+// field is not withheld, and the envelope lists names, never a value.
+func TestCopySheetSecretByReference(t *testing.T) {
+	isolateCopySheet(t)
+	in := writeSheetInput(t, map[string]any{"fields": []map[string]any{
+		{"label": "API key", "secret": "openai-key"},
+		{"label": "Company", "value": "Example Co"},
+	}})
+	out, errb, code := runTool(t, "--json", "--no-open", "copysheet", in)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	var env struct {
+		Path     string   `json:"path"`
+		Secrets  []string `json:"secrets"`
+		Withheld []any    `json:"withheld"`
+	}
+	_ = json.Unmarshal([]byte(out), &env)
+	page, _ := os.ReadFile(env.Path)
+	s := string(page)
+	if len(env.Secrets) != 1 || env.Secrets[0] != "openai-key" || len(env.Withheld) != 0 {
+		t.Fatalf("envelope = %s", out)
+	}
+	if !strings.Contains(s, `<meta name="bashy-sheet-secrets" content="openai-key">`) || !strings.Contains(s, `data-secret="openai-key"`) || !strings.Contains(s, "Reveal") {
+		t.Fatal("secret field not rendered by reference")
+	}
+
+	for name, field := range map[string]map[string]any{
+		"both":     {"label": "K", "secret": "k", "value": "v"},
+		"bad name": {"label": "K", "secret": "../etc"},
+	} {
+		in := writeSheetInput(t, map[string]any{"fields": []map[string]any{field}})
+		if _, _, code := runTool(t, "--no-open", "copysheet", in); code == 0 {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

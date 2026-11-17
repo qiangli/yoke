@@ -9,6 +9,12 @@ package browsercmd
 // Guard parity: a value the sensitive-input guard would refuse to type is
 // never written to the sheet. Its field says "enter this yourself" and is
 // reported as withheld, so an agent cannot stage a secret for pasting.
+//
+// Secrets by reference (S529.7): a field may name a secret instead of a
+// value ({"label", "secret": NAME}). The sheet holds only the name; served
+// by the live hub, it shows a mask with Reveal and Copy, and the hub returns
+// the value from the local-only store to the page when the human clicks.
+// Threat model: docs/browser-sheet-secrets.md.
 
 import (
 	"bytes"
@@ -34,6 +40,7 @@ type copyField struct {
 	Section string `json:"section,omitempty"`
 	Label   string `json:"label"`
 	Value   string `json:"value"`
+	Secret  string `json:"secret,omitempty"` // a sheet-store name, shown by reference
 	Note    string `json:"note,omitempty"`
 }
 
@@ -103,6 +110,19 @@ func readCopySheet(rc *tool.RunContext, src string) (*copySheet, error) {
 	if n == 0 {
 		return nil, fmt.Errorf("%s has no fields", src)
 	}
+	for _, sec := range s.Sections {
+		for _, f := range sec.Fields {
+			if f.Secret == "" {
+				continue
+			}
+			if !live.ValidSheetSecretName(f.Secret) {
+				return nil, fmt.Errorf("%s: field %q: invalid secret name %q (letters, digits, . _ -; up to 64)", src, f.Label, f.Secret)
+			}
+			if f.Value != "" {
+				return nil, fmt.Errorf("%s: field %q: give a value or a secret, not both", src, f.Label)
+			}
+		}
+	}
 	if s.Title == "" {
 		s.Title = "Copy sheet"
 	}
@@ -116,6 +136,9 @@ func withhold(s *copySheet) []withheldField {
 	for i := range s.Sections {
 		for j := range s.Sections[i].Fields {
 			f := &s.Sections[i].Fields[j]
+			if f.Secret != "" {
+				continue // shown by reference, never by value
+			}
 			reason := ""
 			if k := sensitive.CheckValue(f.Value); k != "" {
 				reason = "value:" + k
@@ -125,6 +148,25 @@ func withhold(s *copySheet) []withheldField {
 			if reason != "" {
 				f.Value = ""
 				out = append(out, withheldField{Section: s.Sections[i].Name, Label: f.Label, Reason: reason})
+			}
+		}
+	}
+	return out
+}
+
+// sheetSecretsMetaName is live.SheetSecretsMeta (renderCopySheet's `live`
+// parameter shadows the package name).
+const sheetSecretsMetaName = live.SheetSecretsMeta
+
+// sheetSecretNames lists the secret names a sheet shows, in order.
+func sheetSecretNames(s *copySheet) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, sec := range s.Sections {
+		for _, f := range sec.Fields {
+			if f.Secret != "" && !seen[f.Secret] {
+				seen[f.Secret] = true
+				out = append(out, f.Secret)
 			}
 		}
 	}
@@ -141,6 +183,9 @@ func renderCopySheet(s *copySheet, withheld []withheldField, live bool) string {
 	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>`)
 	b.WriteString(esc(s.Title))
 	b.WriteString(`</title>`)
+	if names := sheetSecretNames(s); len(names) > 0 {
+		fmt.Fprintf(&b, `<meta name="%s" content="%s">`, sheetSecretsMetaName, esc(strings.Join(names, ",")))
+	}
 	if live {
 		// A queued sheet grows while the agent works; reload to pick up new
 		// fields (progress and scroll survive in browser storage).
@@ -155,7 +200,7 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 48px}h1{font-size:21px;marg
 .f{background:var(--card);border-radius:10px;padding:10px 14px;margin:8px 0;box-shadow:0 1px 3px #0002;transition:opacity .2s}
 .f.done{opacity:.5}.h{display:flex;justify-content:space-between;align-items:center;gap:12px}.h b{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;margin:6px 0 0}.note{color:var(--mute);font-size:13px;margin-top:4px}
-.held{color:var(--warn);font-size:14px;margin-top:6px}
+.held{color:var(--warn);font-size:14px;margin-top:6px}.btns{display:flex;gap:6px}button.ghost{background:transparent;color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
 button{flex:none;border:0;border-radius:6px;background:var(--acc);color:#fff;padding:6px 14px;font:inherit;cursor:pointer}button.ok{background:var(--ok)}
 </style></head><body><main><h1>`)
 	b.WriteString(esc(s.Title))
@@ -170,7 +215,9 @@ button{flex:none;border:0;border-radius:6px;background:var(--acc);color:#fff;pad
 			fmt.Fprintf(&b, `<h2>%s</h2>`, esc(sec.Name))
 		}
 		for _, f := range sec.Fields {
-			if reason, ok := held[sec.Name+"\x00"+f.Label]; ok {
+			if f.Secret != "" {
+				fmt.Fprintf(&b, `<div class="f" data-secret="%s" data-k="%s"><div class="h"><b>%s</b><span class="btns"><button type="button" class="ghost" data-act="reveal">Reveal</button><button type="button" data-act="copy">Copy</button></span></div><pre class="mask">••••••••</pre><div class="note sx">Secret <code>%s</code>: shown on Reveal, never stored in this page.</div>`, esc(f.Secret), esc(f.Label), esc(f.Label), esc(f.Secret))
+			} else if reason, ok := held[sec.Name+"\x00"+f.Label]; ok {
 				fmt.Fprintf(&b, `<div class="f"><div class="h"><b>%s</b></div><div class="held">Enter this yourself: bashy does not prepare guarded values (%s).</div>`, esc(f.Label), esc(reason))
 			} else {
 				fmt.Fprintf(&b, `<div class="f" data-copy data-k="%s"><div class="h"><b>%s</b><button type="button" data-i="%d">Copy</button></div><pre id="v%d">%s</pre>`, esc(f.Label), esc(f.Label), n, n, esc(f.Value))
@@ -189,8 +236,25 @@ function save(d){try{localStorage.setItem(KEY,JSON.stringify(d))}catch(e){}}
 const state=load();
 document.querySelectorAll('[data-copy]').forEach(f=>{const v=f.querySelector('pre').textContent;if(state[f.dataset.k]===v)f.classList.add('done')});
 try{const y=sessionStorage.getItem(KEY+':y');if(y)scrollTo(0,+y);addEventListener('scroll',()=>sessionStorage.setItem(KEY+':y',scrollY))}catch(e){}
-const total=document.querySelectorAll('[data-copy]').length;
-function progress(){const d=document.querySelectorAll('[data-copy].done').length;document.getElementById('progress').textContent=d+' of '+total+' copied';}
+const total=document.querySelectorAll('[data-copy],[data-secret]').length;
+document.querySelectorAll('[data-secret]').forEach(f=>{if(state[f.dataset.k]==='secret:'+f.dataset.secret)f.classList.add('done')});
+function progress(){const d=document.querySelectorAll('[data-copy].done,[data-secret].done').length;document.getElementById('progress').textContent=d+' of '+total+' copied';}
+// Secrets by reference: the value comes from the bashy hub on a click and is
+// never kept in this page (storage keeps only "copied").
+async function secret(name){if(location.protocol!=='http:')throw new Error('Open this sheet through bashy (the browser hub) to use secrets.');
+ const r=await fetch(location.pathname+'/secret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name}),cache:'no-store'});
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('hub refused: '+r.status));return j.value;}
+let lastSecret=0;
+document.addEventListener('click',async e=>{const btn=e.target.closest('[data-secret] button');if(!btn)return;
+ const f=btn.closest('[data-secret]'),pre=f.querySelector('pre'),note=f.querySelector('.sx');
+ try{const v=await secret(f.dataset.secret);
+  if(btn.dataset.act==='reveal'){pre.textContent=v;pre.classList.remove('mask');setTimeout(()=>{pre.textContent='••••••••';pre.classList.add('mask')},10000);return;}
+  const mine=++lastSecret;await navigator.clipboard.writeText(v);
+  btn.textContent='Copied';btn.classList.add('ok');f.classList.add('done');state[f.dataset.k]='secret:'+f.dataset.secret;save(state);progress();
+  setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('ok')},1500);
+  // Clear the clipboard after 30 s if it still holds the value.
+  setTimeout(async()=>{if(mine!==lastSecret)return;try{if((await navigator.clipboard.readText())!==v)return}catch(_){}try{await navigator.clipboard.writeText('')}catch(_){}},30000);
+ }catch(err){note.textContent=err.message;note.style.color='var(--warn)';}});
 function fallback(t){const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();}
 document.addEventListener('click',e=>{const btn=e.target.closest('button[data-i]');if(!btn)return;
  const t=document.getElementById('v'+btn.dataset.i).textContent;
@@ -248,11 +312,18 @@ func browserCopySheet(rc *tool.RunContext, args []string, out string, port int, 
 		if withheld == nil {
 			withheld = []withheldField{}
 		}
-		return writeJSON(rc, map[string]any{"success": true, "path": out, "fields": fields, "withheld": withheld, "opened": opened, "opened_as": openedAs})
+		secrets := sheetSecretNames(s)
+		if secrets == nil {
+			secrets = []string{}
+		}
+		return writeJSON(rc, map[string]any{"success": true, "path": out, "fields": fields, "withheld": withheld, "secrets": secrets, "opened": opened, "opened_as": openedAs})
 	}
 	fmt.Fprintln(rc.Out, out)
 	for _, w := range withheld {
 		fmt.Fprintf(rc.Err, "browser copysheet: withheld %q (%s): the human enters it\n", w.Label, w.Reason)
+	}
+	if names := sheetSecretNames(s); len(names) > 0 && openedAs != "split" && openedAs != "beside" {
+		fmt.Fprintf(rc.Err, "browser copysheet: secrets %s reveal and copy only when the sheet is served by the live hub (bashy browser hub)\n", strings.Join(names, ", "))
 	}
 	return 0
 }
