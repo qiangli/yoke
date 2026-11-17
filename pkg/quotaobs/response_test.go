@@ -13,6 +13,12 @@ import (
 
 func TestResponseSuccessDoesNotReadOrWrapBody(t *testing.T) {
 	t.Setenv("BASHY_HOME", t.TempDir())
+	// The 25 ms production budget dropped the first write on a loaded
+	// machine ("changed headers lost to dedupe"); this test asserts both
+	// land, so it allows a write all the time it needs.
+	old := recordBudget
+	recordBudget = 5 * time.Second
+	t.Cleanup(func() { recordBudget = old })
 	body := io.NopCloser(strings.NewReader("private successful body"))
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"X-Ratelimit-Reset-Tokens": {"100"}}, Body: body}
 	ObserveResponse(context.Background(), resp, Observation{Source: "door"})

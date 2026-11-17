@@ -12,8 +12,13 @@ import (
 )
 
 // RecordBestEffort bounds lock contention and never propagates journal failures.
+// recordBudget bounds a best-effort journal write so observation never
+// slows the request path; a write that misses it is skipped. Tests that
+// assert every observation lands raise it.
+var recordBudget = 25 * time.Millisecond
+
 func RecordBestEffort(ctx context.Context, o Observation) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordBudget)
 	defer cancel()
 	if err := Record(ctx, o); err != nil {
 		if errors.Is(err, ErrRealHomeWrite) {
