@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
+	"regexp"
 	"sync"
 	"unicode/utf8"
 )
@@ -47,9 +49,11 @@ const (
 // ShapeMatch describes a credential-shaped substring without retaining or
 // exposing the substring itself.
 type ShapeMatch struct {
-	Kind   string
-	Offset int
-	Length int
+	Kind         string
+	Offset       int
+	Length       int
+	contextStart int
+	contextual   bool
 }
 
 // Redactor masks registered secret values in byte streams. Register all known
@@ -61,6 +65,7 @@ type Redactor struct {
 	matcher  *valueMatcher
 	shape    ShapeMode
 	reporter func(ShapeMatch)
+	host     *Redactor
 }
 
 type registeredSecret struct {
@@ -88,6 +93,11 @@ func (r *Redactor) Register(name, value string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	for _, secret := range r.secrets {
+		if bytes.Equal(secret.value, []byte(value)) {
+			return nil
+		}
+	}
 	r.secrets = append(r.secrets, registeredSecret{
 		value:       []byte(value),
 		replacement: []byte("[redacted:" + name + "]"),
@@ -161,13 +171,27 @@ type redactorConfig struct {
 	tailLen  int
 }
 
+// LiveWriter includes credentials registered after its creation. Register a
+// credential before emitting any of its bytes; Close flushes the held tail.
+func (r *Redactor) LiveWriter(w io.Writer) io.WriteCloser {
+	return &redactingWriter{dst: w, cfg: r.snapshot(), live: r}
+}
+
 func (r *Redactor) snapshot() redactorConfig {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	matcher := r.matcher
+	if r.host != nil {
+		r.host.mu.RLock()
+		values := append([]registeredSecret(nil), r.host.secrets...)
+		r.host.mu.RUnlock()
+		values = append(values, r.secrets...)
+		matcher = newValueMatcher(values)
+	}
 	maxLen := 0
-	if r.matcher != nil {
-		maxLen = r.matcher.maxLen
+	if matcher != nil {
+		maxLen = matcher.maxLen
 	}
 	if (r.shape == ShapeMask || r.reporter != nil) && maxShapeMatchLen > maxLen {
 		maxLen = maxShapeMatchLen
@@ -177,7 +201,7 @@ func (r *Redactor) snapshot() redactorConfig {
 		tailLen = maxLen - 1
 	}
 	return redactorConfig{
-		matcher:  r.matcher,
+		matcher:  matcher,
 		shape:    r.shape,
 		reporter: r.reporter,
 		tailLen:  tailLen,
@@ -187,6 +211,7 @@ func (r *Redactor) snapshot() redactorConfig {
 type redactingWriter struct {
 	mu      sync.Mutex
 	dst     io.Writer
+	live    *Redactor
 	cfg     redactorConfig
 	pending []byte
 	closed  bool
@@ -208,6 +233,9 @@ func (w *redactingWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
+	if w.live != nil {
+		w.cfg = w.live.snapshot()
+	}
 	combined := make([]byte, 0, len(w.pending)+len(p))
 	combined = append(combined, w.pending...)
 	combined = append(combined, p...)
@@ -239,6 +267,9 @@ func (w *redactingWriter) Close() error {
 		return w.err
 	}
 
+	if w.live != nil {
+		w.cfg = w.live.snapshot()
+	}
 	out, _, findings := w.cfg.transformPrefix(w.pending, len(w.pending))
 	if err := writeAll(w.dst, out); err != nil {
 		w.err = err
@@ -304,6 +335,12 @@ func (cfg redactorConfig) transformPrefix(b []byte, boundary int) ([]byte, int, 
 		shapes = detectCredentialShapes(b)
 	}
 	if cfg.shape == ShapeMask {
+		for _, finding := range shapes {
+			// Keep the identifying key/header with a value held for the next write.
+			if finding.contextual && finding.Offset >= boundary && finding.contextStart < boundary {
+				boundary = finding.contextStart
+			}
+		}
 		for _, finding := range shapes {
 			candidate := matchCandidate{
 				end:         finding.Offset + finding.Length,
@@ -490,6 +527,18 @@ func detectCredentialShapes(b []byte) []ShapeMatch {
 		matches = append(matches, ShapeMatch{Kind: kind, Offset: i, Length: end - i})
 		i = end
 	}
+	for _, contextual := range contextualCredentialShapes(b) {
+		overlap := false
+		for _, known := range matches {
+			if contextual.Offset < known.Offset+known.Length && known.Offset < contextual.Offset+contextual.Length {
+				overlap = true
+				break
+			}
+		}
+		if !overlap {
+			matches = append(matches, contextual)
+		}
+	}
 	return matches
 }
 
@@ -558,4 +607,47 @@ func asciiAlphaNum(c byte) bool {
 	return (c >= 'a' && c <= 'z') ||
 		(c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9')
+}
+
+// Credential context avoids masking ordinary identifiers or hashes in prose.
+var credentialContext = regexp.MustCompile(`(?i)(?:\bbearer[ \t]+|[a-z0-9_.-]*(?:token|secret|password|api[_-]?key|credential)["']?[ \t]*[:=][ \t]*["']?)([a-z0-9_~+/=.-]{16,256})`)
+
+func contextualCredentialShapes(b []byte) []ShapeMatch {
+	var found []ShapeMatch
+	for _, match := range credentialContext.FindAllSubmatchIndex(b, -1) {
+		start, end := match[2], match[3]
+		value := b[start:end]
+		if !credentialEntropy(value) {
+			continue
+		}
+		found = append(found, ShapeMatch{Kind: "credential", Offset: start, Length: end - start, contextStart: match[0], contextual: true})
+	}
+	return found
+}
+
+func credentialEntropy(value []byte) bool {
+	var counts [256]int
+	for _, c := range value {
+		counts[c]++
+	}
+	entropy := 0.0
+	for _, n := range counts {
+		if n > 0 {
+			p := float64(n) / float64(len(value))
+			entropy -= p * math.Log2(p)
+		}
+	}
+	classes := 0
+	lower, upper, digit := false, false, false
+	for _, c := range value {
+		lower = lower || c >= 'a' && c <= 'z'
+		upper = upper || c >= 'A' && c <= 'Z'
+		digit = digit || c >= '0' && c <= '9'
+	}
+	for _, present := range []bool{lower, upper, digit} {
+		if present {
+			classes++
+		}
+	}
+	return entropy >= 3 && (classes >= 2 || digit || entropy >= 4.5)
 }

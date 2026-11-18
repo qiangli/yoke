@@ -6,19 +6,14 @@ import (
 	"strings"
 )
 
-// EnvValueRedactor returns a Redactor with every vault-projected value that is
-// present in environ registered under its local name. It is the one
-// construction every member-facing egress point needs: the vault names the
-// secret-carrying variables (VaultEnvNames), the environment supplies the
-// rendered values, and the returned Redactor masks exactly those values.
-//
-// It never fetches or renders the vault itself: a value that is not already in
-// the calling process's environment is not registered (masking it there is
-// impossible anyway — the value never reached this process). Names are
-// registered in sorted order so diagnostics that surface registration order
-// stay deterministic.
+// EnvValueRedactor combines registered app credentials with vault-projected
+// values present in environ and masks credential-shaped key/value forms.
+// It never fetches or renders vault contents. Vault names are registered in
+// sorted order; app registrations remain live through the shared registry.
 func EnvValueRedactor(environ []string) *Redactor {
 	redactor := NewRedactor()
+	redactor.host = HostRedactor()
+	_ = redactor.SetShapeMode(ShapeMask)
 	names := VaultEnvNames()
 	if len(names) == 0 {
 		return redactor
@@ -46,9 +41,8 @@ func EnvValueRedactor(environ []string) *Redactor {
 	return redactor
 }
 
-// RedactKnownValues masks the vault-projected values present in the process
-// environment inside s. It is the convenience form of EnvValueRedactor for
-// egress points that redact one string and do not need the Redactor itself.
+// RedactKnownValues masks host and vault values plus credential-shaped forms
+// in one string, using the same policy as log and agent-output writers.
 func RedactKnownValues(s string) string {
 	return string(EnvValueRedactor(os.Environ()).Redact([]byte(s)))
 }
