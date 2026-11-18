@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -89,6 +90,62 @@ func TestVerifyOutpost(t *testing.T) {
 	if VerifyOutpost(bad, []byte(secret)) {
 		t.Error("tampered Remote-User verified")
 	}
+}
+
+func relationshipRequest(secret, kind, circle, groups, visitor, user string, ts int64) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set(HdrForwardedPrefix, "/matrix/h/example/app/site")
+	r.Header.Set(HdrIdentityTs, strconv.FormatInt(ts, 10))
+	r.Header.Set(HdrRelationship, kind)
+	r.Header.Set(HdrCircle, circle)
+	r.Header.Set(HdrGroups, groups)
+	r.Header.Set(HdrVisitor, visitor)
+	r.Header.Set(HdrRemoteUser, user)
+	payload := "v2\n" + kind + "\n" + circle + "\n" + groups + "\n" + visitor + "\n" + user + "\n" + r.Header.Get(HdrForwardedPrefix) + "\n" + r.Header.Get(HdrIdentityTs)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	r.Header.Set(HdrRelationshipSig, hex.EncodeToString(mac.Sum(nil)))
+	return r
+}
+
+func TestVerifyRelationship(t *testing.T) {
+	const secret = "relationship-secret"
+	now := time.Now().Unix()
+	tests := []struct {
+		name string
+		req  *http.Request
+		want Relationship
+	}{
+		{"member", relationshipRequest(secret, "member", "recruiter", "contacts,certificates", "", "member@example.com", now), Relationship{Kind: "member", Circle: "recruiter", Groups: []string{"contacts", "certificates"}}},
+		{"owner", relationshipRequest(secret, "owner", "", "", "", "owner@example.com", now), Relationship{Kind: "owner"}},
+		{"signed-in pseudonym", relationshipRequest(secret, "signed-in", "", "", "0123456789abcdef0123456789abcdef", "", now), Relationship{Kind: "signed-in", Visitor: "0123456789abcdef0123456789abcdef"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := VerifyRelationship(tt.req, []byte(secret))
+			if !ok || !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("VerifyRelationship = (%+v, %v), want (%+v, true)", got, ok, tt.want)
+			}
+		})
+	}
+
+	forged := relationshipRequest(secret, "member", "recruiter", "contacts", "", "member@example.com", now)
+	forged.Header.Set(HdrCircle, "owner")
+	stale := relationshipRequest(secret, "member", "recruiter", "contacts", "", "member@example.com", now-120)
+	unsigned := relationshipRequest(secret, "member", "recruiter", "contacts", "", "member@example.com", now)
+	unsigned.Header.Del(HdrRelationshipSig)
+	for name, req := range map[string]*http.Request{"forged circle": forged, "stale timestamp": stale, "unsigned": unsigned} {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := VerifyRelationship(req, []byte(secret)); ok || !reflect.DeepEqual(got, Relationship{}) {
+				t.Fatalf("VerifyRelationship = (%+v, %v), want zero relationship and false", got, ok)
+			}
+		})
+	}
+	t.Run("empty secret", func(t *testing.T) {
+		if _, ok := VerifyRelationship(tests[0].req, nil); ok {
+			t.Fatal("empty secret verified")
+		}
+	})
 }
 
 func TestResolveAllowlistIsAuthoritative(t *testing.T) {

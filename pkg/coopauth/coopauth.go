@@ -40,6 +40,11 @@ const (
 	HdrRemoteGroups    = "Remote-Groups" // "admin" | "user" — cloud tier, NOT app RBAC
 	HdrIdentityTs      = "X-Outpost-Identity-Ts"
 	HdrIdentitySig     = "X-Outpost-Identity-Sig"
+	HdrRelationship    = "X-Outpost-Relationship"
+	HdrCircle          = "X-Outpost-Circle"
+	HdrGroups          = "X-Outpost-Groups"
+	HdrVisitor         = "X-Outpost-Visitor"
+	HdrRelationshipSig = "X-Outpost-Relationship-Sig"
 )
 
 // Roles the model resolves a caller to.
@@ -62,6 +67,15 @@ type Identity struct {
 	Username string // Username(User): valid, collision-free app username
 	Role     string // RoleAdmin | RoleUser — the APP's decision (Policy)
 	Loopback bool   // arrived on loopback (the on-host owner)
+}
+
+// Relationship is the host owner's signed relationship to a cloud caller.
+// Groups are the owner's groups for a member, not the cloud tier in Identity.
+type Relationship struct {
+	Kind    string // "owner" | "member" | "signed-in"
+	Circle  string
+	Groups  []string
+	Visitor string // app-scoped pseudonym for a signed-in non-member
 }
 
 // Authenticated reports whether a caller was established at all.
@@ -234,6 +248,48 @@ func VerifyOutpost(r *http.Request, secret []byte) bool {
 		return false
 	}
 	return hmac.Equal(got, want)
+}
+
+// VerifyRelationship verifies outpost's version-2 relationship stamp. It does
+// not infer a relationship from the unsigned headers or from Identity.
+func VerifyRelationship(r *http.Request, secret []byte) (Relationship, bool) {
+	var zero Relationship
+	if len(secret) == 0 {
+		return zero, false
+	}
+	kind := r.Header.Get(HdrRelationship)
+	if kind != "owner" && kind != "member" && kind != "signed-in" {
+		return zero, false
+	}
+	prefix := r.Header.Get(HdrForwardedPrefix)
+	ts := r.Header.Get(HdrIdentityTs)
+	sigHex := r.Header.Get(HdrRelationshipSig)
+	if prefix == "" || ts == "" || sigHex == "" {
+		return zero, false
+	}
+	t, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return zero, false
+	}
+	if d := time.Now().Unix() - t; d > int64(clockSkew.Seconds()) || d < -int64(clockSkew.Seconds()) {
+		return zero, false
+	}
+	circle := r.Header.Get(HdrCircle)
+	groups := r.Header.Get(HdrGroups)
+	visitor := r.Header.Get(HdrVisitor)
+	user := r.Header.Get(HdrRemoteUser)
+	payload := "v2\n" + kind + "\n" + circle + "\n" + groups + "\n" + visitor + "\n" + user + "\n" + prefix + "\n" + ts
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(payload))
+	got, err := hex.DecodeString(sigHex)
+	if err != nil || !hmac.Equal(got, mac.Sum(nil)) {
+		return zero, false
+	}
+	rel := Relationship{Kind: kind, Circle: circle, Visitor: visitor}
+	if groups != "" {
+		rel.Groups = strings.Split(groups, ",")
+	}
+	return rel, true
 }
 
 // --- URL-prefix helpers (the other half of the cooperative contract) --------
