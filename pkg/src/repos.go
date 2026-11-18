@@ -16,7 +16,7 @@ var allowedRepos = map[string]string{
 	"bashy":       "https://github.com/qiangli/bashy",
 	"outpost":     "https://github.com/qiangli/outpost",
 	"coreutils":   "https://github.com/qiangli/coreutils",
-	"sh":          "https://github.com/qiangli/sh",
+	"sh":          "https://github.com/qiangli/bash",
 	"filebrowser": "https://github.com/qiangli/filebrowser-quantum",
 }
 
