@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -192,5 +193,97 @@ func TestDesktopUnavailableIsARefusalWithReason(t *testing.T) {
 	var env map[string]any
 	if json.Unmarshal([]byte(DesktopErrorJSON(err)), &env) != nil || env["status"] != float64(503) || env["exit"] != float64(3) {
 		t.Fatalf("envelope %s", DesktopErrorJSON(err))
+	}
+}
+
+// The wish route is runtime data: get, set (key from stdin only, never
+// printed), unset and test, all with the signed-in session.
+func TestDesktopPolicyRoute(t *testing.T) {
+	const secret = "route-key-secret"
+	type call struct {
+		method, path, auth string
+		body               map[string]any
+	}
+	var calls []call
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := call{method: r.Method, path: r.URL.RequestURI(), auth: r.Header.Get("Authorization")}
+		if r.Body != nil {
+			json.NewDecoder(r.Body).Decode(&c.body)
+		}
+		calls = append(calls, c)
+		switch {
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(204)
+		case strings.HasSuffix(r.URL.Path, "/test"):
+			w.Write([]byte(`{"ok":true,"ms":12,"source":"row"}`))
+		default:
+			w.Write([]byte(`{"url":"https://route.example","model":"m1","token_set":true,"source":"row"}`))
+		}
+	}))
+	defer server.Close()
+	t.Setenv(SuperadminSessionEnv, "session-test")
+	run := func(stdin string, args ...string) (string, error) {
+		cmd := NewDesktopCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetIn(strings.NewReader(stdin))
+		cmd.SetArgs(append(append([]string{"policy", "route"}, args...), "--master", server.URL))
+		err := cmd.Execute()
+		return out.String(), err
+	}
+	cases := []struct {
+		stdin string
+		args  []string
+	}{
+		{"", []string{"get"}},
+		{"  " + secret + "\n", []string{"set", "--url", "https://route.example", "--model", "m1", "--token-stdin"}},
+		{"", []string{"set", "--url", "https://route.example", "--model", "m2", "--no-probe"}},
+		{"", []string{"unset"}},
+		{"", []string{"test", "--wish", "make it darker"}},
+		{"", []string{"test"}},
+	}
+	for _, c := range cases {
+		out, err := run(c.stdin, c.args...)
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		if !json.Valid([]byte(out)) || strings.Contains(out, secret) {
+			t.Fatalf("%v: output %q", c.args, out)
+		}
+	}
+	const p = "/api/v1/desktop-policy/route"
+	want := []struct{ method, path string }{{"GET", p}, {"PUT", p}, {"PUT", p}, {"DELETE", p}, {"POST", p + "/test"}, {"POST", p + "/test"}}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i, w := range want {
+		if calls[i].method != w.method || calls[i].path != w.path || calls[i].auth != "Bearer session-test" {
+			t.Fatalf("call %d = %+v, want %s %s with the session", i, calls[i], w.method, w.path)
+		}
+	}
+	if b := calls[1].body; b["token"] != secret || b["probe"] != true || b["url"] != "https://route.example" || b["model"] != "m1" {
+		t.Fatalf("set body = %v", b)
+	}
+	if b := calls[2].body; b["probe"] != false || b["model"] != "m2" {
+		t.Fatalf("set --no-probe body = %v", b)
+	} else if _, ok := b["token"]; ok {
+		t.Fatalf("token sent without --token-stdin: %v", b)
+	}
+	if calls[4].body["wish"] != "make it darker" || len(calls[5].body) != 0 {
+		t.Fatalf("test bodies = %v, %v", calls[4].body, calls[5].body)
+	}
+	// An empty key on stdin is refused before any request; a key is never a flag.
+	if _, err := run(" \n", "set", "--url", "https://route.example", "--model", "m1", "--token-stdin"); err == nil {
+		t.Fatal("empty stdin key must be refused")
+	}
+	if _, err := run("", "set", "--url", "https://route.example", "--model", "m1", "--token", secret); err == nil {
+		t.Fatal("route set must not accept the key as a flag")
+	}
+	if _, err := run("", "set", "--model", "m1"); err == nil {
+		t.Fatal("--url is required")
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("a refused route set reached the server: %d calls", len(calls))
 	}
 }

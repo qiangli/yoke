@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -192,7 +193,7 @@ func NewDesktopCmd() *cobra.Command {
 // session is read from the same environment variable as bashy superadmin.
 func newDesktopPolicyCmd() *cobra.Command {
 	var master string
-	policy := &cobra.Command{Use: "policy", Short: "Set the daily wish allowance (superadmin, or a satellite's owner)"}
+	policy := &cobra.Command{Use: "policy", Short: "Set the daily wish allowance and the wish route (superadmin, or a satellite's owner)"}
 	policy.PersistentFlags().StringVar(&master, "master", "", "Cloudbox or satellite URL (default: the saved account's)")
 	client := func(cmd *cobra.Command) (*boundary.Client, error) {
 		session := strings.TrimSpace(os.Getenv(SuperadminSessionEnv))
@@ -238,7 +239,60 @@ func newDesktopPolicyCmd() *cobra.Command {
 	policy.AddCommand(&cobra.Command{Use: "unset OWNER", Short: "Remove a limit so the account (or the default) falls back", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
 		return call(cmd, http.MethodDelete, path+"?owner="+url.QueryEscape(a[0]), nil)
 	}})
+	policy.AddCommand(newDesktopRouteCmd(call))
 	return policy
+}
+
+// newDesktopRouteCmd changes the wish route (URL, model, key) as data, so a
+// rotation applies to the next wish without a deploy. The key is read only
+// from stdin, never from a flag or an argument, and is never printed.
+func newDesktopRouteCmd(call func(*cobra.Command, string, string, any) error) *cobra.Command {
+	const path = "/api/v1/desktop-policy/route"
+	route := &cobra.Command{Use: "route", Short: "Get, set, unset or test the wish route (URL, model, key)"}
+	route.AddCommand(&cobra.Command{Use: "get", Short: "Show the resolved route: url, model, token_set, source", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return call(cmd, http.MethodGet, path, nil)
+	}})
+	var routeURL, model string
+	var tokenStdin, noProbe bool
+	set := &cobra.Command{Use: "set", Short: "Set the route; probes it with one wish before saving unless --no-probe", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if f := cmd.Flags().Lookup("token"); f != nil && f.Changed {
+			return errors.New("desktop policy route set: the route key is read only from stdin (--token-stdin), never from --token")
+		}
+		body := map[string]any{"url": routeURL, "model": model, "probe": !noProbe}
+		if tokenStdin {
+			raw, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("desktop policy route set: read the key from stdin: %w", err)
+			}
+			key := strings.TrimSpace(string(raw))
+			if key == "" {
+				return errors.New("desktop policy route set: --token-stdin read an empty key")
+			}
+			body["token"] = key
+		}
+		return call(cmd, http.MethodPut, path, body)
+	}}
+	set.Flags().StringVar(&routeURL, "url", "", "full OpenAI-compatible chat-completions URL, e.g. https://host/v1/chat/completions")
+	set.Flags().StringVar(&model, "model", "", "model name sent with each wish")
+	set.Flags().BoolVar(&tokenStdin, "token-stdin", false, "read the route key from stdin (the only way to pass it)")
+	set.Flags().BoolVar(&noProbe, "no-probe", false, "save without the probe wish")
+	_ = set.MarkFlagRequired("url")
+	_ = set.MarkFlagRequired("model")
+	route.AddCommand(set)
+	route.AddCommand(&cobra.Command{Use: "unset", Short: "Remove the route so wishes fall back to the environment", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return call(cmd, http.MethodDelete, path, nil)
+	}})
+	var wish string
+	test := &cobra.Command{Use: "test", Short: "Send one probe wish through the resolved route and report the result", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		body := map[string]any{}
+		if wish != "" {
+			body["wish"] = wish
+		}
+		return call(cmd, http.MethodPost, path+"/test", body)
+	}}
+	test.Flags().StringVar(&wish, "wish", "", "wish text for the probe (default: the server's)")
+	route.AddCommand(test)
+	return route
 }
 
 // DesktopExitCode is 0 on success, 3 when the server refused with a reason
