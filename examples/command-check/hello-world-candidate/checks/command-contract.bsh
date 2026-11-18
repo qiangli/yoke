@@ -1,0 +1,5 @@
+# The app's hello command follows the bashy command contract.
+# Opt-in: this check exists because the app owner asked for conformance.
+# Checks run contained (minimal PATH, no bashy home), so the app carries its
+# own copy of the checker and reaches the interpreter through $BASH.
+"$BASH" --bashsharp tools/command-check.bsh -- "$BASH" --bashsharp bin/hello.bsh

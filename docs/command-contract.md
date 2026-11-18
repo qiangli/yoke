@@ -163,8 +163,21 @@ conforming command as an MCP tool is deferred work.
   `bashy adapt`.
 - A shaped app or command can be asked to conform with an ordinary wish
   ("conform to the bashy command contract"); the checker reports what remains.
+- To check conformance: `bashy command-check -- CMD ARG...`
+  (`examples/command-check`). An app that wants every shaped version checked
+  adds a check to its `checks/`. Shaping checks run contained (minimal PATH,
+  no bashy home or registered commands), so the app carries its own copy of
+  the checker and invokes it through `$BASH`; see
+  `examples/command-check/README.md`.
 
 ## Change log
 
 - 2026-11-18 v1 accepted (Sprint 655 S0). Known gap at acceptance: bashy's
   own `bashy-recommend-v1` record is not silenced by `BASHY_HINTS=off` (C12).
+- 2026-11-18 Sprint 655 S1: minimum checker `examples/command-check` added;
+  §9 says how to check, including inside contained shaping checks. Gaps it
+  found in bashy itself (none blocks anything; conformance is optional):
+  `bashy sprint show --json`, `bashy todo list --json` and
+  `bashy shape wish|verify --json` print their own JSON shapes rather than the
+  envelope (C11); `bashy todo list --dry-run` exits 1 (C7); bashy's own
+  `bashy-hint-v1` records still print with `BASHY_HINTS=off` exported (C12).

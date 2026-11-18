@@ -1,0 +1,253 @@
+#!/usr/bin/env -S bashy --bashsharp
+# command-check: check one command against the bashy command contract
+# (yoke/docs/command-contract.md) from the outside, and report each
+# requirement by its ID. It only runs the invocation it is given, adding the
+# contract's common options, so that invocation must be safe to repeat.
+~~~skill as guide
+---
+name: command-check
+description: Check one command, registered command or app command against the bashy command contract (yoke/docs/command-contract.md) and report each requirement by ID (C2 help, C4-C10 common options, C11-C12 envelope, C13 exit status, C14 effects) as conform, unsupported, skip or FAIL. Use before claiming a command conforms, or as a shaping check (checks/) when an app owner wants conformance verified.
+metadata:
+  requires: "has=bashy"
+  check-tests: 'bashy command-check --json -- true'
+---
+# command-check
+
+    bashy command-check [--json] [--timeout SECS] [--dry-run] [--explain] -- CMD [ARG...]
+
+`CMD ARG...` is one invocation that is safe to run several times (read-only).
+The checker runs it as given and with `--help`, `--json`, `--fields`,
+`--json --null`, `--dry-run`, `--no-input` and `--explain` appended, then
+reports:
+
+| ID | Check | conform when |
+|----|-------|--------------|
+| C2 | `--help` | exit 0 with usage on stdout |
+| C4/C11 | `--json` | stdout is exactly one envelope (`schema_version`, `command`, `status`); a failure puts an error envelope on stderr. Exit 2 = unsupported |
+| C12 | `--json` stdout | no hint/recommend records on stdout |
+| C5/C10 | `--fields` without `--json` | exit 2 |
+| C6/C10 | `--json --null` | exit 2 |
+| C7 | `--dry-run` | exit 0, or 2 = unsupported |
+| C8 | `--no-input`, stdin closed | exit 0 or 6, or 2 = unsupported; never hangs |
+| C9 | `--explain` | exit 0, or 2 = unsupported |
+| C13 | every run | exit status is one the contract defines |
+| C14 | `bashy NAME` | `bashy commands NAME --json` declares effects (skip for other commands) |
+
+"unsupported" is conforming: the contract only asks that an unsupported option
+fails loudly with exit 2. Exit status: 0 when nothing FAILs, 1 when something
+does, 2 for usage errors. `--json` prints the envelope (on stderr when a check
+FAILs, as the contract requires). `--dry-run` and `--explain` print the
+invocations without running them. Conformance is optional; this command only
+reports.
+~~~
+
+set -uo pipefail
+# The checker's own helper commands run quietly; the target keeps the
+# caller's hint setting, so C12 measures what a caller would see.
+caller_hints=${BASHY_HINTS-}
+export BASHY_HINTS=off
+
+if [[ ${1:-} == --skill ]]; then
+  inside=false
+  while IFS= read -r line; do
+    if [[ $line == '~~~skill as guide' ]]; then inside=true; continue; fi
+    if [[ $inside == true && $line == '~~~' ]]; then break; fi
+    if [[ $inside == true ]]; then printf '%s\n' "$line"; fi
+  done < "${BASH_SOURCE[0]}"
+  exit 0
+fi
+
+usage() {
+  cat <<'EOF'
+usage: command-check [--json] [--timeout SECS] [--dry-run] [--explain] -- CMD [ARG...]
+Check one safe-to-repeat invocation against the bashy command contract
+(yoke/docs/command-contract.md) and report each requirement by ID.
+EOF
+}
+
+die_usage() { printf 'command-check: %s\n' "$1" >&2; exit 2; }
+
+json=false fields=false null=false preview=false timeout_s=20
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --help|-h) usage; exit 0 ;;
+    --json) json=true ;;
+    --fields|--fields=*) fields=true ;;
+    --null) null=true ;;
+    --dry-run|--explain) preview=true ;;
+    --no-input) ;;
+    --timeout) [[ $# -ge 2 ]] || die_usage "--timeout needs a value"; timeout_s=$2; shift ;;
+    --timeout=*) timeout_s=${1#--timeout=} ;;
+    --) shift; break ;;
+    -*) die_usage "unsupported option $1" ;;
+    *) break ;;
+  esac
+  shift
+done
+if [[ $fields == true ]]; then die_usage "unsupported option --fields"; fi
+if [[ $null == true ]]; then
+  if [[ $json == true ]]; then die_usage "--json and --null cannot be combined"; fi
+  die_usage "unsupported option --null"
+fi
+[[ $timeout_s =~ ^[0-9]+$ ]] || die_usage "--timeout must be a whole number of seconds"
+[[ $# -gt 0 ]] || die_usage "missing command after --"
+target=("$@")
+
+variants=(help json fields jsonnull dryrun noinput explain)
+argv_for() {
+  case $1 in
+    help) printf '%s\n' --help ;;
+    json) printf '%s\n' --json ;;
+    fields) printf '%s\n' --fields=schema_version ;;
+    jsonnull) printf '%s\n' --json --null ;;
+    dryrun) printf '%s\n' --dry-run ;;
+    noinput) printf '%s\n' --no-input ;;
+    explain) printf '%s\n' --explain ;;
+  esac
+}
+
+if [[ $preview == true ]]; then
+  for v in "${variants[@]}"; do
+    mapfile -t extra < <(argv_for "$v")
+    printf '%q ' timeout "$timeout_s" "${target[@]}" "${extra[@]}"; printf '\n'
+  done
+  printf 'effects: exec (runs the invocation above; it must be safe to repeat)\n'
+  exit 0
+fi
+
+# Each variant runs with stdin closed, under a timeout. Output is kept in
+# variables, never in files, so the checker itself only reads and executes.
+declare -A rc out
+run_target() { # a subshell, not env(1): timeout and friends stay bashy's own
+  (
+    if [[ -n $caller_hints ]]; then export BASHY_HINTS=$caller_hints; else unset BASHY_HINTS; fi
+    "$@"
+  )
+}
+for v in "${variants[@]}"; do
+  mapfile -t extra < <(argv_for "$v")
+  out[$v]=$(run_target timeout "$timeout_s" "${target[@]}" "${extra[@]}" </dev/null 2>/dev/null)
+  rc[$v]=$?
+done
+
+results=()
+add() { results+=("$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"); }
+
+known_status() {
+  local s=$1
+  (( (s >= 0 && s <= 6) || s == 125 || s == 126 || s == 127 || (s > 128 && s != 124) ))
+}
+timed_out() { [[ $1 == 124 ]]; }
+
+# C2 help
+if timed_out "${rc[help]}"; then add C2 --help FAIL "timed out"
+elif [[ ${rc[help]} == 0 && -n ${out[help]} ]]; then add C2 --help conform ""
+else add C2 --help FAIL "exit ${rc[help]}, stdout $( [[ -n ${out[help]} ]] && echo non-empty || echo empty)"
+fi
+
+# C4/C11 and C12: the envelope
+# Bashy's built-in jq takes only -c -e -n -r, so the script counts values
+# itself: `jq -c .` prints one line per JSON value in its input.
+envelope_fields='type == "object" and (.schema_version | type == "string")
+  and (.command | type == "string")
+  and (.status == "ok" or .status == "error" or .status == "partial")'
+envelope_ok() { # $1: exactly one JSON value, an envelope
+  local vals
+  vals=$(printf '%s' "$1" | jq -c . 2>/dev/null) || return 1
+  [[ -n $vals && $vals != *$'\n'* ]] || return 1
+  printf '%s' "$vals" | jq -e "$envelope_fields" >/dev/null 2>&1
+}
+error_envelope_ok() { # $1: stderr; its last JSON envelope must have status error and an error code
+  local -a lines; local i vals
+  mapfile -t lines <<<"$1"
+  for (( i = ${#lines[@]} - 1; i >= 0; i-- )); do
+    [[ ${lines[i]} == '{'* ]] || continue
+    vals=$(printf '%s\n' "${lines[@]:i}" | jq -c . 2>/dev/null) || continue
+    [[ $vals != *$'\n'* ]] || continue
+    printf '%s' "$vals" | jq -e "($envelope_fields) and .status == \"error\" and (.error.code | type == \"string\")" >/dev/null 2>&1
+    return
+  done
+  return 1
+}
+r=${rc[json]}
+if timed_out "$r"; then add C11 --json FAIL "timed out"
+elif [[ $r == 2 ]]; then add C4 --json unsupported "exit 2"
+elif [[ $r == 0 ]]; then
+  if envelope_ok "${out[json]}"; then add C11 --json conform ""
+  else add C11 --json FAIL "stdout is not exactly one envelope"
+  fi
+else
+  # Re-run once to read stderr; the invocation is safe to repeat.
+  mapfile -t extra < <(argv_for json)
+  err_json=$(run_target timeout "$timeout_s" "${target[@]}" "${extra[@]}" </dev/null 2>&1 >/dev/null)
+  if error_envelope_ok "$err_json"; then add C11 --json conform "error envelope on stderr, exit $r"
+  else add C11 --json FAIL "exit $r without an error envelope on stderr"
+  fi
+fi
+record_re='"schema_version"[[:space:]]*:[[:space:]]*"bashy-(hint|recommend)-v1"'
+if [[ ${out[json]} =~ $record_re ]]; then
+  add C12 "--json stdout" FAIL "hint/recommend record on stdout"
+elif [[ $r != 2 ]]; then add C12 "--json stdout" conform ""
+fi
+
+# C5/C6/C10: invalid combinations and unsupported options fail with exit 2
+for pair in "fields:C5:--fields without --json" "jsonnull:C6:--json --null"; do
+  v=${pair%%:*}; rest=${pair#*:}; id=${rest%%:*}; label=${rest#*:}
+  if [[ ${rc[$v]} == 2 ]]; then add "$id" "$label" conform "exit 2"
+  else add "$id" "$label" FAIL "exit ${rc[$v]}; expected 2 (C10)"
+  fi
+done
+
+# C7 / C8 / C9: supported (0, or 6 for --no-input) or loudly unsupported (2)
+for pair in "dryrun:C7:--dry-run" "noinput:C8:--no-input" "explain:C9:--explain"; do
+  v=${pair%%:*}; rest=${pair#*:}; id=${rest%%:*}; label=${rest#*:}
+  s=${rc[$v]}
+  if timed_out "$s"; then add "$id" "$label" FAIL "timed out"
+  elif [[ $s == 2 ]]; then add "$id" "$label" unsupported "exit 2"
+  elif [[ $s == 0 || ( $v == noinput && $s == 6 ) ]]; then add "$id" "$label" conform "exit $s"
+  else add "$id" "$label" FAIL "exit $s; expected 0 or 2"
+  fi
+done
+
+# C13: every observed status is one the contract defines
+bad=()
+for v in "${variants[@]}"; do
+  timed_out "${rc[$v]}" && continue # already a FAIL in its own check
+  known_status "${rc[$v]}" || bad+=("$v=${rc[$v]}")
+done
+if [[ ${#bad[@]} -eq 0 ]]; then add C13 "exit status" conform ""
+else add C13 "exit status" FAIL "undefined status: ${bad[*]}"
+fi
+
+# C14: declared effects, readable for bashy commands
+if [[ $(basename "${target[0]}") == bashy && ${#target[@]} -ge 2 && ${target[1]} != -* ]]; then
+  effects=$(bashy commands "${target[1]}" --json 2>/dev/null | jq -r 'select(type == "object" and has("effects")) | .effects | join(",")' 2>/dev/null)
+  if [[ -n $effects ]]; then add C14 effects conform "$effects"
+  else add C14 effects FAIL "no effects declared for ${target[1]}"
+  fi
+else
+  add C14 effects skip "declared in the command's own record; not readable from outside"
+fi
+
+fails=0
+for line in "${results[@]}"; do [[ $line == *$'\t'FAIL$'\t'* ]] && fails=$((fails + 1)); done
+
+if [[ $json == true ]]; then
+  envelope=$(CC_ROWS=$(printf '%s\n' "${results[@]}") CC_TARGET="${target[*]}" CC_FAILS=$fails jq -n '
+    (env.CC_ROWS | split("\n") | map(select(length > 0) | split("\t")
+      | {id: .[0], check: .[1], result: .[2], detail: .[3]})) as $checks
+    | {target: env.CC_TARGET, checks: $checks,
+       summary: ($checks | group_by(.result) | map({key: .[0].result, value: length}) | from_entries)} as $r
+    | {schema_version: "loom-v2", command: "command-check", result: $r}
+    + if env.CC_FAILS == "0" then {status: "ok"}
+      else {status: "error", error: {code: "generic_failure", message: (env.CC_FAILS + " contract check(s) failed")}} end')
+  if [[ $fails -eq 0 ]]; then printf '%s\n' "$envelope"; else printf '%s\n' "$envelope" >&2; fi
+else
+  printf 'command-check: %s\n' "${target[*]}"
+  for line in "${results[@]}"; do
+    IFS=$'\t' read -r id check result detail <<<"$line"
+    printf '  %-4s %-26s %-11s %s\n' "$id" "$check" "$result" "$detail"
+  done
+  printf '%d failed\n' "$fails"
+fi
+[[ $fails -eq 0 ]]
