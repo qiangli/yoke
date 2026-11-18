@@ -24,7 +24,8 @@ Conformance is optional. An app owner who wants it adds a check to the app's
 
 - `bin/hello.bsh`: the app's one action (print the greeting) as a conforming
   command;
-- `tools/command-check.bsh`: a copy of this checker, because checks run
+- `tools/command-check.bsh`: a copy of this checker
+  (`cp command-check.bsh hello-world-candidate/tools/`), because checks run
   contained (PATH `/usr/bin:/bin`, HOME in the clone, no registered commands);
 - `checks/command-contract.bsh`: runs the copy on `bin/hello.bsh` through
   `$BASH`, the interpreter running the check.

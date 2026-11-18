@@ -1,0 +1,39 @@
+#!/usr/bin/env -S bashy --bashsharp
+# hello: the Hello World app's one action as a command that follows the bashy
+# command contract (yoke/docs/command-contract.md). It prints the greeting the
+# page shows; the page and this command read the same heading.
+set -uo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+json=false
+for a in "$@"; do
+  case $a in
+    --help|-h)
+      printf 'usage: hello [--json] [--no-input]\nPrint the Hello World greeting shown on the page.\n'
+      exit 0 ;;
+    --json) json=true ;;
+    --no-input) ;;
+    *) printf 'hello: unsupported option %s\n' "$a" >&2; exit 2 ;;
+  esac
+done
+
+greeting=
+re='<h1 id="greeting">([^<]*)</h1>'
+while IFS= read -r line; do
+  if [[ $line =~ $re ]]; then greeting=${BASH_REMATCH[1]}; break; fi
+done < "$here/public/index.html"
+
+if [[ -z $greeting ]]; then
+  if [[ $json == true ]]; then
+    jq -n '{schema_version: "loom-v2", command: "hello", status: "error",
+      error: {code: "precondition_failed", message: "no greeting heading in public/index.html"}}' >&2
+  else
+    printf 'hello: no greeting heading in public/index.html\n' >&2
+  fi
+  exit 3
+fi
+if [[ $json == true ]]; then
+  HELLO_GREETING=$greeting jq -n '{schema_version: "loom-v2", command: "hello", status: "ok", result: {greeting: env.HELLO_GREETING}}'
+else
+  printf '%s\n' "$greeting"
+fi
