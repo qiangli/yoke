@@ -14,7 +14,7 @@ import (
 	"os"
 	"runtime"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 func init() {

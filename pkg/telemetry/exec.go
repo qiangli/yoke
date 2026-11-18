@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 // ExecMiddleware emits one span per command bashy runs.

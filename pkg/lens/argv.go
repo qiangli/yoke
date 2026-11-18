@@ -41,8 +41,8 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/snippet"
 	"gopkg.in/yaml.v3"
-	"mvdan.cc/sh/v3/pathconv"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/pathconv"
+	"github.com/qiangli/bash/syntax"
 )
 
 // The argv formats, in the order their rows are declared.

@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/syntax"
 )
 
 // ErrNoContract reports that a unit declares no contract — no Require and no

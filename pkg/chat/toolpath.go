@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 
 	"github.com/qiangli/yoke/pkg/nativepath"
 )

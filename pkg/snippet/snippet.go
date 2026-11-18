@@ -20,7 +20,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/atlas"
 	"gopkg.in/yaml.v3"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/syntax"
 )
 
 const (

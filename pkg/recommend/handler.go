@@ -14,7 +14,7 @@ import (
 	"github.com/qiangli/yoke/pkg/autoretry"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/skills"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 // GuidancePolicy describes the active, process-local hint rules.

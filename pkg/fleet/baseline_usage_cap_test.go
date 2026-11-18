@@ -8,8 +8,8 @@ import (
 
 	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/policy/advice"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/interp"
+	"github.com/qiangli/bash/syntax"
 )
 
 // TestBaselineUsageProbeEffectsCoverCommands (story 765d90d1d34f) is the

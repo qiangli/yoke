@@ -15,7 +15,7 @@ import (
 
 	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // OpenClawNodeVersion is the Node.js provisioned to run the pinned OpenClaw

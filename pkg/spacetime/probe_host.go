@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // --- core probe implementations --------------------------------------

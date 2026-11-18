@@ -5,7 +5,7 @@ package telemetry
 import (
 	"context"
 	"errors"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 	"testing"
 	"time"
 )

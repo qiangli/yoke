@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 // EnvVar carries a Policy (JSON) from the host to the interpreter that runs

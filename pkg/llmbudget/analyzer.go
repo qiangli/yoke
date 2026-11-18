@@ -20,7 +20,7 @@ import (
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/quotaobs"
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // AnalyzerBackend is the paid model boundary. A fake backend can be supplied

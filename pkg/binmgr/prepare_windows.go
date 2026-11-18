@@ -1,6 +1,6 @@
 package binmgr
 
-import "mvdan.cc/sh/v3/pathconv"
+import "github.com/qiangli/bash/pathconv"
 
 // PrepareArgs is Command's argument adaptation, for a caller that builds its
 // own exec.Cmd: the shell's POSIX drive paths become native (Windows only).

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/syntax"
 
 	"github.com/qiangli/yoke/pkg/atlas"
 	"github.com/qiangli/yoke/pkg/fleet"

@@ -41,7 +41,7 @@ require (
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/qiangli/bonsai v0.0.0-20261103194740-24dd0f47247e
-	github.com/qiangli/coreutils v0.0.0-20261112194059-6dd7a3ee1858
+	github.com/qiangli/coreutils v0.0.0-20261118041055-ababb9f1c79a
 	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
@@ -78,7 +78,6 @@ require (
 	golang.org/x/term v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.59.0
-	mvdan.cc/sh/v3 v3.13.1
 	resty.dev/v3 v3.0.0-rc.2
 )
 
@@ -407,7 +406,6 @@ require (
 // checkout. Same convention as ycode/outpost/bashy. coreutils is the
 // certified POSIX package this module was split out of (Sprint 208); yoke
 // imports it, never the reverse.
-replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3 v3.0.0-20261112194059-a4141771a3dc
 
 // gotreesitter: pinned local fork of upstream v0.16.0 (../gotreesitter,
 // hosting qiangli/gotreesitter, module path kept as upstream's) with the
@@ -471,3 +469,9 @@ replace github.com/cyphar/filepath-securejoin => ./external/securejoin
 replace github.com/mattn/go-runewidth => ./external/runewidth
 
 replace github.com/gtsteffaniak/filebrowser/backend => github.com/qiangli/filebrowser-quantum/backend v0.0.0-20261115042727-40f3c84d55a9
+
+require github.com/bashsharp/bashsharp v0.0.0-20261118040926-59ce327a5e01
+
+require github.com/qiangli/bash v0.0.0-20261117235306-adb3b4e0c28d
+
+require github.com/qiangli/bash v0.0.0-20261117235306-adb3b4e0c28d

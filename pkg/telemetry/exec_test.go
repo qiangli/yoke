@@ -13,7 +13,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 // withRecorder turns telemetry on against an in-memory exporter, so a test asserts what

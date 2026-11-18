@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // Sprint 318: on Windows npm.cmd runs under `cmd.exe /d /c`. The drive-path

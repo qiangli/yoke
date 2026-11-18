@@ -30,7 +30,7 @@ import (
 
 	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 // embeddedSums pins the OFFICIAL sha256 digests of the DefaultVersion archives,

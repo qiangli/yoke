@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 // ScriptStep has an explicit, bounded recovery policy. ReplacementSkill is

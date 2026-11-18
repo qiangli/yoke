@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/syntax"
 )
 
 func capacityInventoryAllowed(allowed, requested []CapacityExecutable) bool {

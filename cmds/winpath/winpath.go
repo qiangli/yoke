@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
-	"mvdan.cc/sh/v3/pathconv"
+	"github.com/qiangli/bash/pathconv"
 )
 
 var wslpathCmd = &tool.Tool{

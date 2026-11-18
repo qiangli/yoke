@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/term"
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 // signalCause is the context.Cause of a run cancelled by SIGINT/SIGTERM.

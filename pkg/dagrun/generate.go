@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/syntax"
 
 	"github.com/qiangli/yoke/pkg/dag"
 )

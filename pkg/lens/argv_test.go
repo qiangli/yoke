@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/qiangli/bash/syntax"
 )
 
 // hostile is the argv every dialect must carry back unchanged (the plan's

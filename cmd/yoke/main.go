@@ -21,7 +21,7 @@ import (
 	lenscmd "github.com/qiangli/yoke/cmds/lens"
 	"github.com/qiangli/yoke/mcp"
 	"github.com/qiangli/yoke/pkg/weave"
-	"mvdan.cc/sh/v3/interp/ownedexec"
+	"github.com/qiangli/bash/interp/ownedexec"
 
 	_ "github.com/qiangli/yoke/cmds/all"
 	// Side effect: every built-in account adapter joins the default

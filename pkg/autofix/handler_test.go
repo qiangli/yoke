@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"mvdan.cc/sh/v3/interp"
+	"github.com/qiangli/bash/interp"
 )
 
 func TestHandlerRequiresExplicitAgenticMode(t *testing.T) {
