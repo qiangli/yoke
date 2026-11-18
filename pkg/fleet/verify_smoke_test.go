@@ -34,3 +34,32 @@ func TestSmokeArgvSkipsRetiredBindings(t *testing.T) {
 		}
 	}
 }
+
+// A metered API-key binding sorts first on real hosts (codex-bedrock-…,
+// opencode-bedrock-…); smoking it without the key marked the whole tool
+// unusable. The subscription binding is smoked instead; the API binding is
+// only the fallback when nothing else is declared.
+func TestSmokeArgvPrefersNonAPIBindings(t *testing.T) {
+	base := fstest.MapFS{
+		"baseline/tools/smoke.yaml":  &fstest.MapFile{Data: []byte("name: smoke\nkind: cli\ncli:\n  binary: smoke\n  launch:\n    exec: smoke --model {model} {prompt}\n")},
+		"baseline/models/keyed.yaml": &fstest.MapFile{Data: []byte("name: keyed\nkind: api\napi_key_ref: some-key\nmodel: keyed-target\n")},
+		"baseline/models/sub.yaml":   &fstest.MapFile{Data: []byte("name: sub\nkind: subscription\nmodel: sub-target\n")},
+		"baseline/agents/a.yaml":     &fstest.MapFile{Data: []byte("agents:\n  - name: smoke-a-keyed\n    tool: smoke\n    model: keyed\n  - name: smoke-b-sub\n    tool: smoke\n    model: sub\n")},
+	}
+	c := New(WithRoot(t.TempDir()), WithBaselineFS(base), WithoutCloudOverlay())
+	argv, ok := c.SmokeArgv("smoke")
+	if !ok || len(argv) < 3 || argv[2] != "sub-target" {
+		t.Fatalf("argv = %q, want the subscription binding", argv)
+	}
+
+	only := fstest.MapFS{
+		"baseline/tools/smoke.yaml":  base["baseline/tools/smoke.yaml"],
+		"baseline/models/keyed.yaml": base["baseline/models/keyed.yaml"],
+		"baseline/agents/a.yaml":     &fstest.MapFile{Data: []byte("agents:\n  - name: smoke-a-keyed\n    tool: smoke\n    model: keyed\n")},
+	}
+	c = New(WithRoot(t.TempDir()), WithBaselineFS(only), WithoutCloudOverlay())
+	argv, ok = c.SmokeArgv("smoke")
+	if !ok || len(argv) < 3 || argv[2] != "keyed-target" {
+		t.Fatalf("argv = %q, want the API binding as the only fallback", argv)
+	}
+}

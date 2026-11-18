@@ -125,22 +125,37 @@ const smokePrompt = "Reply with exactly: " + SmokeToken
 // no model in its name, so select its first declared binding that is not
 // retired; catalog agents are name-sorted, making that choice deterministic.
 // A retired binding names a model the vendor no longer serves, so smoking it
-// would report a working tool unusable.
+// would report a working tool unusable. For the same reason a binding that
+// does not need a metered API key (kind api) is preferred: such a key is
+// often absent on a host whose subscription bindings work, and one missing
+// key used to mark the whole tool unusable for every binding.
 func (c *Catalog) SmokeArgv(tool string) ([]string, bool) {
 	t, ok := c.Tool(tool)
 	if !ok || !t.IsCLI() || t.CLI.Launch.Exec == "" {
 		return nil, false
 	}
-	modelID := ""
+	modelID, fallback, found := "", "", false
 	agents, _ := c.Agents()
 	for _, a := range agents {
 		if a.Tool != t.Name || a.Unavailable != "" || a.CheckRetired(KindAgent, a.Name) != nil {
 			continue
 		}
-		if m, ok := c.Model(a.Model); ok {
-			modelID = m.TargetFor(t.Name)
-			break
+		m, ok := c.Model(a.Model)
+		if !ok {
+			continue
 		}
+		if m.Kind == ModelKindAPI {
+			if !found {
+				fallback, found = m.TargetFor(t.Name), true
+			}
+			continue
+		}
+		modelID = m.TargetFor(t.Name)
+		found = false
+		break
+	}
+	if modelID == "" && found {
+		modelID = fallback
 	}
 	argv := t.Argv(modelID, smokePrompt)
 	return argv, len(argv) > 0
