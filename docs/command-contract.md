@@ -1,7 +1,12 @@
 # Bashy command contract
 
-Status: **v1 draft for operator acceptance** (Sprint 655, story S0
-`4b633be22c28`). Normative once accepted.
+Status: **v1, accepted by the operator 2026-11-18** (Sprint 655, story S0
+`4b633be22c28`). Normative.
+
+This is a living contract: it is improved as bashy itself is shaped. A change
+records its date and reason in the change log below, keeps existing
+requirement IDs stable (a retired ID is never reused), and prefers additive
+changes; a change that breaks callers bumps the envelope `schema_version`.
 
 Bashy is one app to the people and agents who use it: every command, every
 registered tool and every app behaves the same way at the command line. This
@@ -158,3 +163,8 @@ conforming command as an MCP tool is deferred work.
   `bashy adapt`.
 - A shaped app or command can be asked to conform with an ordinary wish
   ("conform to the bashy command contract"); the checker reports what remains.
+
+## Change log
+
+- 2026-11-18 v1 accepted (Sprint 655 S0). Known gap at acceptance: bashy's
+  own `bashy-recommend-v1` record is not silenced by `BASHY_HINTS=off` (C12).
