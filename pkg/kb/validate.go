@@ -21,6 +21,11 @@ func newValidateCmd(dir, ring *string) *cobra.Command {
 				return fmt.Errorf("kb: validate requires --evidence or --from-gate")
 			}
 			store := openRing(*dir, *ring)
+			lock, err := workflowLock(store)
+			if err != nil {
+				return err
+			}
+			defer lock.Release()
 			if fromGate != "" {
 				ev, err := findObserveEvent(store, strings.TrimSpace(fromGate))
 				if err != nil {

@@ -61,6 +61,9 @@ type Page struct {
 	// other page.
 	Proposal *Proposal `yaml:"proposal,omitempty"`
 
+	// Workflow retains reported provenance; it is never a verification grant.
+	Workflow *WorkflowLearning `yaml:"workflow,omitempty"`
+
 	Body string `yaml:"-"`
 }
 

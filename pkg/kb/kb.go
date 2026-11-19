@@ -156,6 +156,7 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newShowCmd(&dir, resolved))
 	cmd.AddCommand(newAddCmd(&dir, resolved))
 	cmd.AddCommand(newNoteCmd(&dir, resolved))
+	cmd.AddCommand(newWorkflowCmd(&dir, resolved))
 	cmd.AddCommand(newObserveCmd(&dir, resolved))
 	cmd.AddCommand(newUpdateCmd(&dir, resolved))
 	cmd.AddCommand(newSupersedeCmd(&dir, resolved))
