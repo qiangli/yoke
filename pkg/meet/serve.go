@@ -193,6 +193,7 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("/observe-dm", handleRelayDMObserve)
 	route("GET /api/dms/{agent}/console", handleConsoleDM)
 	route("GET /api/rooms/{ref}", handleRoomGet)
+	route("GET /api/rooms/{ref}/brief", handleBrief)
 	route("POST /api/rooms", handleRoomCreate)
 	route("POST /api/rooms/{ref}/post", handlePost)
 	route("POST /api/rooms/{ref}/invite", handleInvite)
@@ -407,6 +408,48 @@ func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"state": viewOf(st), "synthesis": syn})
+}
+
+// handleBrief answers a reader's catch-up brief over the same exported API the
+// CLI uses: one truth, two transports. The reader defaults to the verified
+// caller; an explicit ?as= names another participant, on the read path's terms
+// (reading is open, posting is not). It advances nothing unless ?mark_seen=1.
+func handleBrief(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	as := strings.TrimSpace(q.Get("as"))
+	if as == "" {
+		as = actorOf(r)
+	}
+	opt := BriefOptions{Reader: as, Limit: atoiOr(q.Get("limit"), BriefLimit)}
+	if s := strings.TrimSpace(q.Get("since")); s != "" {
+		var v int64
+		if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v < 0 {
+			apiErr(w, fmt.Errorf("meet: ?since must be a non-negative transcript sequence"))
+			return
+		}
+		opt.SinceSeq = v
+	}
+	opt.All = q.Get("all") == "1" || strings.EqualFold(q.Get("all"), "true")
+	opt.MarkSeen = q.Get("mark_seen") == "1" || strings.EqualFold(q.Get("mark_seen"), "true")
+	res, err := Brief(r.PathValue("ref"), opt)
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// atoiOr parses a non-negative query integer, falling back when absent.
+func atoiOr(s string, fallback int) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	var v int
+	if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v < 0 {
+		return fallback
+	}
+	return v
 }
 
 // handleRoomCreate opens a room in the NAME OF WHOEVER ASKED FOR IT.

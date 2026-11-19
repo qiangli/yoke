@@ -47,6 +47,7 @@ bashy meet list                                 # every meeting; ROOM/NAME are h
 bashy meet observe       [<room>|<name>|<id>]   # attach and WATCH it happen, live (read-only)
 
 bashy meet show          <id>                   # roster, per-participant coverage, artifacts
+bashy meet brief         <id> --as NAME          # catch-up: what changed and what needs you (read-only)
 bashy meet contributions <id> [participant]     # every contribution, in full
 bashy meet converge      <id>                   # secretary pass (rewrites synthesis.json)
 bashy meet close         <id>                   # converge + initiator confirms + file minutes
