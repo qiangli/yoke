@@ -595,6 +595,21 @@ func handleClose(w http.ResponseWriter, r *http.Request) {
 // The action routes call the same exported API the CLI does (adopt_api.go). The
 // confirming human is the authenticated caller, never a name taken from the body;
 // an agent identity is refused by the API.
+// trustedHuman names the confirming person for a route that acts with human
+// authority. Only a vouched identity (cloud/outpost-verified) is a principal the
+// server can attest. A bare loopback request proves only "some process on this
+// host": a worker sharing the OS account looks identical to the owner, so it is
+// refused rather than treated as the host's human. The owner confirms from the
+// CLI (which resolves the real session principal) or through the vouched tunnel.
+// Previews (Confirm false) need no authority and stay open on loopback.
+func trustedHuman(r *http.Request) (string, error) {
+	id, ok := coopauth.IdentityOf(r)
+	if !ok || strings.TrimSpace(id.Username) == "" {
+		return "", fmt.Errorf("%w: a bare loopback request cannot be told apart from an agent on this host; confirm through the vouched tunnel or `meet actions adopt --confirm`", ErrNoAuthority)
+	}
+	return actorOf(r), nil
+}
+
 func handleActionList(w http.ResponseWriter, r *http.Request) {
 	views, err := RoomActions(r.PathValue("ref"), nil)
 	if err != nil {
@@ -610,7 +625,14 @@ func handleActionAdopt(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
-	req.By = actorOf(r)
+	if req.Confirm {
+		by, err := trustedHuman(r)
+		if err != nil {
+			apiErr(w, err)
+			return
+		}
+		req.By = by
+	}
 	resp, err := AdoptActions(r.PathValue("ref"), req)
 	if err != nil {
 		apiErr(w, err)
@@ -625,7 +647,14 @@ func handleActionReconcile(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, err)
 		return
 	}
-	req.By = actorOf(r)
+	if req.Confirm {
+		by, err := trustedHuman(r)
+		if err != nil {
+			apiErr(w, err)
+			return
+		}
+		req.By = by
+	}
 	findings, err := ReconcileActions(r.PathValue("ref"), req)
 	if err != nil {
 		apiErr(w, err)

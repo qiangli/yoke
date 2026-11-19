@@ -467,3 +467,12 @@ A session is local under `~/.bashy/meet/<id>/`:
 | `synthesis.json` | the secretary's latest pass — rewritten, never appended |
 | `turns/*.txt` | each turn's complete text |
 | `minutes.md` | when cwd is outside a git repo |
+
+## Action adoption routes (for the visible UI)
+
+- `GET  /api/rooms/{ref}/actions` — active agreed actions (retracted/re-decided ones are absent). Open on loopback.
+- `POST /api/rooms/{ref}/actions/adopt` — `{actions:[{action,owner,depends,accept}], confirm, sprint}`. `confirm:false` previews and is open on loopback; `confirm:true` files stories and needs a **vouched identity** that is the room's human or convener.
+- `POST /api/rooms/{ref}/actions/reconcile` — `{confirm}`; confirm has the same authority rule.
+- `POST /api/rooms/{ref}/actions/outcome` — `{story, evidence[]}`; story must be done.
+
+A bare loopback request cannot be told apart from an agent sharing the OS account, so it is refused (403) for confirm. The owner confirms from the CLI (real session principal) or through the vouched tunnel.

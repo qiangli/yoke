@@ -262,7 +262,20 @@ func AdoptActions(ref string, req AdoptRequest) (*AdoptResponse, error) {
 	}
 	// Re-read the room under the register lock: a retraction that landed after
 	// the candidate scan must stop the adoption, not be filed anyway.
+	// The room's append lock is held across the reread AND the write: a
+	// retraction is an append, so it lands wholly before the reread (and stops
+	// the adoption) or waits until the story exists (and reconciliation then
+	// flags it).
+	dir, err := storeDir(st.ID)
+	if err != nil {
+		return nil, err
+	}
 	err = withStoreLock(reg, func() error {
+		release, err := lockAppend(dir)
+		if err != nil {
+			return err
+		}
+		defer release()
 		_, fresh, err := roomActions(st.ID)
 		if err != nil {
 			return err

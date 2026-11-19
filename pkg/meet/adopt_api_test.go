@@ -192,8 +192,23 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 		t.Fatal("route preview wrote")
 	}
 	adopt["confirm"] = true
+	// A local worker sharing the OS account (loopback, no vouched identity) is
+	// refused, whatever $USER says.
+	if r, _ := doJSON(t, srv, "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("bare loopback confirm status %d, want 403", r.StatusCode)
+	}
+	if r, _ := doJSON(t, srv, "POST", base+"/reconcile", map[string]any{"confirm": true}); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("bare loopback reconcile status %d, want 403", r.StatusCode)
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatal("refused loopback adoption wrote a story")
+	}
+	// A vouched stranger is not the room's human either.
+	if r, _ := doVouchedJSON(t, srv, "mallory", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("vouched outsider status %d, want 403", r.StatusCode)
+	}
 	for i := 0; i < 2; i++ {
-		if r, b := doJSON(t, srv, "POST", base+"/adopt", adopt); r.StatusCode != http.StatusOK {
+		if r, b := doVouchedJSON(t, srv, "qiangli", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusOK {
 			t.Fatalf("adopt: %d %s", r.StatusCode, b)
 		}
 	}
@@ -205,7 +220,7 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 
 	// An agent identity cannot confirm through the route either.
 	t.Setenv("USER", "claude")
-	if r, _ := doJSON(t, srv, "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
+	if r, _ := doVouchedJSON(t, srv, "claude", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("agent adoption status %d, want 403", r.StatusCode)
 	}
 	t.Setenv("USER", "qiangli")
@@ -219,7 +234,7 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 		t.Fatalf("retracted action still active: %s", b)
 	}
 	for i, wantRequested := range []bool{true, false} {
-		_, b = doJSON(t, srv, "POST", base+"/reconcile", map[string]any{"confirm": true})
+		_, b = doVouchedJSON(t, srv, "qiangli", "POST", base+"/reconcile", map[string]any{"confirm": true})
 		var rec struct{ Affected []ReconcileFinding }
 		_ = json.Unmarshal(b, &rec)
 		if len(rec.Affected) != 1 || rec.Affected[0].Requested != wantRequested || rec.Affected[0].Story != story.ID {
@@ -481,5 +496,39 @@ func TestUnreadableTranscriptFailsWritePaths(t *testing.T) {
 	}
 	if err := postOnce(st, "qiangli", "outcome-id:x", "n"); err == nil {
 		t.Fatal("postOnce ignored a transcript read error")
+	}
+}
+
+// A retraction racing the locked write is serialized by the room append lock:
+// it either lands first (adoption refused) or waits until the story exists.
+func TestRetractionRacingAdoptionIsSerialized(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		st := newTestSession(t)
+		tickingClock(t)
+		ev, _ := record(st, "action", "qiangli", "", "bob: write the plan")
+		store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+		todo.DefaultSprint, todo.PrepareSprint = nil, nil
+		acts, _ := RoomActions(st.ID, store)
+		done := make(chan struct{})
+		beforeAdoptLock = func() {
+			go func() { _, _ = retractRecord(st, ev, "qiangli"); close(done) }()
+		}
+		_, err := AdoptActions(st.ID, AdoptRequest{Store: store, Confirm: true, By: "qiangli", Actions: []ActionSpec{{Action: acts[0].ID, Accept: []string{"x"}}}})
+		<-done
+		beforeAdoptLock = nil
+		all, _ := store.List()
+		if err == nil {
+			// Adopted first: the later retraction must now be reported.
+			if len(all) != 1 {
+				t.Fatalf("run %d: %d stories", i, len(all))
+			}
+			_, cur, _ := roomActions(st.ID)
+			f, rerr := ReconcileActions(st.ID, ReconcileRequest{Store: store})
+			if rerr != nil || len(f) != 1 || len(cur) != 0 {
+				t.Fatalf("run %d: retraction after adoption not surfaced: %v %v", i, f, rerr)
+			}
+		} else if len(all) != 0 {
+			t.Fatalf("run %d: refused adoption (%v) still filed a story", i, err)
+		}
 	}
 }

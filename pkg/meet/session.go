@@ -847,6 +847,20 @@ func loadState(id string) (*State, error) {
 // a long queue of live writers is the only way to get anywhere near it.
 const appendLockWait = 30 * time.Second
 
+// lockAppend takes the room's transcript append lock. Appends serialize on it,
+// and a caller that must act on a stable view of the transcript (adoption
+// revalidating against retractions) holds it across its own write.
+func lockAppend(dir string) (func(), error) {
+	host, _ := os.Hostname()
+	l, err := lockfile.AcquireWithin(filepath.Join(dir, "append.lock"), appendLockWait, lockfile.Holder{
+		Name: host, PID: os.Getpid(), Intent: "append meeting transcript", Since: nowFn(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("meet: locking append transcript: %w", err)
+	}
+	return func() { l.Release() }, nil
+}
+
 func appendEvent(id string, e Event) error {
 	dir, err := storeDir(id)
 	if err != nil {
@@ -870,14 +884,11 @@ func appendEvent(id string, e Event) error {
 	// The lock is a DISTINCT inode from run.lock: the run lease is held for a
 	// whole round, so serializing on it would make every message typed during a
 	// round fail ErrMeetingBusy — exactly the lease-free promise Post makes.
-	host, _ := os.Hostname()
-	l, err := lockfile.AcquireWithin(filepath.Join(dir, "append.lock"), appendLockWait, lockfile.Holder{
-		Name: host, PID: os.Getpid(), Intent: "append meeting transcript", Since: nowFn(),
-	})
+	release, err := lockAppend(dir)
 	if err != nil {
-		return fmt.Errorf("meet: locking append transcript: %w", err)
+		return err
 	}
-	defer l.Release()
+	defer release()
 	f, err := os.OpenFile(filepath.Join(dir, "transcript.jsonl"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
