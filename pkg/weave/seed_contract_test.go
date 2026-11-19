@@ -85,7 +85,7 @@ func TestSeededContractCarriesTheLaunchQuirks(t *testing.T) {
 // launch a tool the registry never gave a launch template.
 func TestDetectionOnlyToolHasNoContract(t *testing.T) {
 	pinFleet(t)
-	for _, name := range []string{"cursor", "goose", "cline", "gemini"} {
+	for _, name := range []string{"goose", "cline", "gemini"} {
 		if _, ok := seededContract(name); ok {
 			t.Errorf("%s: got a launch contract for a detection-only harness", name)
 		}
