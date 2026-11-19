@@ -77,7 +77,7 @@ func NewMeetCmd() *cobra.Command {
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAbandonCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
-		newObserveCmd(), newServeCmd(), newSayCmd(),
+		newObserveCmd(), newServeCmd(), newSayCmd(), newRouteCmd(),
 	)
 	return cmd
 }
