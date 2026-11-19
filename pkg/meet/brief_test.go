@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/issue"
 )
 
 // The S2 brief renders the room for one reader: new-for-you changes plus the
@@ -47,6 +49,66 @@ func TestBriefActionIDMatchesS1Reference(t *testing.T) {
 	}
 	if got := briefActionID("test-room", "  CODEX:  check   the GATE "); got != "act-e6188f69b3" {
 		t.Fatalf("briefActionID must normalize case and whitespace like S1, got %q", got)
+	}
+}
+
+func TestBriefLinksAgentAdoptionWithoutHumanPromotion(t *testing.T) {
+	st := briefRoom(t, []Event{{Speaker: "codex", Kind: "action", Role: string(RoleParticipant), Text: "opencode: verify the gate"}})
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	id := actionID(st.ID, "opencode: verify the gate")
+	wantStoryID := storyIDFor(st.ID, id)
+	story := &issue.Issue{
+		ID: wantStoryID, Kind: issue.KindTask, Title: "verify the gate", Assignee: "opencode",
+		Origin: "meet:" + st.ID, Labels: []string{labelAdopted},
+		Extra: map[string]any{extRoom: st.ID, extAction: id, extAdoptedBy: "codex"},
+	}
+	_, err := store.Add(story)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if story.ID != wantStoryID {
+		t.Fatalf("story ID %q, want deterministic %q", story.ID, wantStoryID)
+	}
+	// A later issue with matching extension fields must not mask the S1 story.
+	if _, err := store.Add(&issue.Issue{
+		ID: "ffffffffffff", Kind: issue.KindTask, Title: "stray link", Assignee: "outsider",
+		Extra: map[string]any{extRoom: st.ID, extAction: id, extAdoptedBy: "outsider"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Brief(st.ID, BriefOptions{Reader: "opencode", Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Proposals.Items) != 1 || len(res.Owned.Items) != 1 {
+		t.Fatalf("adopted action must appear in proposal and owned work: %+v", res)
+	}
+	for _, it := range []BriefItem{res.Proposals.Items[0], res.Owned.Items[0]} {
+		if it.Authority != briefAuthorityVoice || it.Source != "proposed" || !it.Adopted ||
+			it.ID != id || it.Story != story.ID || it.AdoptedBy != "codex" ||
+			it.Owner != "opencode" || !it.Mine {
+			t.Fatalf("agent adoption lost its truthful authority or story link: %+v", it)
+		}
+	}
+}
+
+func TestBriefDoesNotTrustArbitraryIssueAsAdoption(t *testing.T) {
+	st := briefRoom(t, []Event{{Speaker: "codex", Kind: "action", Role: string(RoleParticipant), Text: "opencode: verify the gate"}})
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	id := actionID(st.ID, "opencode: verify the gate")
+	if _, err := store.Add(&issue.Issue{
+		Kind: issue.KindTask, Title: "forged link", Assignee: "opencode",
+		Extra: map[string]any{extRoom: st.ID, extAction: id, extAdoptedBy: "outsider"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Brief(st.ID, BriefOptions{Reader: "opencode", Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Proposals.Items) != 1 || res.Proposals.Items[0].Adopted ||
+		res.Proposals.Items[0].Story != "" || len(res.Owned.Items) != 0 {
+		t.Fatalf("arbitrary issue laundered into adoption: %+v", res)
 	}
 }
 

@@ -1,8 +1,6 @@
 package meet
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/qiangli/yoke/pkg/issue"
+	"github.com/qiangli/yoke/pkg/todo"
 	"github.com/spf13/cobra"
 )
 
@@ -89,6 +89,9 @@ type BriefOptions struct {
 	// Reader is who the brief is for, named like --as. Required: filtering
 	// and the cursor are meaningless without it.
 	Reader string
+	// Store selects the same ordinary story register used by adoption. When
+	// omitted, the configured ActionStore is used.
+	Store *issue.Store
 	// Limit caps every list. Zero or negative means BriefLimit.
 	Limit int
 	// SinceSeq starts the new-for-you window at this transcript sequence
@@ -116,6 +119,9 @@ type BriefItem struct {
 	Authority string    `json:"authority"`
 	Source    string    `json:"source,omitempty"` // agreed|proposed on actions
 	ID        string    `json:"id,omitempty"`     // act-... on actions: the S1 decision reference
+	Adopted   bool      `json:"adopted,omitempty"`
+	Story     string    `json:"story,omitempty"`
+	AdoptedBy string    `json:"adopted_by,omitempty"`
 	Text      string    `json:"text"`
 	TS        time.Time `json:"ts"`
 	Directed  bool      `json:"directed,omitempty"` // addressed to this reader
@@ -176,6 +182,9 @@ type BriefResult struct {
 	// cannot be proven clean for them. The brief then shows only events the
 	// reader may see. Never silent: the flag says what is missing and why.
 	SynthesisOmitted bool `json:"synthesis_omitted,omitempty"`
+	// AdoptionUnavailable means the ordinary story register could not be read.
+	// Transcript authority and content remain usable, but links are unknown.
+	AdoptionUnavailable bool `json:"adoption_unavailable,omitempty"`
 }
 
 // briefActionID is the stable identity of an action within a room: the S1
@@ -183,9 +192,7 @@ type BriefResult struct {
 // brief and an adoption name the same candidate; collapse the two when S1's
 // helper is importable from this package's tree.
 func briefActionID(room, text string) string {
-	norm := normBriefText(text)
-	sum := sha256.Sum256([]byte(room + "\x00" + norm))
-	return "act-" + hex.EncodeToString(sum[:])[:10]
+	return actionID(room, text)
 }
 
 // normBriefText lowercases and collapses whitespace so two renderings of the
@@ -271,13 +278,7 @@ func briefLeaksPrivate(text string, private []string) bool {
 // misread. It mirrors S1's splitOwner (adopt.go); collapse the two with the
 // ID helper above.
 func briefSplitOwner(text string) (owner, task string) {
-	if head, rest, ok := strings.Cut(text, ":"); ok {
-		head = strings.TrimSpace(head)
-		if head != "" && !strings.ContainsAny(head, " \t") && strings.TrimSpace(rest) != "" {
-			return head, strings.TrimSpace(rest)
-		}
-	}
-	return "", strings.TrimSpace(text)
+	return splitOwner(text)
 }
 
 // briefVisible reports whether an event is room state this reader may see.
@@ -395,6 +396,28 @@ func briefNormChoices(in []string) ([]string, int) {
 //
 // It is read-only except when MarkSeen is set, in which case it acknowledges
 // exactly the snapshot it rendered; events appended concurrently stay unread.
+// briefAdoptedStories selects the deterministic S1 record before mapping by
+// action. An unrelated issue carrying the same extension keys cannot mask a
+// genuine adopted story, regardless of register iteration order.
+func briefAdoptedStories(reg *issue.Store, room string) (map[string]*issue.Issue, error) {
+	all, err := reg.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*issue.Issue)
+	for _, story := range all {
+		id := extString(story, extAction)
+		if extString(story, extRoom) != room || id == "" ||
+			story.ID != storyIDFor(room, id) || story.Kind != issue.KindTask ||
+			story.Origin != "meet:"+room || !hasLabel(story, labelAdopted) ||
+			extString(story, extAdoptedBy) == "" {
+			continue
+		}
+		out[id] = story
+	}
+	return out, nil
+}
+
 func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 	reader := canonAgent(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(opt.Reader), "@")))
 	if reader == "" {
@@ -422,6 +445,40 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 	res := &BriefResult{
 		Room: st.ID, Reader: reader, Seen: SeenSeq(st.ID, reader),
 		Through: through, New: map[string]int{},
+	}
+	// Adoption is a separate authorized write to the ordinary story register;
+	// the original action event keeps its actual speaker and authority. Join by
+	// S1's stable action ID so a reader can see linked work without promoting an
+	// agent-authored proposal to a human confirmation.
+	var adopted map[string]*issue.Issue
+	if reg, e := storeFor(opt.Store); e == nil {
+		adopted, e = briefAdoptedStories(reg, st.ID)
+		if e != nil {
+			res.AdoptionUnavailable = true
+		}
+	} else {
+		res.AdoptionUnavailable = true
+	}
+	enrich := func(it *BriefItem, text string) {
+		id := actionID(st.ID, text)
+		if it.Authority != briefAuthorityVoice {
+			it.ID = id
+		}
+		if story := adopted[id]; story != nil {
+			// The register is independently writable. Require S1's
+			// deterministic story shape before presenting a link.
+			if story.ID != storyIDFor(st.ID, id) || story.Kind != issue.KindTask ||
+				story.Origin != "meet:"+st.ID || !hasLabel(story, labelAdopted) ||
+				extString(story, extAdoptedBy) == "" {
+				return
+			}
+			it.ID = id
+			it.Adopted = true
+			it.Story = story.ID
+			it.AdoptedBy = truncateBriefTo(extString(story, extAdoptedBy), 128)
+			it.Owner = truncateBriefTo(story.Assignee, 128)
+			it.Mine = briefOwns(reader, story.Assignee)
+		}
 	}
 
 	// A retraction withdraws its target from the standing state. The
@@ -457,6 +514,9 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 		res.New[e.Kind]++
 		it := briefItem(seq, e, reader, briefStandingAuthority(st, e))
 		it.New = true
+		if e.Kind == "action" {
+			enrich(&it, e.Text)
+		}
 		changes = append(changes, it)
 	}
 	var hiddenUnseen int
@@ -498,15 +558,22 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 				it := briefItem(seq, e, reader, briefAuthorityVoice)
 				it.Source = "proposed"
 				it.New = isNew
+				enrich(&it, e.Text)
 				proposals = append(proposals, it)
+				if it.Adopted && it.Owner != "" {
+					owned = append(owned, it)
+				}
 				break
 			}
 			it := briefItem(seq, e, reader, briefAuthorityHuman)
 			it.Source = "agreed"
-			it.ID = briefActionID(st.ID, e.Text)
 			it.New = isNew
+			enrich(&it, e.Text)
 			proposals = append(proposals, it)
-			owner, _ := briefSplitOwner(e.Text)
+			owner, _ := splitOwner(e.Text)
+			if it.Adopted {
+				owner = it.Owner
+			}
 			if owner != "" {
 				work := it
 				work.Owner = owner
@@ -624,11 +691,15 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 				it := BriefItem{
 					Kind: "action", Speaker: "secretary",
 					Authority: briefAuthoritySynthesis, Source: "proposed",
-					ID:   briefActionID(st.ID, text),
 					Text: truncateBriefText(redactHome(text)), TS: syn.At,
 				}
+				enrich(&it, text)
 				proposals = append(proposals, it)
-				if owner, _ := briefSplitOwner(text); owner != "" {
+				owner, _ := splitOwner(text)
+				if it.Adopted {
+					owner = it.Owner
+				}
+				if owner != "" {
 					it.Owner = owner
 					it.Mine = briefOwns(reader, owner)
 					owned = append(owned, it)
@@ -803,7 +874,7 @@ func capBriefPolls(questions []BriefPoll, limit int) ([]BriefPoll, int) {
 // briefItemBytes is the byte weight of one rendered item for the total
 // budget: its text plus a fixed per-item overhead for the envelope.
 func briefItemBytes(it BriefItem) int {
-	return len(it.Text) + 64
+	return len(it.Text) + len(it.ID) + len(it.Story) + len(it.AdoptedBy) + len(it.Owner) + 96
 }
 
 // briefPollBytes is the byte weight of one pending poll for the total
@@ -1033,6 +1104,10 @@ func writeBrief(w io.Writer, res *BriefResult) {
 		fmt.Fprintln(w, "note: secretary synthesis withheld — the transcript holds mail addressed elsewhere, so the global summary cannot be proven clean for you; only events you may see are shown")
 		fmt.Fprintln(w)
 	}
+	if res.AdoptionUnavailable {
+		fmt.Fprintln(w, "note: story register unavailable — adoption links may be missing")
+		fmt.Fprintln(w)
+	}
 	writeBriefSection(w, "changes since last seen", res.Changes)
 	writeBriefSection(w, "confirmed decisions (member authority)", res.Decisions)
 	writeBriefSection(w, "proposals (confirmation adopts; listing does not)", res.Proposals)
@@ -1099,6 +1174,12 @@ func writeBriefItem(w io.Writer, it BriefItem) {
 	if it.ID != "" {
 		marks = append(marks, it.ID)
 	}
+	if it.Adopted {
+		marks = append(marks, "adopted as story "+it.Story)
+		if it.AdoptedBy != "" {
+			marks = append(marks, "adopted by "+it.AdoptedBy)
+		}
+	}
 	if it.Directed {
 		marks = append(marks, "for you")
 	}
@@ -1129,6 +1210,8 @@ func newBriefCmd() *cobra.Command {
 	var limit int
 	var sinceSeq int64
 	var all, markSeen, ackAll, jsonOut bool
+	var repo, user bool
+	var baseDir string
 	cmd := &cobra.Command{
 		Use:   "brief <room>|<id> --as NAME [--limit N] [--since-seq N] [--all] [--mark-seen [--ack-all]] [--json]",
 		Short: "catch up on a room: what changed and what needs you (read-only)",
@@ -1167,9 +1250,18 @@ func newBriefCmd() *cobra.Command {
 			if sinceSeq < 0 {
 				return fmt.Errorf("meet: --since-seq cannot be negative")
 			}
+			var storyStore *issue.Store
+			if repo || user || baseDir != "" {
+				var err error
+				storyStore, _, err = todo.ResolveStore("", repo, user, baseDir)
+				if err != nil {
+					return err
+				}
+			}
 			res, err := Brief(args[0], BriefOptions{
 				Reader: readerName(as), Limit: limit,
 				SinceSeq: sinceSeq, All: all, MarkSeen: markSeen, AckAll: ackAll,
+				Store: storyStore,
 			})
 			if err != nil {
 				return err
@@ -1191,6 +1283,9 @@ func newBriefCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&markSeen, "mark-seen", false, "advance the reader's seen cursor through the rendered snapshot")
 	cmd.Flags().BoolVar(&ackAll, "ack-all", false, "with --mark-seen, also acknowledge items hidden by caps")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the brief as JSON")
+	cmd.Flags().BoolVar(&repo, "repo", false, "read adoption links from repository stories")
+	cmd.Flags().BoolVar(&user, "user", false, "read adoption links from user stories")
+	cmd.Flags().StringVar(&baseDir, "base-dir", "", "read adoption links from this todo base directory")
 	return cmd
 }
 
