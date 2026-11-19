@@ -53,6 +53,7 @@ bashy meet close         <id>                   # converge + initiator confirms 
 bashy meet abandon       <id>                   # reap a dead room: mark abandoned, release the room, archive; spawns/synthesizes/files nothing
 bashy meet amend         <id> [--resynthesize]  # regenerate the minutes from the transcript
 bashy meet apply         <id> --to FILE --write # append the agreed action items to a doc
+bashy meet adopt         <id> [--action ID --accept ID=TEXT --confirm] # preview/adopt actions as linked sprint stories; --reconcile after a changed decisionnbashy meet outcome       <story> --evidence LINK # return a verified (done) story to its room, once
 
 bashy meet list | resume <id> | reference
 ```

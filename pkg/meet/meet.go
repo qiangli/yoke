@@ -75,7 +75,7 @@ func NewMeetCmd() *cobra.Command {
 	cmd.AddCommand(
 		newOpenCmd(), newConsultCmd(), newDMCmd(), newDMPostCmd(), newReadCmd(), newTellCmd(), newDispatchCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
-		newConvergeCmd(), newCloseCmd(), newAbandonCmd(), newAmendCmd(), newApplyCmd(),
+		newConvergeCmd(), newCloseCmd(), newAbandonCmd(), newAmendCmd(), newApplyCmd(), newAdoptCmd(), newOutcomeCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
 		newObserveCmd(), newServeCmd(), newSayCmd(), newRouteCmd(),
 	)
