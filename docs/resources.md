@@ -142,3 +142,44 @@ darwin), keeping the shortest mount path.
 `NET_RT_IFLIST2` bytes, which this package parses itself. It is imported
 by `pkg/board` and by the host front door; `cmd/coreutils` links neither,
 verified by `go list -deps ./cmd/coreutils`.
+
+## Queued access
+
+`bashy claim NAME --wait 10m --intent 'candidate and check'` joins a FIFO
+queue in the existing host-local claim ledger. `bashy resource queue` (also
+`bashy claim queue`) shows ticket, target, waiter, position, holder and wait
+reason; `--json` includes the blocking claim and its fencing epoch.
+`bashy claim queue cancel TICKET` cancels only your pending request, without
+releasing any acquired resource. Interrupting the waiting command cancels its
+ticket too. A crashed waiter's ticket expires at its original wait deadline.
+
+Use the same registered resource name for a test host, browser, GPU or account
+allowance; path claims also queue overlapping shared checkouts. Independent
+resources proceed independently. A newcomer cannot jump earlier conflicting
+tickets; existing holders can refresh and release. Unknown ownership blocks,
+stale leases follow existing liveness rules, and attached children remain
+protected by kernel locks. Explicit forced acquisition retains its existing
+authority/audit policy and cannot be combined with queued waiting.
+
+For tests, prefer a child-scoped hold with per-attempt evidence:
+
+```sh
+bashy claim test-host --wait 10m --intent 'candidate-A regression' \
+  --candidate candidate-A --evidence-dir ./evidence -- test-runner
+```
+
+Each attempt creates a fresh directory containing `stdout`, `stderr` and
+`run.json` (caller-supplied candidate identity, claim holder/epoch, command,
+start/end time and child status). The child receives
+`BASHY_CLAIM_EVIDENCE_DIR`, `BASHY_CLAIM_CANDIDATE` and `BASHY_CLAIM_EPOCH`;
+write additional test artifacts under that directory. A completed child is
+not itself proof of a passing gate. Use an immutable candidate checkout and
+verify the raw test results before accepting evidence. The wrapper does not
+assert that a mutable checkout matches the supplied candidate label.
+
+Queues are advisory and host-local, like claims: they grant no remote-host,
+provider-account, spending or browser permission. Account allowances are
+exclusive coordination names, not quota reservations. Custom backends retain
+their own authority and existing detached-wait behavior; they do not enter
+this file-ledger queue. Cross-host users must coordinate with the resource's
+authoritative host. Direct resource access can still bypass advisory claims.

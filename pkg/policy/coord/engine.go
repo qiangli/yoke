@@ -97,7 +97,7 @@ func AcquireAttachedRef(ctx context.Context, r Request) (Grant, *lockfile.Lock, 
 	if err := ctx.Err(); err != nil {
 		return Grant{}, nil, err
 	}
-	return store{DefaultDir()}.acquireAttached(r)
+	return store{DefaultDir()}.attachedWait(ctx, r)
 }
 
 type acquireSpec struct {
@@ -108,10 +108,22 @@ type acquireSpec struct {
 	// attached means the caller already holds the kernel lock, so any other
 	// attached record for the key is a leftover from a dead process.
 	attached bool
+	ticket   string
 }
 
 func (s store) acquireWait(ctx context.Context, sp acquireSpec, wait time.Duration) (Grant, error) {
 	deadline := time.Now().Add(wait)
+	if wait > 0 && customBackend(mapBare(normRef(sp.req.Ref)).Kind) == nil {
+		if sp.req.Force {
+			return Grant{}, fmt.Errorf("claim: --force cannot join a queue")
+		}
+		id, err := s.enqueue(sp, deadline)
+		if err != nil {
+			return Grant{}, err
+		}
+		sp.ticket = id
+		defer CancelWait(s.dir, id, sp.req.Holder)
+	}
 	backoff := 20 * time.Millisecond
 	for {
 		if err := ctx.Err(); err != nil {
@@ -119,7 +131,8 @@ func (s store) acquireWait(ctx context.Context, sp acquireSpec, wait time.Durati
 		}
 		g, err := s.acquire(sp)
 		var conflict *Conflict
-		if err == nil || wait <= 0 || !errors.As(err, &conflict) || !time.Now().Before(deadline) {
+		var queued *QueueBlocked
+		if err == nil || wait <= 0 || (!errors.As(err, &conflict) && !errors.As(err, &queued)) || !time.Now().Before(deadline) {
 			return g, err
 		}
 		d := min(backoff, time.Until(deadline))
@@ -258,6 +271,11 @@ func forceStep(stage string) {
 // published; then the displaced claims are removed. There is no rollback.
 func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key string, kind Kind, mode string, members []string) (Grant, error) {
 	r := sp.req
+	if locked {
+		if err := s.checkTicket(sp.ticket); err != nil {
+			return Grant{}, err
+		}
+	}
 	now := time.Now().UTC()
 	loaded, err := b.Load(key)
 	if err != nil {
@@ -329,6 +347,12 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		}
 	}
 
+	if isFile && !reuse && !r.Force {
+		want := party{kind: kind, name: ref.Name, members: members, set: ref.Kind != kind.Name}
+		if err := s.queueTurn(sp.ticket, want, now); err != nil {
+			return Grant{}, err
+		}
+	}
 	c := &Claim{
 		SchemaVersion: SchemaVersion,
 		// The effective kind, so later claims meet this one under the
@@ -433,6 +457,9 @@ func (s store) attachedHeld(b Backend, c *Claim) bool {
 }
 
 func (s store) acquireAttached(r Request) (Grant, *lockfile.Lock, error) {
+	return s.attachedWait(context.Background(), r)
+}
+func (s store) acquireAttachedTicket(r Request, ticket string) (Grant, *lockfile.Lock, error) {
 	ref := Ref{Kind: strings.TrimSpace(r.Ref.Kind), Name: strings.TrimSpace(r.Ref.Name)}
 	if ref.Kind == "" {
 		ref.Kind = KindName
@@ -464,7 +491,7 @@ func (s store) acquireAttached(r Request) (Grant, *lockfile.Lock, error) {
 		return Grant{}, nil, err
 	}
 	r.Ref = ref
-	g, err := s.acquire(acquireSpec{req: r, attached: true})
+	g, err := s.acquire(acquireSpec{req: r, attached: true, ticket: ticket})
 	if err != nil {
 		_ = l.Release()
 		return Grant{}, nil, err

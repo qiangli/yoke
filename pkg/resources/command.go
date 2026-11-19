@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +23,7 @@ func NewCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(NewSystemCommand(), NewUsageCommand(), NewWatchCommand())
+	cmd.AddCommand(NewSystemCommand(), NewUsageCommand(), NewWatchCommand(), coord.NewQueueCommand())
 	// Hosts with a board reader should re-mount this with their provider:
 	//   cmd.AddCommand(resources.NewUtilizationCommand(board.PendingWork))
 	cmd.AddCommand(NewUtilizationCommand(nil))

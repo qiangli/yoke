@@ -16,6 +16,8 @@ const ConflictSchema = "bashy-claim-conflict-v1"
 // Conflict is a live claim held by someone else over what we want.
 type Conflict struct {
 	Claim *Claim
+	// Queue describes a pending request, not an acquired hold.
+	Queue *Waiter
 	// now pins the liveness verdict; zero means the present.
 	now time.Time
 }
@@ -146,6 +148,13 @@ type conflictJSON struct {
 
 // JSON renders the refusal as a bashy-claim-conflict-v1 document.
 func (c *Conflict) JSON() ([]byte, error) {
+	if c.Queue != nil {
+		return json.MarshalIndent(struct {
+			Schema string  `json:"schema_version"`
+			State  string  `json:"state"`
+			Waiter *Waiter `json:"waiter"`
+		}{ConflictSchema, "queued", c.Queue}, "", "  ")
+	}
 	ref := c.Claim.Address()
 	return json.MarshalIndent(conflictJSON{
 		Schema:   ConflictSchema,
@@ -160,6 +169,9 @@ func (c *Conflict) JSON() ([]byte, error) {
 }
 
 func (c *Conflict) Error() string {
+	if c.Queue != nil {
+		return fmt.Sprintf("claim: %s is waiting ahead for %s (ticket %s, intent %q); inspect with bashy claim queue or join with --wait.\n", c.Queue.Holder.Name, c.Queue.Ref, c.Queue.ID, c.Queue.Intent)
+	}
 	who := c.holder()
 	if who == "" {
 		who = "another agent"

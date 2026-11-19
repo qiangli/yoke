@@ -172,6 +172,11 @@ bashy-claim-conflict-v1 document instead).`,
 			wait, _ := cmd.Flags().GetDuration("wait")
 			asJSON, _ := cmd.Flags().GetBool("json")
 			ctx := ctxOf(cmd)
+			candidate, _ := cmd.Flags().GetString("candidate")
+			evidence, _ := cmd.Flags().GetString("evidence-dir")
+			if (candidate != "" || evidence != "") && (candidate == "" || evidence == "" || cmd.ArgsLenAtDash() < 0) {
+				return fmt.Errorf("claim: --candidate and --evidence-dir must be supplied together with a child command")
+			}
 			if cmd.ArgsLenAtDash() >= 0 {
 				if force {
 					return fmt.Errorf("--force is not valid with a child-scoped kernel hold")
@@ -186,7 +191,7 @@ bashy-claim-conflict-v1 document instead).`,
 				child.Stdin = cmd.InOrStdin()
 				child.Stdout = cmd.OutOrStdout()
 				child.Stderr = cmd.ErrOrStderr()
-				runErr := child.Run()
+				runErr := runEvidence(child, g.Claim, evidence, candidate)
 				releaseErr := ReleaseAttached(DefaultDir(), g.Claim, l)
 				if runErr != nil {
 					return runErr
@@ -226,7 +231,9 @@ bashy-claim-conflict-v1 document instead).`,
 	}
 	cmd.Flags().String("intent", "", "what you are doing (shown to whoever collides with you)")
 	cmd.Flags().Bool("force", false, "take it even if someone else holds it (recorded)")
-	cmd.Flags().Duration("wait", 0, "wait up to this duration for a held target")
+	cmd.Flags().Duration("wait", 0, "join the host-local FIFO queue for up to this duration")
+	cmd.Flags().String("candidate", "", "caller-supplied candidate identity for isolated child evidence")
+	cmd.Flags().String("evidence-dir", "", "parent directory for fresh per-attempt child output and claim provenance")
 	cmd.PersistentFlags().String("kind", "", "claim NAME ad hoc under this kind without registering it (e.g. --kind path /w/app)")
 	cmd.Flags().Bool("json", false, "emit the claim, or the conflict document on refusal")
 
@@ -430,7 +437,7 @@ the claim keeps refusing.`,
 		},
 	}
 	show.Flags().Bool("json", false, "emit the selected claim as JSON")
-	cmd.AddCommand(list, show, request, release, refresh, pruneCmd)
+	cmd.AddCommand(list, show, request, release, refresh, pruneCmd, NewQueueCommand())
 	return cmd
 }
 
