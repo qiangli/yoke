@@ -63,6 +63,17 @@ const BriefItemTextBytes = 2048
 // counts.
 const BriefTotalBytes = 256 << 10
 
+// BriefPollChoiceLimit caps how many ballot choices one brief question keeps.
+// A ballot's choices are data, not prose, and an unbounded list would let a
+// single poll item outgrow the total budget no matter how the lists are
+// capped. Dropped choices are counted, and the full ballot stays one `meet
+// read` away.
+const BriefPollChoiceLimit = 64
+
+// BriefChoiceTextBytes caps one ballot choice (and one tally key). Ballots
+// name options; they do not carry transcripts.
+const BriefChoiceTextBytes = 256
+
 // Brief authority labels. They describe who stands behind an item, so a
 // reader can tell a confirmation from a proposal at a glance.
 const (
@@ -122,10 +133,13 @@ type BriefSection struct {
 // BriefPoll is a pending poll with the votes the transcript holds for it.
 type BriefPoll struct {
 	BriefItem
-	Question string         `json:"question"`
-	Choices  []string       `json:"choices,omitempty"`
-	Tally    map[string]int `json:"tally,omitempty"`
-	Votes    int            `json:"votes"`
+	Question string   `json:"question"`
+	Choices  []string `json:"choices,omitempty"`
+	// ChoicesHidden counts ballot choices beyond BriefPollChoiceLimit. The
+	// full ballot stays one `meet read` away.
+	ChoicesHidden int            `json:"choices_hidden,omitempty"`
+	Tally         map[string]int `json:"tally,omitempty"`
+	Votes         int            `json:"votes"`
 }
 
 // BriefResult is the whole brief: the window, the standing state, and the
@@ -185,13 +199,19 @@ func normBriefText(s string) string {
 // written by the reader either. The secretary reads the whole transcript, so a
 // synthesis item can quote that mail back; the brief must not launder it into
 // another reader's sections.
+//
+// Every non-empty text counts toward PRESENCE: when any such mail exists the
+// synthesis is withheld entirely, and a short secret (a PIN, a token) must
+// trigger that withholding exactly like a long one. The length gate lives in
+// the matcher below, not here, so terse fragments cannot suppress unrelated
+// synthesis when matching ever runs.
 func briefPrivateTexts(events []Event, reader string) []string {
 	var out []string
 	for _, e := range events {
 		if !addressedEvent(e) || directedEvent(e, reader) || authoredBy(e, reader) {
 			continue
 		}
-		if t := normBriefText(e.Text); len(t) >= 12 {
+		if t := normBriefText(e.Text); t != "" {
 			out = append(out, t)
 		}
 	}
@@ -226,6 +246,9 @@ func briefLeaksPrivate(text string, private []string) bool {
 		return false
 	}
 	for _, p := range private {
+		if len(p) < 12 {
+			continue // too terse to quote-match; presence already withheld the synthesis
+		}
 		if strings.Contains(t, p) || strings.Contains(p, t) {
 			return true
 		}
@@ -328,11 +351,21 @@ func capBrief(items []BriefItem, limit int) (BriefSection, int) {
 // part of the bound, and an empty result is never returned for non-empty
 // input: the reader must see that text existed.
 func truncateBriefText(s string) string {
+	return truncateBriefTo(s, BriefItemTextBytes)
+}
+
+// truncateBriefChoice bounds one ballot choice or tally key the same way:
+// the marker is part of the bound and non-empty input never renders empty.
+func truncateBriefChoice(s string) string {
+	return truncateBriefTo(s, BriefChoiceTextBytes)
+}
+
+func truncateBriefTo(s string, budget int) string {
 	const marker = " [truncated]"
-	if len(s) <= BriefItemTextBytes {
+	if len(s) <= budget {
 		return s
 	}
-	cut := BriefItemTextBytes - len(marker)
+	cut := budget - len(marker)
 	for cut > 0 && !utf8.ValidString(s[:cut]) {
 		cut--
 	}
@@ -340,6 +373,22 @@ func truncateBriefText(s string) string {
 		return marker[len(" "):]
 	}
 	return s[:cut] + marker
+}
+
+// briefNormChoices bounds a ballot for the brief: each choice is trimmed and
+// truncated, and only the first BriefPollChoiceLimit are kept. The second
+// return counts the dropped tail so the brief can say so instead of silently
+// narrowing the ballot. Polls and votes go through the same normalization,
+// so ballot matching stays exact on the bounded forms.
+func briefNormChoices(in []string) ([]string, int) {
+	out := make([]string, 0, min(len(in), BriefPollChoiceLimit))
+	for i, c := range in {
+		if i >= BriefPollChoiceLimit {
+			return out, len(in) - len(out)
+		}
+		out = append(out, truncateBriefChoice(strings.TrimSpace(c)))
+	}
+	return out, 0
 }
 
 // Brief builds the catch-up brief for reader in the room named by ref.
@@ -426,10 +475,12 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 			if withdrawn(e) {
 				break
 			}
-			if !participantSeat(st, e.Speaker) {
-				// A decision is confirmed only by somebody at the table. A
-				// seat outside the roster naming a decision is a proposal
-				// in another reader's voice, never authority.
+			if !st.humanAttendee(e.Speaker) {
+				// A decision is confirmed only by one of the room's people.
+				// An agent seat — rostered or not — speaks in a
+				// participant's voice: its decision is a proposal beside
+				// the human's, never a confirmation, and it founds no
+				// agreement or owned work.
 				it := briefItem(seq, e, reader, briefAuthorityVoice)
 				it.Source = "proposed"
 				it.New = isNew
@@ -443,7 +494,7 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 			if withdrawn(e) {
 				break
 			}
-			if !participantSeat(st, e.Speaker) {
+			if !st.humanAttendee(e.Speaker) {
 				it := briefItem(seq, e, reader, briefAuthorityVoice)
 				it.Source = "proposed"
 				it.New = isNew
@@ -486,11 +537,13 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 			if withdrawn(e) {
 				break
 			}
+			choices, choicesHidden := briefNormChoices(e.Choices)
 			q := BriefPoll{
-				BriefItem: briefItem(seq, e, reader, briefAuthorityChair),
-				Question:  redactHome(firstLine(questionOf(e))),
-				Choices:   append([]string(nil), e.Choices...),
-				Tally:     map[string]int{},
+				BriefItem:     briefItem(seq, e, reader, briefAuthorityChair),
+				Question:      truncateBriefText(redactHome(firstLine(questionOf(e)))),
+				Choices:       choices,
+				ChoicesHidden: choicesHidden,
+				Tally:         map[string]int{},
 			}
 			q.BriefItem.New = isNew
 			questions = append(questions, q)
@@ -506,8 +559,11 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 		if e.Kind != "vote" || voteRetracted(e) || !briefVisible(e, reader) {
 			continue
 		}
+		// Match on the same normalized ballot the question keeps, so a huge
+		// ballot compares bounded on both sides.
+		voteChoices, _ := briefNormChoices(e.Choices)
 		for q := len(questions) - 1; q >= 0; q-- {
-			if int64(questionSeq(events, questions[q])) <= int64(i+1) && sameChoices(questions[q].Choices, e.Choices) {
+			if int64(questionSeq(events, questions[q])) <= int64(i+1) && sameChoices(questions[q].Choices, voteChoices) {
 				choice := strings.TrimSpace(e.Choice)
 				if choice == "" {
 					choice = statusOf(e)
@@ -515,6 +571,9 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 						choice = "no-choice"
 					}
 				}
+				// Tally keys are display strings: bound them like choices.
+				// The full vote stays one `meet read` away.
+				choice = truncateBriefChoice(choice)
 				questions[q].Tally[choice]++
 				questions[q].Votes++
 				break
@@ -628,7 +687,9 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 	// The total byte budget is the backstop for inflated limits: drop the
 	// oldest items of the longest lists first — standing state yields before
 	// the since-last-seen window — and fold every drop into hidden counts.
-	enforceBriefBudget(res)
+	// The budget runs after every per-list cap and reports what IT hid, so a
+	// budget-hidden unread tail still refuses --mark-seen without --ack-all.
+	hiddenUnseen += enforceBriefBudget(res)
 
 	if opt.MarkSeen {
 		if hiddenUnseen > 0 && !opt.AckAll {
@@ -642,20 +703,19 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 }
 
 // briefStandingAuthority labels who stands behind an event. Confirmed
-// authority needs two things, never one: the right KIND and a real seat at
-// the table. A human-marked decision or action by a roster member (a
-// participant, or a person the room knows — the human, an observer) is
-// authoritative; the same kind from a seat outside the roster, or from an
-// agent's secretary prose, is a participant voice or a labeled proposal,
-// never a confirmation. Polls and questions are chair procedure, not
-// rulings; votes and retractions are voices that preserve disagreement.
-// The changes window uses these same labels, so the window never upgrades
-// what the sections would not confirm.
+// authority needs two things, never one: the right KIND and the right
+// SPEAKER. A human-marked decision or action by one of the room's people —
+// the human, an observer — is authoritative; the same kind from an agent
+// seat, from outside the roster, or from secretary prose is a participant
+// voice or a labeled proposal, never a confirmation. Polls and questions are
+// chair procedure, not rulings; votes and retractions are voices that
+// preserve disagreement. The changes window uses these same labels, so the
+// window never upgrades what the sections would not confirm.
 func briefStandingAuthority(st *State, e Event) string {
-	member := participantSeat(st, e.Speaker)
+	human := st.humanAttendee(e.Speaker)
 	switch e.Kind {
 	case "decision", "action", "confirm":
-		if member {
+		if human {
 			return briefAuthorityHuman
 		}
 		return briefAuthorityVoice
@@ -752,7 +812,12 @@ func briefItemBytes(it BriefItem) int {
 // since-last-seen window; every drop folds into that list's hidden count,
 // never a silent cut. Per-item truncation above guarantees termination with
 // a non-empty result: no single item can exceed the budget alone.
-func enforceBriefBudget(res *BriefResult) {
+//
+// It returns how many of the budget-dropped items the reader had not seen.
+// The caller folds that into the hidden-unseen total AFTER every cap, so
+// --mark-seen cannot silently consume a tail the budget hid: the budget runs
+// last, and anything it hides still refuses without --ack-all.
+func enforceBriefBudget(res *BriefResult) (budgetHiddenUnseen int) {
 	total := 0
 	for _, it := range res.Changes.Items {
 		total += briefItemBytes(it)
@@ -773,9 +838,12 @@ func enforceBriefBudget(res *BriefResult) {
 		total += briefItemBytes(q.BriefItem) + len(q.Question)
 	}
 	for total > BriefTotalBytes {
-		dropped := dropOldestFromLongest(res)
+		dropped, unseen := dropOldestFromLongest(res)
 		if !dropped {
-			return
+			return budgetHiddenUnseen
+		}
+		if unseen {
+			budgetHiddenUnseen++
 		}
 		// Recompute rather than track deltas: lists are short and capped,
 		// and exactness beats cleverness in a bound.
@@ -799,11 +867,14 @@ func enforceBriefBudget(res *BriefResult) {
 			total += briefItemBytes(q.BriefItem) + len(q.Question)
 		}
 	}
+	return budgetHiddenUnseen
 }
 
 // dropOldestFromLongest removes the oldest item of the longest list,
-// standing state before the window, and reports whether anything dropped.
-func dropOldestFromLongest(res *BriefResult) bool {
+// standing state before the window. It reports whether anything dropped and
+// whether the dropped item was new-for-this-reader, so the budget's hidden
+// tail stays unacknowledgeable without an explicit ack-all.
+func dropOldestFromLongest(res *BriefResult) (dropped, unseen bool) {
 	best := -1
 	bestLen := 1 // a list of one has no older tail worth preferring; ties yield
 	lists := []struct {
@@ -824,29 +895,35 @@ func dropOldestFromLongest(res *BriefResult) bool {
 		}
 	}
 	if best < 0 {
-		return false
+		return false, false
 	}
 	switch lists[best].name {
 	case "questions":
+		unseen = res.Questions[0].BriefItem.New
 		res.Questions = res.Questions[1:]
 		res.QuestionsHidden++
 	case "owned":
+		unseen = res.Owned.Items[0].New
 		res.Owned.Items = res.Owned.Items[1:]
 		res.Owned.Hidden++
 	case "objections":
+		unseen = res.Objections.Items[0].New
 		res.Objections.Items = res.Objections.Items[1:]
 		res.Objections.Hidden++
 	case "proposals":
+		unseen = res.Proposals.Items[0].New
 		res.Proposals.Items = res.Proposals.Items[1:]
 		res.Proposals.Hidden++
 	case "decisions":
+		unseen = res.Decisions.Items[0].New
 		res.Decisions.Items = res.Decisions.Items[1:]
 		res.Decisions.Hidden++
 	case "changes":
+		unseen = res.Changes.Items[0].New
 		res.Changes.Items = res.Changes.Items[1:]
 		res.Changes.Hidden++
 	}
-	return true
+	return true, unseen
 }
 
 // briefDissent reports whether a vote is a preserved disagreement: an explicit
@@ -954,6 +1031,9 @@ func writeBrief(w io.Writer, res *BriefResult) {
 		writeBriefItem(w, q.BriefItem)
 		if len(q.Choices) > 0 {
 			fmt.Fprintf(w, "    ballot [%s]", strings.Join(q.Choices, " | "))
+			if q.ChoicesHidden > 0 {
+				fmt.Fprintf(w, " (+%d more in transcript)", q.ChoicesHidden)
+			}
 			if q.Votes > 0 {
 				tally := make([]string, 0, len(q.Tally))
 				for c, n := range q.Tally {
@@ -1058,7 +1138,9 @@ func newBriefCmd() *cobra.Command {
 			"the read path's local naming. Over HTTP the reader is the verified\n" +
 			"caller: a vouched request for another participant's brief is refused,\n" +
 			"so one browser caller can neither read another's directed mail nor\n" +
-			"advance another's cursor.",
+			"advance another's cursor. Cursor advance over HTTP is a POST to the\n" +
+			"brief route with ?mark_seen=1; GET never moves a cursor, so prefetch\n" +
+			"and retry cannot consume the inbox the brief points at.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

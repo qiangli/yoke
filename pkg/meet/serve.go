@@ -194,6 +194,9 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("GET /api/dms/{agent}/console", handleConsoleDM)
 	route("GET /api/rooms/{ref}", handleRoomGet)
 	route("GET /api/rooms/{ref}/brief", handleBrief)
+	// POST is the only brief route that may move a cursor: GET stays
+	// read-only so prefetch and retry cannot consume the inbox.
+	route("POST /api/rooms/{ref}/brief", handleBriefAck)
 	route("POST /api/rooms", handleRoomCreate)
 	route("POST /api/rooms/{ref}/post", handlePost)
 	route("POST /api/rooms/{ref}/invite", handleInvite)
@@ -410,16 +413,13 @@ func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"state": viewOf(st), "synthesis": syn})
 }
 
-// handleBrief answers a reader's catch-up brief over the same exported API the
-// CLI uses: one truth, two transports. The reader is the verified caller — a
-// vouched request naming another participant in ?as= is refused (403), because
-// honoring it would serve the victim's directed mail to the caller and let
-// ?mark_seen=1 advance the victim's cursor. There is no delegation mechanism
-// on this route, so a mismatch is an error, never a quiet substitution. Only
-// the ungated loopback path may name a seat in ?as=, the same machine-owner
-// trust the CLI's --as rests on. The brief advances nothing unless ?mark_seen=1,
-// and then only the caller's own cursor.
-func handleBrief(w http.ResponseWriter, r *http.Request) {
+// briefReader binds the reader to the verified caller: a vouched request
+// naming another participant in ?as= is refused, because honoring it would
+// serve the victim's directed mail to the caller and advance the victim's
+// cursor. There is no delegation mechanism on these routes, so a mismatch is
+// an error, never a quiet substitution. Only the ungated loopback path may
+// name a seat in ?as=, the same machine-owner trust the CLI's --as rests on.
+func briefReader(r *http.Request) (string, error) {
 	q := r.URL.Query()
 	reader := actorOf(r)
 	if id, ok := coopauth.IdentityOf(r); ok {
@@ -428,22 +428,70 @@ func handleBrief(w http.ResponseWriter, r *http.Request) {
 			!strings.EqualFold(strings.TrimSpace(as), id.Username) &&
 			!strings.EqualFold(strings.TrimSpace(as), id.User) &&
 			!strings.EqualFold(strings.TrimSpace(as), id.Email) {
-			writeErr(w, http.StatusForbidden, errors.New("meet: a vouched caller may only brief itself (?as names another participant)"))
-			return
+			return "", errors.New("meet: a vouched caller may only brief itself (?as names another participant)")
 		}
 	} else if as := strings.TrimSpace(q.Get("as")); as != "" {
 		reader = as
 	}
-	opt := BriefOptions{Reader: reader, Limit: atoiOr(q.Get("limit"), BriefLimit)}
+	return reader, nil
+}
+
+// briefWindow parses the read-only window selectors shared by both brief
+// routes: limit, since and all. Cursor movement is never parsed here.
+func briefWindow(q url.Values) (limit int, since int64, all bool, err error) {
+	limit = atoiOr(q.Get("limit"), BriefLimit)
 	if s := strings.TrimSpace(q.Get("since")); s != "" {
 		var v int64
 		if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v < 0 {
-			apiErr(w, fmt.Errorf("meet: ?since must be a non-negative transcript sequence"))
-			return
+			return 0, 0, false, fmt.Errorf("meet: ?since must be a non-negative transcript sequence")
 		}
-		opt.SinceSeq = v
+		since = v
 	}
-	opt.All = q.Get("all") == "1" || strings.EqualFold(q.Get("all"), "true")
+	all = q.Get("all") == "1" || strings.EqualFold(q.Get("all"), "true")
+	return limit, since, all, nil
+}
+
+// handleBrief answers a reader's catch-up brief over the same exported API the
+// CLI uses: one truth, two transports. GET is read-only by construction: it
+// never advances any cursor, so prefetch, retry and caching cannot consume
+// the inbox the brief points at. A cursor moves only through POST
+// /api/rooms/{ref}/brief with ?mark_seen=1.
+func handleBrief(w http.ResponseWriter, r *http.Request) {
+	reader, err := briefReader(r)
+	if err != nil {
+		writeErr(w, http.StatusForbidden, err)
+		return
+	}
+	limit, since, all, err := briefWindow(r.URL.Query())
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	res, err := Brief(r.PathValue("ref"), BriefOptions{Reader: reader, Limit: limit, SinceSeq: since, All: all})
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleBriefAck advances the caller's own seen cursor through a rendered
+// brief snapshot, like `meet read`. It takes the same reader binding as GET
+// and the same hidden-tail rule as the CLI: when a cap hid something the
+// reader has not seen, ?mark_seen=1 refuses without ?ack_all=1.
+func handleBriefAck(w http.ResponseWriter, r *http.Request) {
+	reader, err := briefReader(r)
+	if err != nil {
+		writeErr(w, http.StatusForbidden, err)
+		return
+	}
+	q := r.URL.Query()
+	limit, since, all, err := briefWindow(q)
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	opt := BriefOptions{Reader: reader, Limit: limit, SinceSeq: since, All: all}
 	opt.MarkSeen = q.Get("mark_seen") == "1" || strings.EqualFold(q.Get("mark_seen"), "true")
 	opt.AckAll = q.Get("ack_all") == "1" || strings.EqualFold(q.Get("ack_all"), "true")
 	res, err := Brief(r.PathValue("ref"), opt)

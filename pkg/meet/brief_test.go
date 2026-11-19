@@ -394,6 +394,17 @@ func TestBriefWebBindsReaderToVouchedCaller(t *testing.T) {
 			t.Fatalf("a refused brief must carry no victim-directed mail: %s", body)
 		}
 	}
+	// The ack route binds the same way: a vouched POST for another
+	// participant is refused and moves no cursor.
+	for _, q := range []string{"?as=" + victim + "&mark_seen=1", "?as=" + victim + "&mark_seen=1&ack_all=1"} {
+		resp, body := doVouchedJSON(t, srv, attacker, "POST", ref+q, nil)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-principal brief ack %s = %d, want 403 (body %s)", q, resp.StatusCode, body)
+		}
+		if strings.Contains(string(body), secret) {
+			t.Fatalf("a refused brief ack must carry no victim-directed mail: %s", body)
+		}
+	}
 	if got := SeenSeq(st.ID, victim); got != before {
 		t.Fatalf("a refused brief moved the victim cursor %d -> %d", before, got)
 	}
@@ -413,10 +424,13 @@ func TestBriefWebBindsReaderToVouchedCaller(t *testing.T) {
 		t.Fatalf("a caller's own brief must not carry victim-directed mail: %s", body)
 	}
 
-	// Naming yourself stays allowed, cursor and all.
-	resp, body = doVouchedJSON(t, srv, attacker, "GET", ref+"?as="+url.QueryEscape(own.Reader)+"&mark_seen=1", nil)
+	// Naming yourself stays allowed, and the ack route moves your cursor.
+	resp, body = doVouchedJSON(t, srv, attacker, "POST", ref+"?as="+url.QueryEscape(own.Reader)+"&mark_seen=1", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("a self-named brief = %d, want 200 (body %s)", resp.StatusCode, body)
+		t.Fatalf("a self-named brief ack = %d, want 200 (body %s)", resp.StatusCode, body)
+	}
+	if got := SeenSeq(st.ID, readerName(own.Reader)); got == 0 {
+		t.Fatal("a self-named POST ack must advance the caller's own cursor")
 	}
 
 	// Loopback is the machine owner at their keyboard: ?as= names a seat,
@@ -431,6 +445,23 @@ func TestBriefWebBindsReaderToVouchedCaller(t *testing.T) {
 	}
 	if !strings.EqualFold(local.Reader, victim) || !strings.Contains(string(body), secret) {
 		t.Fatalf("a loopback ?as= brief must brief the named seat with its mail: reader %q", local.Reader)
+	}
+
+	// GET never moves a cursor, even when asked: prefetch and retry cannot
+	// consume the inbox the brief points at. This room is created last:
+	// briefRoom re-points the meet dir, and rooms share a deterministic test
+	// ID, so nothing above may read the earlier room after this point.
+	markRoom := briefRoom(t, []Event{
+		{Speaker: "qiangli", Kind: "decision", Text: "public decision two"},
+	})
+	markRef := "/api/rooms/" + url.PathEscape(markRoom.ID) + "/brief"
+	markBefore := SeenSeq(markRoom.ID, victim)
+	resp, body = doJSON(t, srv, "GET", markRef+"?as="+victim+"&mark_seen=1&ack_all=1", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a loopback GET brief = %d, want 200 (body %s)", resp.StatusCode, body)
+	}
+	if got := SeenSeq(markRoom.ID, victim); got != markBefore {
+		t.Fatalf("GET with ?mark_seen=1 moved the cursor %d -> %d", markBefore, got)
 	}
 }
 
@@ -654,5 +685,191 @@ func TestBriefBoundsHugeTurns(t *testing.T) {
 	last := big.Decisions.Items[len(big.Decisions.Items)-1]
 	if last.Seq != 300 {
 		t.Fatalf("budget cuts must keep the newest decision, last seq = %d", last.Seq)
+	}
+}
+
+// A terse secret counts exactly like a long one: directed mail of any length
+// withholds the secretary synthesis from every other reader, because presence
+// — not quotability — is what a whole-transcript summary cannot prove clean.
+func TestBriefShortDirectedMailWithholdsSynthesis(t *testing.T) {
+	st := briefRoom(t, []Event{
+		{Speaker: "qiangli", Kind: "decision", Text: "we ship friday"},
+		{Speaker: "qiangli", Kind: "message", To: "opencode", Text: "PIN 1234"},
+	})
+	syn := &Synthesis{
+		By: "claude", At: fixedNow().Add(time.Hour), Mode: "infer",
+		Decisions: []Decision{{Text: "we ship friday", Inferred: true}},
+		Risks:     []string{"gate flakiness may slip the date"},
+	}
+	if err := syn.save(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Brief(st.ID, BriefOptions{Reader: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "1234") {
+		t.Fatalf("another reader's brief must not carry terse directed mail:\n%s", raw)
+	}
+	if !res.SynthesisOmitted {
+		t.Fatal("withholding the synthesis must be flagged, not silent")
+	}
+	for _, sec := range []BriefSection{res.Proposals, res.Objections, res.Owned} {
+		for _, it := range sec.Items {
+			if it.Speaker == "secretary" {
+				t.Fatalf("withheld synthesis must leave every section: %+v", it)
+			}
+		}
+	}
+	// The addressee's brief is unaffected: their own mail is theirs.
+	got, err := Brief(st.ID, BriefOptions{Reader: "opencode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SynthesisOmitted {
+		t.Fatalf("the addressee's synthesis must not be withheld: %+v", got)
+	}
+}
+
+// A decision, action or confirm from an agent seat is a participant's voice,
+// never a confirmation — even when the seat is rostered. Only one of the
+// room's people confirms, and only a confirmation founds agreement and owned
+// work. The changes window carries the same labels as the sections.
+func TestBriefAgentSeatIsNotAuthority(t *testing.T) {
+	st := briefRoom(t, []Event{
+		{Speaker: "codex", Kind: "decision", Text: "we ship at dawn"},
+		{Speaker: "codex", Kind: "action", Text: "codex: open the gate"},
+		{Speaker: "codex", Kind: "confirm", Text: "gate is green"},
+		{Speaker: "qiangli", Kind: "decision", Text: "we ship friday"},
+		{Speaker: "qiangli", Kind: "action", Text: "opencode: sweep the logs"},
+	})
+	res := briefFor(t, st, "opencode")
+	if len(res.Decisions.Items) != 1 || res.Decisions.Items[0].Text != "we ship friday" {
+		t.Fatalf("only the human decision confirms: %+v", res.Decisions)
+	}
+	if res.Decisions.Items[0].Authority != "human" {
+		t.Fatalf("the human decision must carry human authority: %+v", res.Decisions)
+	}
+	voice, agreed := 0, 0
+	for _, it := range res.Proposals.Items {
+		switch {
+		case it.Authority == "participant" && it.Source == "proposed":
+			voice++
+			if it.ID != "" {
+				t.Fatalf("a voice proposal founds no S1 reference: %+v", it)
+			}
+		case it.Authority == "human" && it.Source == "agreed":
+			agreed++
+		default:
+			t.Fatalf("unexpected proposal authority: %+v", it)
+		}
+	}
+	if voice != 3 {
+		t.Fatalf("the agent seat's decision, action and confirm are voices: %+v", res.Proposals)
+	}
+	if agreed != 1 {
+		t.Fatalf("the human action agrees once: %+v", res.Proposals)
+	}
+	if len(res.Owned.Items) != 1 || res.Owned.Items[0].Owner != "opencode" || !res.Owned.Items[0].Mine {
+		t.Fatalf("owned work comes only from the agreed action: %+v", res.Owned)
+	}
+	for _, it := range res.Changes.Items {
+		if it.Speaker == "codex" && it.Authority != "participant" {
+			t.Fatalf("the window must not upgrade a seat's voice: %+v", it)
+		}
+		if it.Speaker == "qiangli" && (it.Kind == "decision" || it.Kind == "action") && it.Authority != "human" {
+			t.Fatalf("the window must keep human authority: %+v", it)
+		}
+	}
+}
+
+// A huge ballot stays bounded: the question and every choice truncate with a
+// marker, excess choices are counted, the full ballot stays one `meet read`
+// away — and the votes still tally, because matching runs on the same
+// bounded forms.
+func TestBriefHugePollStaysBounded(t *testing.T) {
+	choices := make([]string, 0, 200)
+	for i := 0; i < 200; i++ {
+		choices = append(choices, "option-"+strings.Repeat("xy", 1000)+"-"+strings.Repeat("z", i%7))
+	}
+	st := newTestSession(t)
+	base := fixedNow()
+	poll := Event{
+		Speaker: "qiangli", Kind: "poll", Role: string(RoleChair),
+		Question: strings.Repeat("ship? ", 60000),
+		Choices:  choices, Text: "poll open",
+		TS: base.Add(time.Second),
+	}
+	if err := AppendEvent(st.ID, poll); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []string{choices[3], choices[7]} {
+		if err := AppendEvent(st.ID, Event{
+			Speaker: "codex", Kind: "vote", Choice: c, Choices: choices,
+			Text: "vote", TS: base.Add(time.Duration(2+i) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := briefFor(t, st, "codex")
+	if len(res.Questions) != 1 {
+		t.Fatalf("the undecided huge poll stays pending: %+v", res.Questions)
+	}
+	q := res.Questions[0]
+	if len(q.Question) > BriefItemTextBytes || !strings.Contains(q.Question, "[truncated]") {
+		t.Fatalf("the huge question must truncate with a marker, got %d bytes", len(q.Question))
+	}
+	if len(q.Choices) != BriefPollChoiceLimit || q.ChoicesHidden != len(choices)-BriefPollChoiceLimit {
+		t.Fatalf("ballot kept %d+%d, want %d+%d", len(q.Choices), q.ChoicesHidden, BriefPollChoiceLimit, len(choices)-BriefPollChoiceLimit)
+	}
+	for _, c := range q.Choices {
+		if len(c) > BriefChoiceTextBytes || !strings.Contains(c, "[truncated]") {
+			t.Fatalf("every huge choice must truncate with a marker, got %d bytes", len(c))
+		}
+	}
+	if q.Votes != 2 {
+		t.Fatalf("both votes must tally on the bounded ballot: %+v", q.Tally)
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > BriefTotalBytes {
+		t.Fatalf("one huge poll grew the brief to %d bytes", len(raw))
+	}
+}
+
+// The byte budget hides like a cap: when it covers unread items, --mark-seen
+// refuses without --ack-all instead of silently consuming the hidden tail.
+func TestBriefBudgetHiddenTailRefusesMarkSeen(t *testing.T) {
+	var events []Event
+	for i := 0; i < 300; i++ {
+		events = append(events, Event{Speaker: "qiangli", Kind: "decision", Text: "d" + strings.Repeat("y", 1000)})
+	}
+	st := briefRoom(t, events)
+	res, err := Brief(st.ID, BriefOptions{Reader: "codex", Limit: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No per-list cap hid anything at this limit: the budget did the hiding.
+	if res.Decisions.Hidden == 0 && res.Changes.Hidden == 0 {
+		t.Fatalf("the total budget must hide oldest items at inflated limits: %+v %+v", res.Decisions, res.Changes)
+	}
+	if _, err := Brief(st.ID, BriefOptions{Reader: "codex", Limit: 10000, MarkSeen: true}); err == nil {
+		t.Fatal("mark-seen over a budget-hidden unseen tail must refuse without --ack-all")
+	}
+	if got := SeenSeq(st.ID, "codex"); got != 0 {
+		t.Fatalf("a refused mark-seen must not move the cursor, got %d", got)
+	}
+	acked, err := Brief(st.ID, BriefOptions{Reader: "codex", Limit: 10000, MarkSeen: true, AckAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := SeenSeq(st.ID, "codex"); got != acked.Through {
+		t.Fatalf("ack-all cursor = %d, want through %d", got, acked.Through)
 	}
 }
