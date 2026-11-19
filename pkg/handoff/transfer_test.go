@@ -397,14 +397,15 @@ func TestResumeClaimEnforcesEffectGate(t *testing.T) {
 	}
 	id := recs[0].ID
 
-	// Declare an uncertain effect: the pickup must refuse and name it.
-	side, err := LoadTransfer(dir, id)
-	if err != nil {
-		t.Fatalf("create must leave a sidecar: %v", err)
-	}
-	side.DeclareEffect("push staging image", "push ran before the host died")
-	if _, err := SaveTransfer(dir, side); err != nil {
-		t.Fatal(err)
+	// Declare an uncertain effect through the agent CLI: the pickup must
+	// refuse and name it. The CLI re-saves the sidecar AND the record's
+	// declaration together, so the pair stays a whole export.
+	declare := NewResumeCmd()
+	declare.SetOut(&out)
+	declare.SetErr(&out)
+	declare.SetArgs([]string{"--declare-effect", "push staging image", "--detail", "push ran before the host died", id})
+	if err := declare.Execute(); err != nil {
+		t.Fatalf("declare: %v\n%s", out.String(), err)
 	}
 	r := NewResumeCmd()
 	out.Reset()
@@ -421,18 +422,13 @@ func TestResumeClaimEnforcesEffectGate(t *testing.T) {
 	}
 
 	// Reconcile the effect to an observed outcome: the pickup proceeds.
-	side, err = LoadTransfer(dir, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(side.Effects) != 1 {
-		t.Fatalf("sidecar lost the effect: %+v", side.Effects)
-	}
-	if err := side.ReconcileEffect(side.Effects[0].ID, EffectAbsent, "muse"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SaveTransfer(dir, side); err != nil {
-		t.Fatal(err)
+	reconcile := NewResumeCmd()
+	out.Reset()
+	reconcile.SetOut(&out)
+	reconcile.SetErr(&out)
+	reconcile.SetArgs([]string{"--reconcile-effect", "fx-1", "--as", "absent", id})
+	if err := reconcile.Execute(); err != nil {
+		t.Fatalf("reconcile: %v\n%s", out.String(), err)
 	}
 	r2 := NewResumeCmd()
 	out.Reset()

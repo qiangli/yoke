@@ -252,6 +252,38 @@ type Transfer struct {
 	Readiness         *ReadinessRef `json:"readiness,omitempty"`
 }
 
+// TransferDecl is the additive declaration a Record carries for its S5
+// recovery metadata. It does NOT duplicate the annotations — the sidecar
+// stays the single home of evidence, effects, decisions, next steps and
+// readiness — it only states what the reader must find there, so a portable
+// export that copied the record without its sidecar (or with a damaged one)
+// is caught instead of resuming with dropped uncertain-effect state. The
+// effect ids pin the declared scope: a sidecar that lost or gained an effect
+// no longer matches its record. Statuses are deliberately NOT pinned here —
+// reconciling an effect advances its status in the sidecar alone — so only
+// applied and absent ever read as known (see UncertainEffects).
+type TransferDecl struct {
+	SchemaVersion string `json:"schema_version"`
+	// Effects are the declared external-effect ids, in declaration order.
+	Effects []string `json:"effects,omitempty"`
+	// NoExternalEffects mirrors the author's explicit scope declaration.
+	NoExternalEffects bool `json:"no_external_effects,omitempty"`
+}
+
+// Declared reports whether the record carries transfer metadata. Records
+// written before the transfer envelope have none and read as legacy.
+func (r *Record) Declared() bool { return r.Transfer != nil }
+
+// Decl builds the declaration matching the given annotations: the exact
+// scope a reader must find in the sidecar.
+func (t *Transfer) Decl() *TransferDecl {
+	d := &TransferDecl{SchemaVersion: TransferSchemaVersion, NoExternalEffects: t.NoExternalEffects}
+	for _, e := range t.Effects {
+		d.Effects = append(d.Effects, e.ID)
+	}
+	return d
+}
+
 // maxEvidenceOutput caps one carried output excerpt. The transfer travels like
 // the record (scp, mesh, issue comment); it must not swallow a 2 GB log.
 const maxEvidenceOutput = 2000
@@ -481,11 +513,13 @@ func (t *Transfer) DeclareEffect(op, detail string) Effect {
 }
 
 // ReconcileEffect records the OBSERVED outcome of one effect: a re-check of
-// the outside world, by a named checker, now. It refuses Uncertain (that is
-// the starting state, not a reconciliation) and unknown ids — reconciling
-// means naming the effect and its observed outcome, never waving at the task.
+// the outside world, by a named checker, now. Only applied and absent are
+// outcomes — every other status (uncertain, empty, or anything unrecognized)
+// is refused, so an unknown status can never be laundered into a safe one.
+// Unknown ids are refused too: reconciling means naming the effect and its
+// observed outcome, never waving at the task.
 func (t *Transfer) ReconcileEffect(id string, st EffectStatus, by string) error {
-	if st == EffectUncertain || st == "" {
+	if st != EffectApplied && st != EffectAbsent {
 		return fmt.Errorf("reconciling %s as %q records nothing: re-check the outside world and mark it applied or absent", id, st)
 	}
 	for i, e := range t.Effects {
@@ -506,11 +540,14 @@ func (t *Transfer) ReconcileEffect(id string, st EffectStatus, by string) error 
 // closed. A task id, a run state, or a launch receipt never opens it — only
 // observed outcomes do.
 // UncertainEffects returns the effects whose outside outcome is still
-// unknown — the exact list a retry must reconcile first.
+// unknown — the exact list a retry must reconcile first. Only applied and
+// absent count as known: an empty or otherwise unrecognized status stays
+// unsafe, so a corrupt or forward-versioned sidecar keeps the gate closed
+// instead of reading as reconciled.
 func (t *Transfer) UncertainEffects() []Effect {
 	var out []Effect
 	for _, e := range t.Effects {
-		if e.Status == EffectUncertain || e.Status == "" {
+		if e.Status != EffectApplied && e.Status != EffectAbsent {
 			out = append(out, e)
 		}
 	}
@@ -601,6 +638,11 @@ func LoadTransfer(dir, handoffID string) (*Transfer, error) {
 // base overlaid with whatever annotations the sidecar carries. Identity,
 // holder and status always come from the record; a stale sidecar can add
 // context but can never re-identify the candidate or move the stamp.
+//
+// Compose is the legacy-tolerant entry: a record that declares transfer
+// metadata but whose sidecar is missing or damaged still returns the base
+// here (with the gate closed). Agent paths that must NOT silently drop
+// declared uncertain-effect state use ComposeChecked, which refuses instead.
 func Compose(dir string, rec *Record) *Transfer {
 	base := Summarize(rec)
 	side, err := LoadTransfer(dir, rec.ID)
@@ -608,6 +650,68 @@ func Compose(dir string, rec *Record) *Transfer {
 		return base
 	}
 	return Overlay(base, side)
+}
+
+// ComposeChecked builds the full transfer with the declaration enforced. A
+// record that declares transfer metadata MUST have its sidecar present,
+// parseable, addressed to it, and matching the declared scope — otherwise the
+// export is incomplete (the record travelled without its annotations) and the
+// composition is refused rather than returned with silently dropped effects.
+// A legacy record (no declaration) composes exactly like Compose: whatever
+// annotations exist are overlaid, and none are required.
+func ComposeChecked(dir string, rec *Record) (*Transfer, error) {
+	base := Summarize(rec)
+	side, err := LoadTransfer(dir, rec.ID)
+	if rec.Transfer == nil {
+		if err != nil {
+			return base, nil
+		}
+		return Overlay(base, side), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("handoff %s declares transfer metadata but %s is missing or unreadable: re-export the record WITH its sidecar (same directory, same scp/commit) instead of resuming without it: %v",
+			rec.ID, transferSidecar(dir, rec.ID), err)
+	}
+	if err := checkSidecar(rec, side); err != nil {
+		return nil, err
+	}
+	return Overlay(base, side), nil
+}
+
+// checkSidecar verifies that loaded annotations are the ones the record
+// declares: addressed to this handoff, with exactly the declared effect
+// scope. Statuses are not compared — reconciling advances them in the
+// sidecar alone — but every other mismatch means the pair is not a whole
+// export and must not be resumed from.
+func checkSidecar(rec *Record, side *Transfer) error {
+	if side.HandoffID != "" && side.HandoffID != rec.ID {
+		return fmt.Errorf("handoff %s declares transfer metadata but its sidecar belongs to %s: re-export the record WITH its sidecar instead of resuming from a mixed pair",
+			rec.ID, side.HandoffID)
+	}
+	want := append([]string(nil), rec.Transfer.Effects...)
+	got := make([]string, 0, len(side.Effects))
+	for _, e := range side.Effects {
+		got = append(got, e.ID)
+	}
+	if len(want) != len(got) {
+		return fmt.Errorf("handoff %s declares %d external effect(s) but its sidecar carries %d: re-export the record WITH its sidecar instead of resuming without it",
+			rec.ID, len(want), len(got))
+	}
+	seen := map[string]bool{}
+	for _, id := range want {
+		seen[id] = true
+	}
+	for _, id := range got {
+		if !seen[id] {
+			return fmt.Errorf("handoff %s declares transfer metadata but its sidecar carries undeclared effect %s: re-export the record WITH its sidecar instead of resuming from a mixed pair",
+				rec.ID, id)
+		}
+	}
+	if side.NoExternalEffects != rec.Transfer.NoExternalEffects {
+		return fmt.Errorf("handoff %s declares transfer metadata but its sidecar disagrees on external-effect scope: re-export the record WITH its sidecar instead of resuming from a mixed pair",
+			rec.ID)
+	}
+	return nil
 }
 
 // PendingDecisions returns the decisions still awaiting an outcome: pending

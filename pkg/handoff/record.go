@@ -158,6 +158,17 @@ type Record struct {
 	// under `--all`.
 	CancelledAt *time.Time     `json:"cancelled_at,omitempty"`
 	CancelledBy *principal.Ref `json:"cancelled_by,omitempty"`
+
+	// Transfer declares the S5 recovery metadata that travels WITH this
+	// record: the annotation sidecar (<id>.transfer.json) beside it. It is
+	// additive and optional: records written before the transfer envelope
+	// have none (legacy — see ComposeChecked), while every record written
+	// since carries one, even with zero effects. A non-nil declaration
+	// means the reader MUST find the sidecar intact — a declared transfer
+	// whose sidecar is missing or corrupt refuses the pickup instead of
+	// silently dropping uncertain-effect state. It never proves an outside
+	// effect; only a re-check of the outside world does.
+	Transfer *TransferDecl `json:"transfer,omitempty"`
 }
 
 // StaleAfter is how long an unclaimed handoff stays "current" before it is

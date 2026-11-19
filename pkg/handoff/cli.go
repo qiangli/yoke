@@ -119,6 +119,10 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 				Blockers:   blockers,
 				Role:       role,
 				Work:       work,
+				// Every new record declares its transfer metadata, even with
+				// zero effects: a replacement must be able to tell "the
+				// sidecar is missing" apart from "there never was one".
+				Transfer: &TransferDecl{SchemaVersion: TransferSchemaVersion},
 			}
 
 			switch {
@@ -232,15 +236,20 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 // machine, and it must work when the agent knows nothing.
 func NewResumeCmd() *cobra.Command {
 	var (
-		list     bool
-		asJSON   bool
-		show     bool
-		message  string
-		prune    bool
-		all      bool
-		claim    bool
-		cancel   bool
-		transfer bool
+		list          bool
+		asJSON        bool
+		show          bool
+		message       string
+		prune         bool
+		all           bool
+		claim         bool
+		cancel        bool
+		transfer      bool
+		declareEffect string
+		effectDetail  string
+		reconcileID   string
+		reconcileAs   string
+		noEffects     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "resume [id|path]",
@@ -262,6 +271,9 @@ any one of them.
   bashy resume --cancel <id>   # retire an unclaimed one (kept for the record)
   bashy resume --prune         # delete DONE handoffs (resumed/superseded/cancelled)
   bashy resume --transfer [id] # recovery brief: candidate, evidence, decisions, next safe steps (read-only)
+  bashy resume --declare-effect "push image" --detail "docker push ran before the host died" [id]
+  bashy resume --reconcile-effect fx-1 --as applied [id]   # only after re-checking the outside world
+  bashy resume --no-external-effects [id]  # the work touched nothing outside the tree
 
 Bare 'resume' NEVER claims — run it before and after a pickup to confirm an agent
 took the seat. Claiming requires --claim. A role (seat) handoff is singular: a
@@ -306,6 +318,71 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				}
 				recordEvent(rec, "cancelled", refName(self), "")
 				fmt.Fprintf(out, "cancelled %s (kept for the record; `resume --prune` to delete)\n", rec.ID)
+				return nil
+			}
+
+			// --declare-effect / --reconcile-effect / --no-external-effects: the
+			// agent-usable S5 effect plane. The interrupted worker (or the
+			// replacement, before retrying) names each outside effect the
+			// work may have caused, then records the OBSERVED outcome after
+			// re-checking the outside world. Declaring is how the retry gate
+			// learns the scope; reconciling is how it opens. Every mutation
+			// re-saves the sidecar AND the record's declaration together, so
+			// the pair stays a whole export — a record never again travels
+			// with a silently stale scope.
+			if declareEffect != "" || reconcileID != "" || noEffects {
+				rec, err := pick(dir, root, args)
+				if err != nil {
+					return err
+				}
+				if reason := retiredReason(rec); reason != "" {
+					return retiredErr(rec)
+				}
+				sdir := transferDir(dir, args)
+				side, lerr := LoadTransfer(sdir, rec.ID)
+				if lerr != nil {
+					if rec.Declared() {
+						return fmt.Errorf("handoff %s declares transfer metadata but %s is missing or unreadable: re-export the record WITH its sidecar (same directory, same scp/commit) instead of recording against half an export: %v",
+							rec.ID, transferSidecar(sdir, rec.ID), lerr)
+					}
+					side = &Transfer{HandoffID: rec.ID}
+				} else if rec.Declared() {
+					if err := checkSidecar(rec, side); err != nil {
+						return err
+					}
+				}
+				switch {
+				case declareEffect != "":
+					fx := side.DeclareEffect(declareEffect, effectDetail)
+					if _, err := SaveTransfer(sdir, side); err != nil {
+						return err
+					}
+					rec.Transfer = side.Decl()
+					if _, err := Save(dir, rec); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, "declared %s: %s — reconcile it (applied|absent) before the owning step is retried\n", fx.ID, fx.Op)
+				case reconcileID != "":
+					st := EffectStatus(strings.TrimSpace(reconcileAs))
+					self, _ := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self()
+					if err := side.ReconcileEffect(reconcileID, st, refName(self)); err != nil {
+						return err
+					}
+					if _, err := SaveTransfer(sdir, side); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, "reconciled %s as %s\n", reconcileID, st)
+				default: // --no-external-effects
+					side.NoExternalEffects = true
+					if _, err := SaveTransfer(sdir, side); err != nil {
+						return err
+					}
+					rec.Transfer = side.Decl()
+					if _, err := Save(dir, rec); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, "recorded: no external effects for %s — the retry gate is open on scope\n", rec.ID)
+				}
 				return nil
 			}
 
@@ -370,7 +447,13 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 			// never stamps or applies. Identity and holder always come from
 			// the record, so a stale sidecar cannot misdirect the takeover.
 			if transfer {
-				tr := Compose(transferDir(dir, args), rec)
+				// A declared transfer whose sidecar is missing or damaged
+				// refuses here: rendering a partial brief would hide the
+				// uncertain effects the replacement most needs to see.
+				tr, err := ComposeChecked(transferDir(dir, args), rec)
+				if err != nil {
+					return err
+				}
 				if asJSON {
 					b, _ := json.MarshalIndent(tr, "", "  ")
 					fmt.Fprintln(out, string(b))
@@ -437,10 +520,16 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 			// them first (re-check the outside world, mark applied or absent)
 			// and retries. An undeclared scope only warns — legacy handoffs
 			// carry no effect declaration, and warning (not refusing) keeps
-			// them takeable. A task id, run state or launch receipt never
-			// opens the gate; only observed outcomes do (see transfer.go).
-			// Retired records (cancelled, superseded) are refused inside Claim.
-			tr := Compose(transferDir(dir, args), rec)
+			// them takeable. A declared transfer whose sidecar is missing or
+			// damaged refuses here too: the pickup must not proceed having
+			// silently dropped uncertain-effect state. A task id, run state
+			// or launch receipt never opens the gate; only observed outcomes
+			// do (see transfer.go). Retired records (cancelled, superseded)
+			// are refused inside Claim.
+			tr, err := ComposeChecked(transferDir(dir, args), rec)
+			if err != nil {
+				return err
+			}
 			if uncertain := tr.UncertainEffects(); len(uncertain) > 0 {
 				names := make([]string, 0, len(uncertain))
 				for _, e := range uncertain {
@@ -450,8 +539,13 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 					"reconcile before retry: %s", len(names), strings.Join(names, ", "))
 			}
 			if len(tr.Effects) == 0 && !tr.NoExternalEffects {
-				fmt.Fprintf(cmd.ErrOrStderr(), "handoff: warning: external-effect scope was never "+
-					"declared — proceeding, but reconcile any outside effects of %s before retrying them\n", rec.ID)
+				if rec.Declared() {
+					fmt.Fprintf(cmd.ErrOrStderr(), "handoff: warning: external-effect scope was never "+
+						"declared — proceeding, but reconcile any outside effects of %s before retrying them\n", rec.ID)
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "handoff: warning: legacy handoff with no declared transfer metadata — "+
+						"proceeding, but reconcile any outside effects of %s before retrying them\n", rec.ID)
+				}
 			}
 			//
 			// coord.Self() rather than the bare resolver: it MINTS an episode
@@ -485,6 +579,11 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 	cmd.Flags().BoolVar(&show, "show", false, "print the record as JSON (read-only)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the record as JSON")
 	cmd.Flags().BoolVar(&transfer, "transfer", false, "print the S5 recovery transfer for the replacement: candidate identity, changed files, evidence, pending decisions, cancellations, next safe steps, effect gate, ownership (read-only; --json emits the transfer)")
+	cmd.Flags().StringVar(&declareEffect, "declare-effect", "", "record one outside effect the work may have caused (an op name), with optional --detail; the effect starts uncertain and gates the retry until reconciled")
+	cmd.Flags().StringVar(&effectDetail, "detail", "", "detail for --declare-effect: what ran, where, before what interruption")
+	cmd.Flags().StringVar(&reconcileID, "reconcile-effect", "", "record the observed outcome of one declared effect (its fx-N id) after re-checking the outside world; requires --as applied|absent")
+	cmd.Flags().StringVar(&reconcileAs, "as", "", "observed outcome for --reconcile-effect: applied or absent (only these two open the gate)")
+	cmd.Flags().BoolVar(&noEffects, "no-external-effects", false, "explicitly declare that the interrupted work touched nothing outside the candidate tree, opening the retry gate on scope")
 	return cmd
 }
 
