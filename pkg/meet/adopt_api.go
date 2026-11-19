@@ -84,9 +84,6 @@ func requireHumanAuthority(st *State, by string) error {
 	if who == "" {
 		return fmt.Errorf("%w: no confirming person named", ErrNoAuthority)
 	}
-	if st.humanAttendee(who) {
-		return nil
-	}
 	canon := canonAgent(who)
 	for _, seat := range append([]string{st.Secretary, st.chair()}, st.Participants...) {
 		if seat != "" && (strings.EqualFold(seat, who) || strings.EqualFold(canonAgent(seat), canon)) {
@@ -96,8 +93,56 @@ func requireHumanAuthority(st *State, by string) error {
 	if _, ok := fleet.New().Agent(who); ok {
 		return fmt.Errorf("%w: %s is an agent, not the human who agrees the action", ErrNoAuthority, who)
 	}
-	return nil
+	// An unknown name is not a human: only the room's own person, or the human
+	// who convened it, holds the authority. Observers watch; they do not decide.
+	if sameHuman(who, st.Human) || (st.initiatorKind() == "human" && sameHuman(who, st.initiatorName())) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is neither this room's human nor the person who convened it", ErrNoAuthority, who)
 }
+
+func sameHuman(a, b string) bool {
+	a, b = strings.TrimSpace(strings.TrimPrefix(a, "@")), strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	return strings.EqualFold(a, b)
+}
+
+// callerPrincipal is who is actually at the CLI: the OS user. A --by naming
+// anyone else is refused — the flag cannot lend authority, it can only repeat
+// who the caller already is.
+func callerPrincipal(by string) (string, error) {
+	me := humanName()
+	if by = strings.TrimSpace(by); by != "" && !strings.EqualFold(by, me) {
+		return "", fmt.Errorf("%w: --by %s is not the calling user (%s)", ErrNoAuthority, by, me)
+	}
+	return me, nil
+}
+
+// roomMarked reports whether the room's transcript already carries a note with
+// the idempotency marker, so a retry after a crash does not post it twice.
+func roomMarked(room, marker string) bool {
+	events, _ := readTranscript(room)
+	for _, e := range events {
+		if e.Kind == "note" && strings.Contains(e.Text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// postOnce records a note unless the room already holds its marker.
+func postOnce(st *State, by, marker, text string) error {
+	if roomMarked(st.ID, marker) {
+		return nil
+	}
+	_, err := record(st, "note", by, "", text+" ["+marker+"]")
+	return err
+}
+
+// afterNotify is a test seam between the room post and the story mark.
+var afterNotify func() error
 
 // roomActions loads the room and its active candidate actions.
 func roomActions(ref string) (*State, []agreedAction, error) {
@@ -216,19 +261,10 @@ func ReconcileActions(ref string, req ReconcileRequest) ([]ReconcileFinding, err
 			return nil, err
 		}
 	}
-	findings, err := reconcileAdopted(st.ID, reg, current, req.Confirm)
-	if err != nil || !req.Confirm {
-		return findings, err
-	}
-	for _, f := range findings {
-		if !f.Requested {
-			continue
-		}
-		if _, err := record(st, "note", strings.TrimSpace(req.By), "", fmt.Sprintf("reconcile: story %s (action %s) — %s. Please confirm, amend or close it.", f.Story, f.Action, f.Reason)); err != nil {
-			return findings, err
-		}
-	}
-	return findings, nil
+	by := strings.TrimSpace(req.By)
+	return reconcileAdopted(st.ID, reg, current, req.Confirm, func(f reconcileFinding) error {
+		return postOnce(st, by, "reconcile-id:"+f.Story, fmt.Sprintf("reconcile: story %s (action %s) — %s. Please confirm, amend or close it.", f.Story, f.Action, f.Reason))
+	})
 }
 
 // OutcomeRequest returns a verified story's result to its room.
@@ -254,7 +290,9 @@ func ReturnOutcome(ref string, req OutcomeRequest) (story string, posted bool, e
 	if by == "" {
 		return "", false, errors.New("meet: an outcome needs a named reporter")
 	}
+	storyID := req.Story
 	if it, err := todo.ResolveRef(reg, req.Story); err == nil {
+		storyID = it.ID
 		if r := extString(it, extRoom); r != "" && r != st.ID {
 			return it.ID, false, fmt.Errorf("meet: story %s belongs to room %s, not %s", it.ID, r, st.ID)
 		}
@@ -264,8 +302,7 @@ func ReturnOutcome(ref string, req OutcomeRequest) (story string, posted bool, e
 		if err != nil {
 			return err
 		}
-		_, err = record(rs, "note", by, "", text)
-		return err
+		return postOnce(rs, by, "outcome-id:"+storyID, text)
 	})
 	if it != nil {
 		story = it.ID

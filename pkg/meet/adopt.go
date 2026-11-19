@@ -448,18 +448,18 @@ func similarity(a, b string) float64 {
 // room (amended, withdrawn, or re-decided), plus open stories that depend on
 // them. With write=true it marks each story and returns findings; the caller
 // posts the room request for those newly Requested.
-func reconcileAdopted(room string, st *issue.Store, current []agreedAction, write bool) (out []reconcileFinding, err error) {
+func reconcileAdopted(room string, st *issue.Store, current []agreedAction, write bool, notify func(reconcileFinding) error) (out []reconcileFinding, err error) {
 	if !write {
-		return reconcileAdoptedLocked(room, st, current, false)
+		return reconcileAdoptedLocked(room, st, current, false, nil)
 	}
 	err = withStoreLock(st, func() (e error) {
-		out, e = reconcileAdoptedLocked(room, st, current, true)
+		out, e = reconcileAdoptedLocked(room, st, current, true, notify)
 		return e
 	})
 	return out, err
 }
 
-func reconcileAdoptedLocked(room string, st *issue.Store, current []agreedAction, write bool) ([]reconcileFinding, error) {
+func reconcileAdoptedLocked(room string, st *issue.Store, current []agreedAction, write bool, notify func(reconcileFinding) error) ([]reconcileFinding, error) {
 	adopted, err := adoptedStories(st, room)
 	if err != nil {
 		return nil, err
@@ -526,6 +526,19 @@ func reconcileAdoptedLocked(room string, st *issue.Store, current []agreedAction
 		if !write || !findings[i].Requested {
 			continue
 		}
+		// Ask the room BEFORE marking the story: a crash between the two leaves
+		// the story unmarked, so a retry asks again (the notice is deduplicated by
+		// its marker) instead of finding a mark and never telling the room.
+		if notify != nil {
+			if err := notify(findings[i]); err != nil {
+				return findings, err
+			}
+			if afterNotify != nil {
+				if err := afterNotify(); err != nil {
+					return findings, err
+				}
+			}
+		}
 		setExt(it, extReconcile, findings[i].Reason)
 		if !hasLabel(it, labelReconcile) {
 			it.Labels = append(it.Labels, labelReconcile)
@@ -590,8 +603,15 @@ func recordOutcomeLocked(st *issue.Store, ref string, evidence []string, post fu
 		return it, false, fmt.Errorf("meet: an outcome needs at least one --evidence link")
 	}
 	text := fmt.Sprintf("outcome: action %s done — story %s %q. Evidence: %s", extString(it, extAction), it.ID, it.Title, strings.Join(evidence, ", "))
+	// The post is deduplicated by its marker (see ReturnOutcome), so when the
+	// save below fails after the post, a retry finds the notice and only marks.
 	if err := post(room, text); err != nil {
 		return it, false, err
+	}
+	if afterNotify != nil {
+		if err := afterNotify(); err != nil {
+			return it, false, err
+		}
 	}
 	setExt(it, extEvidence, evidence)
 	setExt(it, extReportedAt, time.Now().UTC().Format(time.RFC3339))
@@ -627,8 +647,9 @@ func newAdoptCmd() *cobra.Command {
 		Long: "Without --confirm this only lists the room's actions and their adoption state.\n" +
 			"Adopting is explicit: name each action with --action and give it at least one\n" +
 			"--accept ID=CRITERION; --owner ID=NAME and --depends ID=ACTION|STORY are optional.\n" +
-			"--confirm needs a human --by (default: the room's human); an agent or the secretary\n" +
-			"is refused. Secretary-proposed actions are never adopted unless named. Re-running is\n" +
+			"--confirm needs the calling user to be the room's human or convener; an agent, the\n" +
+			"secretary or an outsider is refused, and --by cannot name anyone else.\n" +
+			"Secretary-proposed actions are never adopted unless named. Re-running is\n" +
 			"safe: the action ID is stable, so an adopted action never yields a second story.\n" +
 			"--reconcile reports (with --confirm, requests) reconciliation for stories whose action changed.",
 		Args: cobra.ExactArgs(1),
@@ -641,12 +662,13 @@ func newAdoptCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if by == "" {
-				by = strings.TrimSpace(state.Human)
-				if by == "" {
-					by = humanName()
-				}
+			// The confirming person is who is actually at the CLI, never a name the
+			// flag supplies; the API then checks that person against the room.
+			principal, err := callerPrincipal(by)
+			if err != nil {
+				return err
 			}
+			by = principal
 			w := cmd.OutOrStdout()
 			if reconcile {
 				findings, err := ReconcileActions(state.ID, ReconcileRequest{Confirm: confirm, By: by, Store: store})
@@ -735,7 +757,7 @@ func newAdoptCmd() *cobra.Command {
 	f.BoolVar(&repo, "repo", false, "use the repo todo list")
 	f.BoolVar(&user, "user", false, "use the personal todo list")
 	f.StringVar(&baseDir, "base-dir", "", "todo list base directory")
-	f.StringVar(&by, "by", "", "the confirming human (default: the room's human); agents are refused")
+	f.StringVar(&by, "by", "", "must be the calling user if given; it cannot lend another person's authority")
 	f.Int64Var(&sprint, "sprint", 0, "sprint number to file the stories under (default: the host default)")
 	return cmd
 }

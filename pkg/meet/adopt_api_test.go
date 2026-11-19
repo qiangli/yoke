@@ -259,3 +259,113 @@ func countNotes(t *testing.T, room, substr string) int {
 	}
 	return n
 }
+
+func TestAdoptionAuthorityBindsToRoomPrincipal(t *testing.T) {
+	st := newTestSession(t)
+	_, _ = record(st, "action", "qiangli", "", "bob: write the plan")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	acts, _ := RoomActions(st.ID, store)
+	req := AdoptRequest{Store: store, Confirm: true, Actions: []ActionSpec{{Action: acts[0].ID, Accept: []string{"x"}}}}
+	// An unknown, spoofed "human" name and an observer are not the room's person.
+	st.Observers = []string{"watcher"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, by := range []string{"mallory", "root", "the-human", "watcher"} {
+		req.By = by
+		if _, err := AdoptActions(st.ID, req); !errors.Is(err, ErrNoAuthority) {
+			t.Fatalf("by %q: want ErrNoAuthority, got %v", by, err)
+		}
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatal("refused adoption wrote a story")
+	}
+	req.By = "qiangli"
+	if _, err := AdoptActions(st.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	// The CLI cannot borrow the room's human through --by.
+	t.Setenv("USER", "mallory")
+	if _, err := callerPrincipal("qiangli"); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("spoofed --by accepted: %v", err)
+	}
+	if p, err := callerPrincipal(""); err != nil || p != "mallory" {
+		t.Fatalf("principal %q %v", p, err)
+	}
+	// The outsider as the real principal is refused by the room check.
+	req.By = "mallory"
+	if _, err := AdoptActions(st.ID, req); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("outsider: %v", err)
+	}
+}
+
+func TestOutcomeRetryAfterPartialFailureDoesNotDuplicate(t *testing.T) {
+	st := newTestSession(t)
+	tickingClock(t)
+	_, _ = record(st, "action", "qiangli", "", "bob: write the plan")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	acts, _ := RoomActions(st.ID, store)
+	if _, err := AdoptActions(st.ID, AdoptRequest{Store: store, Confirm: true, By: "qiangli", Actions: []ActionSpec{{Action: acts[0].ID, Accept: []string{"x"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := store.List()
+	story := all[0]
+	story.Status = todo.StatusDone
+	if _, err := store.Save(story); err != nil {
+		t.Fatal(err)
+	}
+	req := OutcomeRequest{Story: story.ID, Evidence: []string{"commit:abc123"}, By: "qiangli", Store: store}
+	// The room post lands, then the story mark fails.
+	afterNotify = func() error { return errors.New("crash") }
+	if _, _, err := ReturnOutcome(st.ID, req); err == nil {
+		t.Fatal("fault not injected")
+	}
+	afterNotify = nil
+	t.Cleanup(func() { afterNotify = nil })
+	for i := 0; i < 2; i++ {
+		if _, _, err := ReturnOutcome(st.ID, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countNotes(t, st.ID, "commit:abc123"); n != 1 {
+		t.Fatalf("room got %d outcome posts", n)
+	}
+	reload, _ := store.Resolve(story.ID)
+	if extString(reload, extReportedAt) == "" {
+		t.Fatal("retry did not mark the story reported")
+	}
+}
+
+func TestReconcileCrashBetweenPostAndMarkStillTellsRoomOnce(t *testing.T) {
+	st := newTestSession(t)
+	tickingClock(t)
+	ev, _ := record(st, "action", "qiangli", "", "bob: write the plan")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	acts, _ := RoomActions(st.ID, store)
+	if _, err := AdoptActions(st.ID, AdoptRequest{Store: store, Confirm: true, By: "qiangli", Actions: []ActionSpec{{Action: acts[0].ID, Accept: []string{"x"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retractRecord(st, ev, "qiangli"); err != nil {
+		t.Fatal(err)
+	}
+	rr := ReconcileRequest{Confirm: true, By: "qiangli", Store: store}
+	afterNotify = func() error { return errors.New("crash") }
+	t.Cleanup(func() { afterNotify = nil })
+	if _, err := ReconcileActions(st.ID, rr); err == nil {
+		t.Fatal("fault not injected")
+	}
+	afterNotify = nil
+	// Story is still unmarked, so the retry reports it as requested and marks it
+	// without a second room notice; a further repeat is quiet.
+	for i, want := range []bool{true, false} {
+		f, err := ReconcileActions(st.ID, rr)
+		if err != nil || len(f) != 1 || f[0].Requested != want {
+			t.Fatalf("retry %d: %+v %v", i, f, err)
+		}
+	}
+	if n := countNotes(t, st.ID, "reconcile: story"); n != 1 {
+		t.Fatalf("room got %d reconcile notices", n)
+	}
+}

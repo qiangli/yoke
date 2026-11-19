@@ -90,7 +90,7 @@ func TestChangedDecisionRequestsReconciliationOnce(t *testing.T) {
 	}
 	// The room re-decides: action 0 is replaced by a reworded one.
 	current := []agreedAction{acts[1], {ID: "act-new", Task: "write the revised migration plan", Source: sourceAgreed}}
-	f, err := reconcileAdopted(st.ID, store, current, true)
+	f, err := reconcileAdopted(st.ID, store, current, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestChangedDecisionRequestsReconciliationOnce(t *testing.T) {
 	if !hasLabel(m[acts[0].ID], labelReconcile) || !strings.Contains(m[acts[0].ID].Body, "Reconciliation requested") {
 		t.Fatal("story not marked for reconciliation")
 	}
-	f, _ = reconcileAdopted(st.ID, store, current, true)
+	f, _ = reconcileAdopted(st.ID, store, current, true, nil)
 	for _, x := range f {
 		if x.Requested {
 			t.Fatalf("reconciliation requested twice: %+v", x)
