@@ -111,7 +111,7 @@ func newWorkflowCmd(dir, ring *string) *cobra.Command {
 	var file string
 	var apply bool
 	cmd := &cobra.Command{
-		Use: "workflow", Short: "Preview group outcome learning; storage requires an independent resolver",
+		Use: "workflow", Short: "Preview or import reported group outcomes as unvalidated candidates",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			var input io.Reader = c.InOrStdin()
@@ -143,7 +143,7 @@ func newWorkflowCmd(dir, ring *string) *cobra.Command {
 			if err := normalizeWorkflow(&w); err != nil {
 				return err
 			}
-			result, err := ProposeWorkflow(*dir, *ring, w, apply, nil)
+			result, err := ImportWorkflowReport(*dir, *ring, w, apply)
 			if err != nil {
 				return err
 			}
@@ -151,7 +151,7 @@ func newWorkflowCmd(dir, ring *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "-", "workflow JSON file, or - for stdin (reported evidence only)")
-	cmd.Flags().BoolVar(&apply, "apply", false, "request storage (refused until a trusted workflow resolver is integrated)")
+	cmd.Flags().BoolVar(&apply, "apply", false, "store reported evidence as an unvalidated candidate; does not verify or activate")
 	return cmd
 }
 
@@ -170,17 +170,29 @@ type WorkflowProposal struct {
 	Next      string           `json:"next"`
 }
 
+// ImportWorkflowReport durably retains supplied claims in the existing KB candidate
+// store. It establishes no verification fact, even for a reported passed outcome.
+// Completed S1/S10 reports can enter here before an independent resolver exists;
+// validation and skill/shape activation remain separate operations.
+func ImportWorkflowReport(dir, ring string, w WorkflowLearning, apply bool) (*WorkflowProposal, error) {
+	return proposeWorkflow(dir, ring, w, apply, nil, true)
+}
+
 // ProposeWorkflow composes a trusted outcome resolver with the existing KB
 // candidate writer. Without a resolver only a no-write preview is possible.
 func ProposeWorkflow(dir, ring string, w WorkflowLearning, apply bool, verify WorkflowVerifier) (*WorkflowProposal, error) {
+	return proposeWorkflow(dir, ring, w, apply, verify, false)
+}
+
+func proposeWorkflow(dir, ring string, w WorkflowLearning, apply bool, verify WorkflowVerifier, reportedOnly bool) (*WorkflowProposal, error) {
 	w.Reports = append([]WorkflowReport(nil), w.Reports...)
 	if err := normalizeWorkflow(&w); err != nil {
 		return nil, err
 	}
-	if ring != "repo" && ring != "host" && ring != "agent" {
+	if ring != "repo" && ring != "host" && ring != "agent" && ring != "user" && ring != "dir" {
 		return nil, fmt.Errorf("kb: invalid workflow ring %q", ring)
 	}
-	if apply && verify == nil {
+	if apply && verify == nil && !reportedOnly {
 		return nil, fmt.Errorf("kb: independently verified workflow evidence is required")
 	}
 
@@ -215,7 +227,7 @@ func ProposeWorkflow(dir, ring string, w WorkflowLearning, apply bool, verify Wo
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	if apply {
+	if apply && !reportedOnly {
 		if verify == nil {
 			return nil, fmt.Errorf("kb: independently verified workflow evidence is required")
 		}

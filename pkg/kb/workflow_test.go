@@ -199,7 +199,7 @@ func TestWorkflowRequiresIndependentVerification(t *testing.T) {
 }
 
 func TestWorkflowWrittenPageOmitsHumanLogin(t *testing.T) {
-	for _, ring := range []string{"repo", "host", "agent"} {
+	for _, ring := range []string{"repo", "host", "agent", "user", "dir"} {
 		t.Run(ring, func(t *testing.T) {
 			for _, key := range []string{"WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_AGENT", "CLAUDECODE"} {
 				t.Setenv(key, "")
@@ -208,7 +208,7 @@ func TestWorkflowWrittenPageOmitsHumanLogin(t *testing.T) {
 			t.Setenv("LOGNAME", "synthetic-private-login")
 			dir := t.TempDir()
 			w := workflowFixture()
-			result, err := ProposeWorkflow(dir, ring, w, true, func(WorkflowLearning) error { return nil })
+			result, err := ImportWorkflowReport(dir, ring, w, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,13 +267,58 @@ func TestWorkflowResolverBindsCompletedFixture(t *testing.T) {
 			}
 		})
 	}
-	b, _ := json.Marshal(trusted)
-	dir := t.TempDir()
-	if _, err := run(t, dir, string(b), "workflow", "--apply"); err == nil {
-		t.Fatal("CLI trusted reported success without resolver")
-	}
-	pages, _ := Open(dir).List()
-	if len(pages) != 0 {
-		t.Fatal("CLI refusal wrote a page")
+}
+
+// Exercise the production command: reported success is durable, never validation.
+func TestWorkflowCLIReportedEvidence(t *testing.T) {
+	for _, outcome := range []string{"passed", "failed", "unverified", "cancelled"} {
+		t.Run(outcome, func(t *testing.T) {
+			dir := t.TempDir()
+			w := workflowFixture()
+			w.Workflow = "todo:705359dbde34"
+			w.Reports[0].Outcome = outcome
+			w.Reports[0].Summary = "Synthetic S10 source report; supplied outcome is not an attestation"
+			b, _ := json.Marshal(w)
+			if _, err := run(t, dir, string(b), "workflow"); err != nil {
+				t.Fatal(err)
+			}
+			pages, _ := Open(dir).List()
+			if len(pages) != 0 {
+				t.Fatal("preview wrote")
+			}
+			for i := 0; i < 2; i++ {
+				out, err := run(t, dir, string(b), "workflow", "--apply")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result WorkflowProposal
+				if err := json.Unmarshal([]byte(out), &result); err != nil {
+					t.Fatal(err)
+				}
+				if !result.Applied || result.Status != StatusCandidate || result.Duplicate != (i == 1) {
+					t.Fatalf("dishonest result: %+v", result)
+				}
+			}
+			p, err := Open(dir).Load(workflowKey(w))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Status != StatusCandidate || p.Evidence != "" || p.Workflow == nil || len(p.Workflow.Reports) != 1 ||
+				p.Workflow.Candidate != w.Candidate || p.Workflow.Applicability != w.Applicability || p.Workflow.Reports[0] != w.Reports[0] ||
+				!strings.Contains(p.Body, "not verified authority") || !strings.Contains(p.Body, "todo:cdae01f261b1") {
+				t.Fatalf("lost provenance or crossed validation boundary: %+v", p)
+			}
+			pages, _ = Open(dir).List()
+			if len(pages) != 1 {
+				t.Fatal("duplicate report created pages")
+			}
+			// Untrusted import cannot append to an explicitly validated page.
+			mustRun(t, dir, "validate", p.Slug, "--evidence", "review:synthetic-fixture")
+			w.Reports[0].Summary = "new claim"
+			b, _ = json.Marshal(w)
+			if _, err := run(t, dir, string(b), "workflow", "--apply"); err == nil {
+				t.Fatal("import changed validated knowledge")
+			}
+		})
 	}
 }

@@ -1,11 +1,14 @@
 # Group outcome learning
 
 `bashy kb workflow -f report.json` previews a proposal without writing.
-`--apply` fails closed: the CLI has no trusted complete-workflow resolver yet.
+`--apply` imports supplied reports through `ImportWorkflowReport` into the existing
+KB as **unvalidated candidate notes**. Even a reported `passed` outcome establishes
+no verified fact. This is durable evidence intake, not a completed-workflow gate.
+No trusted S1/S10 resolver is wired into the CLI yet.
 Integrators call `ProposeWorkflow(dir, ring, report, apply, verifier)` with a
 trusted `WorkflowVerifier` that independently resolves **every** report against
 completed-workflow evidence and binds workflow, exact candidate, reported
-outcome and applicability. A nil resolver, rejected evidence, or any unverified
+outcome and applicability. For this strict API, a nil resolver, rejected evidence, or any unverified
 or cancelled outcome refuses storage. A caller-supplied boolean is not evidence.
 The resolver also checks previously stored reports when merging provenance.
 
@@ -38,8 +41,9 @@ Example input (illustrative references, not a completed-workflow attestation):
 Use `kind: incident` for a failure guardrail. Outcomes are **reported**
 `passed`, `failed`, `cancelled`, or `unverified`. Every report requires a
 reporter, episode, evidence reference and summary. These are supplied claims,
-not authenticated identities or verification grants. The preview accepts all reported outcomes; storage requires independently
-verified completed outcomes (`passed` or `failed`). The importer rejects
+not authenticated identities or verification grants. The CLI and reported-evidence API accept all four outcomes as candidate claims.
+The strict `ProposeWorkflow` API requires independently verified completed
+outcomes (`passed` or `failed`). The importer rejects
 unknown fields, incomplete provenance and trailing JSON. Shareable rings use
 the existing privacy check, including provenance and references.
 
@@ -75,6 +79,8 @@ Reuse existing downstream channels after review:
 Sprint 666 evidence boundaries: S1 supplies explicit adoption and result-room
 references; S5 supplies candidate, ownership and external-effect continuity;
 S10 supplies the actual complete workflow gate and baseline measurements.
-Record each source separately. Until S10 evidence exists, preview only; do not store a proposal or claim a
-completed workflow or measured improvement. Package tests validate the importer mechanics, not those live
+Record each source separately. Until S10 evidence exists, stored reports remain unvalidated claims; do not claim a
+completed workflow or measured improvement. Actual completed S10 reports can be
+imported with their source candidate, reference and applicability through this
+same CLI, then independently reviewed through the existing validation ladder. Package tests validate the importer mechanics, not those live
 workflows. Test fixtures in `workflow_test.go` are synthetic reports.
