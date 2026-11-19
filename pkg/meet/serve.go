@@ -603,9 +603,17 @@ func handleClose(w http.ResponseWriter, r *http.Request) {
 // CLI (which resolves the real session principal) or through the vouched tunnel.
 // Previews (Confirm false) need no authority and stay open on loopback.
 func trustedHuman(r *http.Request) (string, error) {
+	// A vouch is only attestable when its HMAC verifies against the configured
+	// secret. Without a secret (or with a bad signature) the Remote-User /
+	// X-Forwarded-Prefix headers are plain text any local process can write, so
+	// the route fails closed rather than trusting them.
+	secret := []byte(strings.TrimSpace(os.Getenv("BASHY_MEET_SSO_SECRET")))
+	if len(secret) == 0 || !coopauth.VerifyOutpost(r, secret) {
+		return "", fmt.Errorf("%w: confirming needs an HMAC-verified vouched identity (BASHY_MEET_SSO_SECRET); unsigned headers are not authority — use `meet actions adopt --confirm`", ErrNoAuthority)
+	}
 	id, ok := coopauth.IdentityOf(r)
 	if !ok || strings.TrimSpace(id.Username) == "" {
-		return "", fmt.Errorf("%w: a bare loopback request cannot be told apart from an agent on this host; confirm through the vouched tunnel or `meet actions adopt --confirm`", ErrNoAuthority)
+		return "", fmt.Errorf("%w: no vouched identity on the request", ErrNoAuthority)
 	}
 	return actorOf(r), nil
 }

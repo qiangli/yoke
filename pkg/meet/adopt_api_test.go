@@ -1,15 +1,22 @@
 package meet
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/coopauth"
 	"github.com/qiangli/yoke/pkg/issue"
 	"github.com/qiangli/yoke/pkg/todo"
 )
@@ -168,6 +175,8 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 	todo.DefaultSprint, todo.PrepareSprint = nil, nil
 
 	ev, _ := record(st, "action", "qiangli", "", "bob: write the migration plan")
+	const secret = "adopt-route-test-secret"
+	t.Setenv("BASHY_MEET_SSO_SECRET", secret)
 	srv := serveTest(t)
 	base := "/api/rooms/" + st.ID + "/actions"
 
@@ -203,12 +212,22 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 	if all, _ := store.List(); len(all) != 0 {
 		t.Fatal("refused loopback adoption wrote a story")
 	}
+	// Spoofed vouch headers with no signature or a wrong signature are not
+	// authority, even naming the real room human.
+	for name, sec := range map[string]string{"unsigned": "", "wrong-secret": "other-secret"} {
+		if r, b := doSignedJSON(t, srv, sec, "qiangli", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s vouch status %d %s, want 403", name, r.StatusCode, b)
+		}
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatal("spoofed adoption wrote a story")
+	}
 	// A vouched stranger is not the room's human either.
-	if r, _ := doVouchedJSON(t, srv, "mallory", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
+	if r, _ := doSignedJSON(t, srv, secret, "mallory", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("vouched outsider status %d, want 403", r.StatusCode)
 	}
 	for i := 0; i < 2; i++ {
-		if r, b := doVouchedJSON(t, srv, "qiangli", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusOK {
+		if r, b := doSignedJSON(t, srv, secret, "qiangli", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusOK {
 			t.Fatalf("adopt: %d %s", r.StatusCode, b)
 		}
 	}
@@ -220,7 +239,7 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 
 	// An agent identity cannot confirm through the route either.
 	t.Setenv("USER", "claude")
-	if r, _ := doVouchedJSON(t, srv, "claude", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
+	if r, _ := doSignedJSON(t, srv, secret, "claude", "POST", base+"/adopt", adopt); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("agent adoption status %d, want 403", r.StatusCode)
 	}
 	t.Setenv("USER", "qiangli")
@@ -234,7 +253,7 @@ func TestActionRoutesRealRoomWorkflow(t *testing.T) {
 		t.Fatalf("retracted action still active: %s", b)
 	}
 	for i, wantRequested := range []bool{true, false} {
-		_, b = doVouchedJSON(t, srv, "qiangli", "POST", base+"/reconcile", map[string]any{"confirm": true})
+		_, b = doSignedJSON(t, srv, secret, "qiangli", "POST", base+"/reconcile", map[string]any{"confirm": true})
 		var rec struct{ Affected []ReconcileFinding }
 		_ = json.Unmarshal(b, &rec)
 		if len(rec.Affected) != 1 || rec.Affected[0].Requested != wantRequested || rec.Affected[0].Story != story.ID {
@@ -530,5 +549,57 @@ func TestRetractionRacingAdoptionIsSerialized(t *testing.T) {
 		} else if len(all) != 0 {
 			t.Fatalf("run %d: refused adoption (%v) still filed a story", i, err)
 		}
+	}
+}
+
+// doSignedJSON is doVouchedJSON with the outpost HMAC stamp over
+// user\ngroups\nprefix\nts. An empty secret sends the headers unsigned.
+func doSignedJSON(t *testing.T, srv *httptest.Server, secret, user, method, path string, body any) (*http.Response, []byte) {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "/matrix/h/box/app/meet"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(coopauth.HdrForwardedPrefix, prefix)
+	req.Header.Set(coopauth.HdrRemoteUser, user)
+	if secret != "" {
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(user + "\n" + "" + "\n" + prefix + "\n" + ts))
+		req.Header.Set(coopauth.HdrIdentityTs, ts)
+		req.Header.Set(coopauth.HdrIdentitySig, hex.EncodeToString(mac.Sum(nil)))
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	buf, _ := io.ReadAll(resp.Body)
+	return resp, buf
+}
+
+// With no SSO secret configured the vouch headers cannot be verified, so a local
+// process stamping X-Forwarded-Prefix + Remote-User as the room human is refused.
+func TestActionConfirmFailsClosedWithoutSecret(t *testing.T) {
+	st := newTestSession(t)
+	tickingClock(t)
+	t.Setenv("USER", "qiangli")
+	t.Setenv("BASHY_MEET_SSO_SECRET", "")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	old := ActionStore
+	ActionStore = func() (*issue.Store, error) { return store, nil }
+	t.Cleanup(func() { ActionStore = old })
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	_, _ = record(st, "action", "qiangli", "", "bob: write the plan")
+	srv := serveTest(t)
+	adopt := map[string]any{"confirm": true, "actions": []ActionSpec{{Action: actionID(st.ID, "bob: write the plan")}}}
+	if r, b := doVouchedJSON(t, srv, "qiangli", "POST", "/api/rooms/"+st.ID+"/actions/adopt", adopt); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("unverifiable vouch status %d %s, want 403", r.StatusCode, b)
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatal("spoofed adoption wrote a story")
 	}
 }
