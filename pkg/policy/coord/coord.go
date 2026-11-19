@@ -339,7 +339,7 @@ func listFiles(dir string) ([]*Claim, error) {
 		// An attached record is diagnostic; the kernel lock is authoritative.
 		// A SIGKILL cannot remove JSON, so omit the record once the lock is gone.
 		if c.Resource != "" && c.Mode == ModeAttached {
-			if _, held := lockfile.Owner(keyedLockPath(dir, c.Ref())); !held {
+			if _, held := lockfile.Owner(keyedLockPath(dir, c.Address())); !held {
 				continue
 			}
 		}
@@ -378,8 +378,9 @@ func AcquireAttached(dir, resource string, holder principal.Ref, intent string, 
 func ReleaseAttached(dir string, c *Claim, l *lockfile.Lock) error {
 	if c != nil {
 		s := store{dir}
-		key := c.Ref().String()
-		b := s.backend(c.Ref().Kind)
+		address := c.Address()
+		key := address.String()
+		b := s.backend(address.Kind)
 		var err error
 		for range 3 {
 			err = s.txn(b, func(locked bool) error {

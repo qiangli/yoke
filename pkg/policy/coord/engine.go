@@ -452,7 +452,7 @@ func (s store) attachedHeld(b Backend, c *Claim) bool {
 	if _, ok := b.(fileBackend); !ok {
 		return true
 	}
-	_, held := lockfile.Owner(keyedLockPath(s.dir, c.Ref()))
+	_, held := lockfile.Owner(keyedLockPath(s.dir, c.Address()))
 	return held
 }
 
@@ -604,7 +604,7 @@ func (c *Claim) name() string {
 	return c.Project
 }
 
-// Ref is the claim's address.
+// Ref is the claim's effective kind and name, used for matching.
 func (c *Claim) Ref() Ref {
 	c.normalize()
 	return Ref{Kind: c.Kind, Name: c.name()}
@@ -624,7 +624,7 @@ func (c *Claim) Address() Ref {
 // key is the claim's storage key: its ref, or its holder for a project claim.
 func (c *Claim) key() string {
 	if c.Resource != "" {
-		return c.Ref().String()
+		return c.Address().String()
 	}
 	return holderKey(c.Holder)
 }
