@@ -46,6 +46,7 @@ func newRouteCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&req.Room, "room", "", "deliver through this Meet room; default is direct Bus mail")
+	cmd.Flags().StringVar(&req.OperationID, "id", "", "stable operation ID; reuse it when retrying")
 	cmd.Flags().StringVar(&req.From, "as", "", "sender seat")
 	cmd.Flags().StringVar(&req.Accountable, "accountable", "", "one accountable agent or role")
 	cmd.Flags().StringSliceVar(&req.Observers, "observer", nil, "named observer (repeatable)")
