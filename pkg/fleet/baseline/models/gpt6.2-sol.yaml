@@ -1,0 +1,18 @@
+name: gpt6.2-sol
+family: gpt-sol
+version: "6.2"
+band: 4
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: GPT-6.2 Sol, released 2026-11-17,
+# codex's priority-1 model ("Fast, go-to model for coding and everyday work",
+# ~/.codex/models_cache.json). 1.05M context, $2/$10 per MTok. Inherits
+# gpt6-sol's declared L4 peg. The `gpt-sol` family alias re-points to 6.2.
+display: GPT-6.2 Sol
+provider: openai
+kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
+model: gpt-6.2-sol
+quality: 0.94
+# Carried over from gpt6-sol; not re-priced.
+cost_micro: 18000

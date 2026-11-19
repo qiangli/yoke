@@ -1,0 +1,8 @@
+agents:
+  - name: agy-opus5.5
+    tool: agy
+    model: opus5.5
+    display: "agy · opus5.5"
+    ledger:
+      reliability: unmeasured
+      notes: seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet; id from `agy models`

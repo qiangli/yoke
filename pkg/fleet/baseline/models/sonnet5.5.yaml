@@ -14,3 +14,6 @@ model: claude-sonnet-5-5
 quality: 0.86
 # Carried over from sonnet5; not re-priced.
 cost_micro: 6000
+# agy's own id (`agy models`, read 2026-11-19, Sprint 671); -low/-medium also listed.
+ids:
+  agy: claude-sonnet-5-5-high

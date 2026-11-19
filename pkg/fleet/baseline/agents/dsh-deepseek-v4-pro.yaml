@@ -1,0 +1,8 @@
+agents:
+  - name: dsh-deepseek-v4-pro
+    tool: dsh
+    model: deepseek-v4-pro
+    display: "dsh · deepseek-v4-pro"
+    ledger:
+      reliability: unmeasured
+      notes: seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet

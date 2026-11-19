@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt6.1-terra
+    tool: codex
+    model: gpt6.1-terra
+    display: "codex · gpt6.1-terra"
+    ledger:
+      reliability: unmeasured
+      notes: seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet

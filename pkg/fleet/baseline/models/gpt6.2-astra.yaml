@@ -1,0 +1,18 @@
+name: gpt6.2-astra
+family: gpt-astra
+version: "6.2"
+band: 4
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: GPT-6.2 Astra, released
+# 2026-11-17, OpenAI's most capable model (codex priority 2). 1.05M context,
+# $8/$40 per MTok. Inherits gpt6-astra's declared L4 peg. The `gpt-astra`
+# family alias re-points to 6.2.
+display: GPT-6.2 Astra
+provider: openai
+kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
+model: gpt-6.2-astra
+quality: 0.95
+# Carried over from gpt6-astra; not re-priced.
+cost_micro: 24000

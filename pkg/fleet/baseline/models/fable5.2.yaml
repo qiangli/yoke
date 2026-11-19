@@ -1,0 +1,23 @@
+name: fable5.2
+family: fable
+version: "5.2"
+band: 4
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: Claude Fable 5.2, released
+# 2026-11-09, Anthropic's most capable model for technical work (API id
+# claude-fable-5-2, $8/$40 per MTok). It inherits fable5.1's declared L4 peg;
+# a newer version is not evidence of a different band. The `fable` family
+# alias re-points to 5.2 and fable5.1 stays reachable by its own name.
+display: Claude Fable 5.2
+provider: anthropic
+kind: subscription
+plan: claude-max  # the seat this model is billed through; see plans/claude-max.yaml
+model: claude-fable-5-2
+quality: 0.95
+# Carried over from fable5.1; not re-priced.
+cost_micro: 30000
+spec:
+  code-review: 0.03
+  deep-research: 0.05
+  orchestration: 0.04

@@ -1,0 +1,18 @@
+name: gemini4-hydrogen
+family: gemini-hydrogen
+version: "4"
+band: 3
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: Gemini 4 Hydrogen,
+# the fast everyday Gemini 4 tier (released 2026-11-13; $1.50/$7.50 per MTok). 1M context. No gated run on this host has placed it.
+display: Gemini 4 Hydrogen (High)
+provider: gemini
+kind: subscription
+plan: google-ai-ultra  # the seat this model is billed through; see plans/google-ai-ultra.yaml
+# The id comes from `agy models`, agy's OWN published list (read 2026-11-19,
+# with -low/-medium variants). Not yet verified on the wire from this host —
+# run `bashy agent verify --live` on agy-gemini4-hydrogen before relying on it.
+model: gemini-4-hydrogen-high
+quality: 0.86
+cost_micro: 4500

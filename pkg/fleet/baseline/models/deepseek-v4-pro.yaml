@@ -43,6 +43,8 @@ cost_micro: 1500
 ids:
   ycode: deepseek-v4-pro
   genie: deepseek-v4-pro
+  # dsh writes this id into its cordis.patch.yml (Sprint 671).
+  dsh: deepseek-v4-pro
 # Usage probe (added 2026-10-15): the documented Get User Balance endpoint
 # (https://api-docs.deepseek.com/api/get-user-balance) — GET /user/balance
 # with Bearer auth returns balance_infos[0]{currency CNY|USD,

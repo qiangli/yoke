@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-kimi-k3.1-pro
+    tool: ycode
+    model: kimi-k3.1-pro
+    display: "ycode · kimi-k3.1-pro"
+    ledger:
+      reliability: unmeasured
+      notes: Kimi L2 coder seat (curated with kimi-k3); seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet

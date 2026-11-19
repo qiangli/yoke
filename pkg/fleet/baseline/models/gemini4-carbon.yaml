@@ -1,0 +1,18 @@
+name: gemini4-carbon
+family: gemini
+version: "4"
+band: 4
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: Gemini 4 Carbon,
+# Google's strongest Gemini 4 model, for long-horizon work (released 2026-11-10; $2/$10 per MTok launch price, $4/$20 from 2026-12-01). It takes the `gemini` family alias from the retired gemini3.1 (Pro). 1M context. No gated run on this host has placed it.
+display: Gemini 4 Carbon (High)
+provider: gemini
+kind: subscription
+plan: google-ai-ultra  # the seat this model is billed through; see plans/google-ai-ultra.yaml
+# The id comes from `agy models`, agy's OWN published list (read 2026-11-19,
+# with -low/-medium variants). Not yet verified on the wire from this host —
+# run `bashy agent verify --live` on agy-gemini4-carbon before relying on it.
+model: gemini-4-carbon-high
+quality: 0.93
+cost_micro: 10000

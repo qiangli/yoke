@@ -50,11 +50,13 @@ func TestSeedLint(t *testing.T) {
 			}
 		}
 		// Sprint 443 restores these operator-curated Moonshot seats at their
-		// declared L2 band; other low-band seeds remain outside the 1.0 list.
+		// declared L2 band; Sprint 671 adds kimi-k3.1-pro, the newest K3-series
+		// model, on the same terms. Other low-band seeds remain outside the 1.0
+		// list.
 		kimiL2 := false
 		if a.Tool == "ycode" || a.Tool == "opencode" {
 			switch a.Model {
-			case "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k3":
+			case "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k3", "kimi-k3.1-pro":
 				kimiL2 = band == 2
 			}
 		}

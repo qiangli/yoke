@@ -1,0 +1,38 @@
+name: kimi-k3.1-pro
+family: kimi
+version: "3.1"
+band: 2
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: Kimi K3.1 Pro, released
+# 2026-10, Moonshot's newest K3-series model. It inherits kimi-k3's MEASURED L2
+# (a coder that does not converge as conductor or steward); a point release is
+# not evidence of a different band. Route coder / bounded review with a gate.
+display: Kimi K3.1 Pro
+provider: openai-compat
+kind: api
+base_url: https://api.moonshot.ai/v1
+api_key_ref: moonshot
+model: moonshot/kimi-k3.1-pro
+# CONTEXT: the vendor's model table, https://platform.kimi.ai/docs/pricing/chat
+# (read 2026-11-19), lists the K3 series at 1,048,576 tokens.
+context_length: 1048576
+quality: 0.86
+# Reported API pricing (third-party, the vendor table was unpopulated when
+# read): $2/M input, $10/M output.
+cost_micro: 10000
+ids:
+  ycode: kimi-k3.1-pro
+  genie: kimi-k3.1-pro
+  opencode: moonshotai/kimi-k3.1-pro
+usage:
+  - id: balance
+    run:
+      body: fetch -f --json=false -t "$KEY" https://api.moonshot.ai/v1/users/me/balance
+      effects: [read, net]
+      env:
+        KEY: model:credential
+    metrics:
+      - name: balance
+        value: .data.available_balance
+        unit: USD

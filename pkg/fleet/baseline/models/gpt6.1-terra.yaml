@@ -1,0 +1,18 @@
+name: gpt6.1-terra
+family: gpt-terra
+version: "6.1"
+band: 3
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded Sprint 671 (2026-11-19); sources on story 2f7dbd48: GPT-6.1 Terra, released
+# 2026-10-26, codex priority 3 ("Efficient model that excels at visual
+# understanding and computer use"). 1.05M context, $1/$5 per MTok. Inherits
+# gpt5.6-terra's declared L3 peg. The `gpt-terra` family alias re-points to 6.1.
+display: GPT-6.1 Terra
+provider: openai
+kind: subscription
+plan: chatgpt-pro  # the seat this model is billed through; see plans/chatgpt-pro.yaml
+model: gpt-6.1-terra
+quality: 0.90
+# Carried over from gpt5.6-terra; not re-priced.
+cost_micro: 9000

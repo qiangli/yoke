@@ -1,0 +1,8 @@
+agents:
+  - name: codex-gpt6.2-sol
+    tool: codex
+    model: gpt6.2-sol
+    display: "codex · gpt6.2-sol"
+    ledger:
+      reliability: unmeasured
+      notes: seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet

@@ -1,0 +1,8 @@
+agents:
+  - name: agy-gemini4-hydrogen
+    tool: agy
+    model: gemini4-hydrogen
+    display: "agy · gemini4-hydrogen"
+    ledger:
+      reliability: unmeasured
+      notes: seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet

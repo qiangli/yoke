@@ -1,0 +1,8 @@
+agents:
+  - name: claude-fable5.2
+    tool: claude
+    model: fable5.2
+    display: "claude · fable5.2"
+    ledger:
+      reliability: unmeasured
+      notes: seeded Sprint 671 (2026-11-19); declared prior, no gated run on this host yet

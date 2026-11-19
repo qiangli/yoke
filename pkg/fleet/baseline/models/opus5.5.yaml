@@ -22,3 +22,6 @@ spec:
   code-review: 0.03
   planning: 0.03
   orchestration: 0.04
+# agy's own id (`agy models`, read 2026-11-19, Sprint 671); -low/-medium also listed.
+ids:
+  agy: claude-opus-5-5-high
