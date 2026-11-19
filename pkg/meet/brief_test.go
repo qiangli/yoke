@@ -234,11 +234,28 @@ func TestBriefBoundsLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Caps keep the NEWEST in stable transcript order: the five oldest hide,
+	// the newest decision is present, and the kept tail stays chronological.
 	if len(res.Proposals.Items) != BriefLimit || res.Proposals.Hidden != 5 {
 		t.Fatalf("proposals bounded = %d+%d, want %d+5", len(res.Proposals.Items), res.Proposals.Hidden, BriefLimit)
 	}
+	first, last := res.Proposals.Items[0], res.Proposals.Items[len(res.Proposals.Items)-1]
+	if want := "task number " + strings.Repeat("x", 6); first.Text != want {
+		t.Fatalf("capped proposals must start at the 6th action, got %q want %q", first.Text, want)
+	}
+	if want := "task number " + strings.Repeat("x", BriefLimit+5); last.Text != want {
+		t.Fatalf("capped proposals must end at the newest action, got %q want %q", last.Text, want)
+	}
+	for i := 1; i < len(res.Proposals.Items); i++ {
+		if res.Proposals.Items[i].Seq <= res.Proposals.Items[i-1].Seq {
+			t.Fatalf("capped proposals must keep transcript order: %+v", res.Proposals.Items)
+		}
+	}
 	if len(res.Changes.Items) != BriefLimit || res.Changes.Hidden != 5 {
 		t.Fatalf("changes bounded = %d+%d, want %d+5", len(res.Changes.Items), res.Changes.Hidden, BriefLimit)
+	}
+	if got, want := res.Changes.Items[len(res.Changes.Items)-1].Text, "task number "+strings.Repeat("x", BriefLimit+5); got != want {
+		t.Fatalf("capped changes must end at the newest event, got %q want %q", got, want)
 	}
 }
 
@@ -280,10 +297,11 @@ func TestBriefRequiresAReader(t *testing.T) {
 }
 
 // The secretary reads the whole transcript, directed mail included, so a
-// synthesis item can quote mail addressed to somebody else back. The brief
-// must not launder that quotation into another reader's sections: the item is
-// withheld from every reader the mail was not for, while the addressee keeps
-// it and unrelated synthesis stays for everyone.
+// global synthesis written where the transcript holds mail this reader may
+// not see cannot be proven clean for them — neither verbatim quotation nor
+// paraphrase. The synthesis is withheld from that reader entirely, the
+// omission is flagged, and the brief shows only events they may see. The
+// addressee's own brief is unaffected: their mail is theirs.
 func TestBriefSynthesisDoesNotLaunderDirectedMail(t *testing.T) {
 	const secret = "the vault combination is midnight-blue-seven"
 	st := briefRoom(t, []Event{
@@ -294,7 +312,7 @@ func TestBriefSynthesisDoesNotLaunderDirectedMail(t *testing.T) {
 		By: "claude", At: fixedNow().Add(time.Hour), Mode: "infer",
 		Decisions:     []Decision{{Text: "we ship friday, since " + secret, Inferred: true}},
 		Actions:       []string{"opencode: rotate " + secret},
-		OpenQuestions: []string{"who else knows " + secret + "?"},
+		OpenQuestions: []string{"who else knows the combination?", "who else knows " + secret + "?"},
 		Risks:         []string{"exposure of " + secret, "gate flakiness may slip the date"},
 	}
 	if err := syn.save(st.ID); err != nil {
@@ -312,19 +330,26 @@ func TestBriefSynthesisDoesNotLaunderDirectedMail(t *testing.T) {
 	if strings.Contains(string(raw), "midnight-blue-seven") {
 		t.Fatalf("another reader's brief must not quote mail directed elsewhere:\n%s", raw)
 	}
-	// The human-marked decision is room state and stays; the secretary's own
-	// words, quoting nobody's mail, stay too.
-	if len(res.Decisions.Items) != 1 || res.Decisions.Items[0].Text != "we ship friday" {
-		t.Fatalf("public decision must survive synthesis filtering: %+v", res.Decisions)
+	if !res.SynthesisOmitted {
+		t.Fatalf("withholding the synthesis must be flagged, not silent: %+v", res)
 	}
-	kept := false
-	for _, it := range res.Objections.Items {
-		if strings.Contains(it.Text, "gate flakiness") {
-			kept = true
+	for _, sec := range []BriefSection{res.Proposals, res.Objections, res.Owned} {
+		for _, it := range sec.Items {
+			if it.Speaker == "secretary" {
+				t.Fatalf("withheld synthesis must leave every section: %+v", it)
+			}
 		}
 	}
-	if !kept {
-		t.Fatalf("synthesis in the secretary's own words must stay: %+v", res.Objections)
+	for _, q := range res.Questions {
+		// "who else knows the combination?" paraphrases the secret mail
+		// without quoting it: paraphrase is withheld with the rest.
+		if q.Speaker == "secretary" {
+			t.Fatalf("paraphrase of private mail is withheld with the synthesis: %+v", q)
+		}
+	}
+	// The human-marked decision is room state and stays.
+	if len(res.Decisions.Items) != 1 || res.Decisions.Items[0].Text != "we ship friday" {
+		t.Fatalf("public decision must survive synthesis withholding: %+v", res.Decisions)
 	}
 
 	// The addressee's brief is unfiltered: their own mail, and the synthesis
@@ -332,6 +357,9 @@ func TestBriefSynthesisDoesNotLaunderDirectedMail(t *testing.T) {
 	got, err := Brief(st.ID, BriefOptions{Reader: "opencode"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.SynthesisOmitted {
+		t.Fatalf("the addressee's synthesis must not be withheld: %+v", got)
 	}
 	oraw, err := json.Marshal(got)
 	if err != nil {
@@ -420,7 +448,7 @@ func TestBriefCommandRendersAndEmitsJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"confirmed decisions", "proposals", "owned work", "pending questions", "act-"} {
+	for _, want := range []string{"confirmed decisions", "proposals", "owned work", "open questions", "act-"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("brief text missing %q:\n%s", want, text)
 		}
@@ -437,5 +465,194 @@ func TestBriefCommandRendersAndEmitsJSON(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("brief JSON missing %s:\n%s", want, out.String())
 		}
+	}
+}
+
+// A decision or action is authoritative only when a roster member marked it:
+// the same kind from outside the roster is a proposal in a participant's
+// voice, never a confirmation, and it founds no owned work.
+func TestBriefAgentDecisionIsNotAuthority(t *testing.T) {
+	st := briefRoom(t, []Event{
+		{Speaker: "intruder", Kind: "decision", Text: "we ship at dawn"},
+		{Speaker: "intruder", Kind: "action", Text: "codex: open the gate"},
+		{Speaker: "qiangli", Kind: "decision", Text: "we ship friday"},
+	})
+	res := briefFor(t, st, "codex")
+	if len(res.Decisions.Items) != 1 || res.Decisions.Items[0].Text != "we ship friday" {
+		t.Fatalf("only the member's decision confirms: %+v", res.Decisions)
+	}
+	if len(res.Decisions.Items) != 1 || res.Decisions.Items[0].Authority != "human" {
+		t.Fatalf("member decision must carry human authority: %+v", res.Decisions)
+	}
+	var voice, withID int
+	for _, it := range res.Proposals.Items {
+		if it.Authority == "participant" && it.Source == "proposed" {
+			voice++
+		}
+		if it.ID != "" {
+			withID++
+		}
+	}
+	if voice != 2 {
+		t.Fatalf("both outsider items must be voice proposals: %+v", res.Proposals)
+	}
+	if withID != 0 {
+		t.Fatalf("outsider actions found no agreement, so no S1 reference: %+v", res.Proposals)
+	}
+	if len(res.Owned.Items) != 0 {
+		t.Fatalf("outsider actions found no owned work: %+v", res.Owned)
+	}
+}
+
+// Pending means evidenced-unresolved: a decided poll, an answered ask, a
+// retracted question and a retracted vote are history, and retracted votes
+// tally nowhere. Live disagreement on an undecided ballot stays.
+func TestBriefShowsOnlyUnresolvedQuestions(t *testing.T) {
+	st := newTestSession(t)
+	base := fixedNow()
+	append := func(e Event, d time.Duration) {
+		t.Helper()
+		e.TS = base.Add(d)
+		if err := AppendEvent(st.ID, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Decided poll: yes outnumbers no with no spoilage — history.
+	append(Event{Speaker: "qiangli", Kind: "poll", Question: "ship?", Choices: []string{"yes", "no"}}, time.Second)
+	append(Event{Speaker: "codex", Kind: "vote", Choice: "yes", Choices: []string{"yes", "no"}, Text: "yes"}, 2*time.Second)
+	append(Event{Speaker: "opencode", Kind: "vote", Choice: "yes", Choices: []string{"yes", "no"}, Text: "yes"}, 3*time.Second)
+	append(Event{Speaker: "qiangli", Kind: "vote", Choice: "no", Choices: []string{"yes", "no"}, Text: "no: gate"}, 4*time.Second)
+	// Retracted question: withdrawn, not pending.
+	qTS := base.Add(5 * time.Second)
+	append(Event{Speaker: "qiangli", Kind: "question", Question: "old worry?", Text: "old worry?"}, 5*time.Second)
+	append(Event{Speaker: "qiangli", Kind: "retraction", Text: "never mind", Retracts: qTS.Format(time.RFC3339Nano)}, 6*time.Second)
+	// Retracted vote on the live ballot below: tallies nowhere, dissents
+	// nowhere. The ballot stays tied 1-1 without it — pending.
+	append(Event{Speaker: "qiangli", Kind: "poll", Question: "slip?", Choices: []string{"yes", "no"}}, 7*time.Second)
+	vTS := base.Add(8 * time.Second)
+	append(Event{Speaker: "codex", Kind: "vote", Choice: "no", Choices: []string{"yes", "no"}, Text: "no: red"}, 8*time.Second)
+	append(Event{Speaker: "codex", Kind: "retraction", Text: "take that back", Retracts: vTS.Format(time.RFC3339Nano)}, 9*time.Second)
+	append(Event{Speaker: "opencode", Kind: "vote", Choice: "yes", Choices: []string{"yes", "no"}, Text: "yes"}, 10*time.Second)
+	append(Event{Speaker: "qiangli", Kind: "vote", Choice: "no", Choices: []string{"yes", "no"}, Text: "no: amber"}, 11*time.Second)
+	// Answered ask: a later successful turn names the question link.
+	append(Event{Speaker: "qiangli", Kind: "ask", Question: "any blockers?", Text: "any blockers?"}, 12*time.Second)
+	append(Event{Speaker: "codex", Kind: "turn", Question: "any blockers?", Status: statusOK, Text: "none here"}, 13*time.Second)
+	// Unanswered ask: honestly pending.
+	append(Event{Speaker: "qiangli", Kind: "ask", Question: "who owns docs?", Text: "who owns docs?"}, 14*time.Second)
+
+	res := briefFor(t, st, "codex")
+	for _, q := range res.Questions {
+		switch q.Question {
+		case "ship?", "old worry?", "any blockers?":
+			t.Fatalf("resolved question must leave pending: %+v", q)
+		}
+		if q.Question == "slip?" {
+			// Tied 1-1 on live votes only: had the retracted no-vote
+			// counted, the ballot would read no=2 and be decided.
+			if got := q.Tally["no"]; got != 1 {
+				t.Fatalf("retracted vote must tally nowhere, no=%d in %+v", got, q.Tally)
+			}
+			if q.Votes != 2 {
+				t.Fatalf("retracted vote must not count, votes=%d", q.Votes)
+			}
+		}
+	}
+	if len(res.Questions) != 2 {
+		t.Fatalf("only the tied poll and the unanswered ask stay pending: %+v", res.Questions)
+	}
+	for _, it := range res.Objections.Items {
+		if it.Text == "no: red" {
+			t.Fatalf("a retracted vote is withdrawn dissent: %+v", it)
+		}
+	}
+	found := false
+	for _, it := range res.Objections.Items {
+		if it.Text == "no: gate" {
+			found = true // disagreement on the decided poll is preserved
+		}
+	}
+	if !found {
+		t.Fatalf("dissent on a decided poll must survive beside it: %+v", res.Objections)
+	}
+}
+
+// When caps hide something the reader has not seen, --mark-seen refuses
+// rather than silently consume the hidden tail; --ack-all acknowledges it
+// explicitly.
+func TestBriefMarkSeenRefusesHiddenTail(t *testing.T) {
+	var events []Event
+	for i := 0; i < BriefLimit+5; i++ {
+		events = append(events, Event{Speaker: "qiangli", Kind: "action", Text: "task"})
+	}
+	for i := range events {
+		events[i].Text = "task number " + strings.Repeat("x", i+1)
+	}
+	st := briefRoom(t, events)
+	if _, err := Brief(st.ID, BriefOptions{Reader: "codex", MarkSeen: true}); err == nil {
+		t.Fatal("mark-seen over a hidden unseen tail must refuse without --ack-all")
+	}
+	if got := SeenSeq(st.ID, "codex"); got != 0 {
+		t.Fatalf("a refused mark-seen must not move the cursor, got %d", got)
+	}
+	res, err := Brief(st.ID, BriefOptions{Reader: "codex", MarkSeen: true, AckAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := SeenSeq(st.ID, "codex"); got != res.Through {
+		t.Fatalf("ack-all cursor = %d, want through %d", got, res.Through)
+	}
+	again, err := Brief(st.ID, BriefOptions{Reader: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Changes.Items) != 0 {
+		t.Fatalf("after ack-all nothing is new: %+v", again.Changes)
+	}
+}
+
+// A huge turn cannot grow the brief without bound: item text is capped with
+// a marker, and the whole brief keeps a byte budget even at inflated limits.
+func TestBriefBoundsHugeTurns(t *testing.T) {
+	st := briefRoom(t, []Event{
+		{Speaker: "qiangli", Kind: "decision", Text: strings.Repeat("dump ", 200000)},
+	})
+	res := briefFor(t, st, "codex")
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > BriefTotalBytes+4096 {
+		t.Fatalf("one huge turn grew the brief to %d bytes", len(raw))
+	}
+	if !strings.Contains(res.Decisions.Items[0].Text, "[truncated]") {
+		t.Fatalf("capped item text must say so: %.80q...", res.Decisions.Items[0].Text)
+	}
+	if len(res.Decisions.Items[0].Text) > BriefItemTextBytes {
+		t.Fatalf("item text %d bytes exceeds the per-item cap", len(res.Decisions.Items[0].Text))
+	}
+
+	// Inflated limits still fit the total budget: oldest yields, newest stays.
+	var many []Event
+	for i := 0; i < 300; i++ {
+		many = append(many, Event{Speaker: "qiangli", Kind: "decision", Text: "d" + strings.Repeat("y", 1000)})
+	}
+	st2 := briefRoom(t, many)
+	big, err := Brief(st2.ID, BriefOptions{Reader: "codex", Limit: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if big.Decisions.Hidden == 0 {
+		t.Fatalf("the total budget must hide oldest items at inflated limits: %+v", big.Decisions)
+	}
+	braw, err := json.Marshal(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(braw) > BriefTotalBytes+65536 {
+		t.Fatalf("inflated limits grew the brief to %d bytes", len(braw))
+	}
+	last := big.Decisions.Items[len(big.Decisions.Items)-1]
+	if last.Seq != 300 {
+		t.Fatalf("budget cuts must keep the newest decision, last seq = %d", last.Seq)
 	}
 }

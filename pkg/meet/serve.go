@@ -445,6 +445,7 @@ func handleBrief(w http.ResponseWriter, r *http.Request) {
 	}
 	opt.All = q.Get("all") == "1" || strings.EqualFold(q.Get("all"), "true")
 	opt.MarkSeen = q.Get("mark_seen") == "1" || strings.EqualFold(q.Get("mark_seen"), "true")
+	opt.AckAll = q.Get("ack_all") == "1" || strings.EqualFold(q.Get("ack_all"), "true")
 	res, err := Brief(r.PathValue("ref"), opt)
 	if err != nil {
 		apiErr(w, err)
