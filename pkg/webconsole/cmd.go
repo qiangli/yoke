@@ -121,8 +121,11 @@ func newServeCmd() *cobra.Command {
 				return err
 			}
 			shapeOpts.RepairMaxAttempts = maxAttempts
+			// Outpost init passes the paired owner's identity through the service
+			// monitor. An unset value leaves cloud administration closed.
 			return runServe(c.Context(), c.OutOrStdout(), Options{
 				Shape:      shapeOpts,
+				Operators:  []string{os.Getenv("BASHY_APP_OPERATOR")},
 				Scope:      scope,
 				Launcher:   launcher,
 				AllowWrite: write,
