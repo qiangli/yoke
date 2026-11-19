@@ -201,13 +201,13 @@ func (c *Claim) ConflictsResource(resource string, holder principal.Ref, now tim
 // stranger's.
 func SameHolder(a, b principal.Ref) bool { return sameHolder(a, b) }
 
-// sameHolder: sessions are told apart by episode. Name and host identify a
-// holder only when one side carries no episode (a legacy or unattributed
-// identity) — two independently launched sessions with one tool name on one
-// host are different holders.
+// sameHolder: a session needs both its episode and principal identity to match.
+// An agent launch can inherit the parent's episode, but a distinct principal
+// must never reuse the parent's claim. Name and host identify a holder when
+// one side carries no episode (a legacy or unattributed identity).
 func sameHolder(a, b principal.Ref) bool {
 	if a.Episode != "" && b.Episode != "" {
-		return a.Episode == b.Episode
+		return a.Episode == b.Episode && a.Name != "" && a.Name == b.Name && a.Host == b.Host
 	}
 	return a.Name != "" && a.Name == b.Name && a.Host == b.Host
 }

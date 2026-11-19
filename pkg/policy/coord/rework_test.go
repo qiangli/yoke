@@ -40,6 +40,30 @@ func TestSameHolderEpisodesDecide(t *testing.T) {
 	}
 }
 
+func TestSharedEpisodeDoesNotShareClaimAcrossPrincipals(t *testing.T) {
+	ledger(t)
+	ctx := context.Background()
+	ref := Ref{"name", "shared-episode"}
+	manager := principal.Ref{Name: "manager", Episode: "ep-inherited", Host: "h"}
+	worker := principal.Ref{Name: "worker", Episode: "ep-inherited", Host: "h"}
+	if sameHolder(manager, worker) {
+		t.Fatal("a worker inheriting the manager episode became the manager")
+	}
+	grant, err := AcquireRef(ctx, Request{Ref: ref, Holder: manager})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireRef(ctx, Request{Ref: ref, Holder: worker}); !isConflict(err) {
+		t.Fatalf("worker with inherited episode bypassed the manager claim: %v", err)
+	}
+	if err := Guard(ctx, worker, Use{Kind: "name", Name: "shared-episode"}); !isConflict(err) {
+		t.Fatalf("worker with inherited episode bypassed the guard: %v", err)
+	}
+	if _, err := Refresh(ctx, ref, worker, grant.Epoch); !isConflict(err) {
+		t.Fatalf("worker with inherited episode refreshed the manager claim: %v", err)
+	}
+}
+
 func TestGuardDoesNotExemptSameNamedSessions(t *testing.T) {
 	ledger(t)
 	ctx := context.Background()
