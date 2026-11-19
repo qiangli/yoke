@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -238,6 +239,93 @@ func (c TokenClient) Revoke(id string) error {
 	return nil
 }
 
+// TokenEdit is PUT /api/v1/tokens/:id: nil fields stay unchanged;
+// Scopes, when set, is the full new set.
+type TokenEdit struct {
+	Name           *string  `json:"name,omitempty"`
+	Scopes         []string `json:"scopes,omitempty"`
+	RequestsPerDay *int     `json:"requests_per_day,omitempty"`
+	RoutePolicy    *string  `json:"route_policy,omitempty"`
+}
+
+// Edit changes one owner-scoped token row (the console's token edit). The
+// server applies the revoke rule: the calling token may not edit itself
+// (409), must hold the target's scopes and every new scope (403). The
+// token value never changes.
+func (c TokenClient) Edit(id string, e TokenEdit) (TokenInfo, error) {
+	var zero TokenInfo
+	if strings.TrimSpace(id) == "" {
+		return zero, fmt.Errorf("fleet: token id is required")
+	}
+	if e.Name == nil && e.Scopes == nil && e.RequestsPerDay == nil && e.RoutePolicy == nil {
+		return zero, fmt.Errorf("fleet: nothing to change (give --name, --scope, --requests-per-day or --route-policy)")
+	}
+	if e.Name != nil {
+		if err := validateTokenName(*e.Name); err != nil {
+			return zero, err
+		}
+	}
+	const op = "PUT /api/v1/tokens/:id"
+	resp, err := c.do(http.MethodPut, "/api/v1/tokens/"+id, e)
+	if err != nil {
+		return zero, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return zero, apiTokenError(op, resp)
+	}
+	var row TokenInfo
+	if err := json.NewDecoder(resp.Body).Decode(&row); err != nil {
+		return zero, err
+	}
+	return row, nil
+}
+
+// MinterTokenEnv names the owner minter token: the token that holds the
+// scopes an owner delegates, so the CLI can mint, edit, list and revoke
+// host tokens without the console. It is deliberately NOT $BASHY_FLEET_TOKEN:
+// binding the minter there would make it every cloud call's credential.
+const MinterTokenEnv = "CLOUDBOX_MINTER_TOKEN"
+
+// Seams so tests never reach a real vault.
+var (
+	minterBound      = secrets.BoundValue
+	vaultSecretValue = func(name string) (string, error) {
+		sc, err := secrets.Config{}.Resolve()
+		if err != nil {
+			return "", err
+		}
+		return sc.Get(name)
+	}
+)
+
+// tokenCallerOverride picks the token-management credential: --token, then
+// --token-secret (read from the vault, never printed), then
+// $CLOUDBOX_MINTER_TOKEN, then the host's secrets.map binding for it. Empty
+// means the usual ladder (ResolveMaster) applies.
+func tokenCallerOverride(tokenFlag, tokenSecret string) (string, error) {
+	if t := strings.TrimSpace(tokenFlag); t != "" {
+		return t, nil
+	}
+	if name := strings.TrimSpace(tokenSecret); name != "" {
+		v, err := vaultSecretValue(name)
+		if err != nil {
+			return "", fmt.Errorf("fleet: --token-secret %s: %w", name, err)
+		}
+		if strings.TrimSpace(v) == "" {
+			return "", fmt.Errorf("fleet: --token-secret %s: the vault holds no value", name)
+		}
+		return strings.TrimSpace(v), nil
+	}
+	if v := strings.TrimSpace(os.Getenv(MinterTokenEnv)); v != "" {
+		return v, nil
+	}
+	if v, ok := minterBound(MinterTokenEnv); ok {
+		return strings.TrimSpace(v), nil
+	}
+	return "", nil
+}
+
 // writeSecretToVault stores a minted value under name through the
 // secrets credential chain (secrets.Config{}.Resolve, exactly like
 // `bashy secret set`), NEVER the minting caller's token: the caller is
@@ -253,7 +341,7 @@ func writeSecretToVault(name, value string) error {
 	return sc.Put([]secrets.Item{{Name: name, Value: value}})
 }
 
-// NewTokenCmd is `token create|list|revoke`, the cobra surface hosts
+// NewTokenCmd is `token create|list|edit|revoke`, the cobra surface hosts
 // mount as `bashy token ...`. The minted value goes straight into the
 // vault with --to-secret and is NEVER printed; --stdout (explicit, for
 // humans at a terminal) is the only way to print it.
@@ -265,8 +353,23 @@ func NewTokenCmd() *cobra.Command {
 		Short: "Mint and manage scoped coordination tokens (attenuated Bearer [REDACTED])",
 	}
 	c.PersistentFlags().StringVar(&urlOverride, "url", "", "control-plane base URL (default $BASHY_CLOUDBOX_URL)")
-	c.PersistentFlags().StringVar(&tokenOverride, "token", "", "Bearer [REDACTED] (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY)")
+	c.PersistentFlags().StringVar(&tokenOverride, "token", "", "Bearer [REDACTED] (default the owner minter: $CLOUDBOX_MINTER_TOKEN or its secrets.map binding, else $BASHY_FLEET_TOKEN / $BASHY_API_KEY)")
+	var tokenSecret string
+	c.PersistentFlags().StringVar(&tokenSecret, "token-secret", "", "vault secret holding the calling token (e.g. the owner minter); never printed")
 	acct.bindPersistent(c)
+	// clientFor resolves the calling token once per invocation: an explicit
+	// --account keeps its own credential; otherwise the minter ladder runs.
+	clientFor := func(cmd *cobra.Command) (TokenClient, error) {
+		tok := tokenOverride
+		if !acct.given() {
+			t, err := tokenCallerOverride(tokenOverride, tokenSecret)
+			if err != nil {
+				return TokenClient{}, err
+			}
+			tok = t
+		}
+		return newTokenClientFor(cmd.Context(), &acct, urlOverride, tok)
+	}
 
 	var name, ttl, toSecret string
 	var scopeVals []string
@@ -289,7 +392,7 @@ func NewTokenCmd() *cobra.Command {
 			if toSecret == "" && !stdout {
 				return fmt.Errorf("fleet: give --to-secret VAULT_NAME or --stdout (the value is never printed by default)")
 			}
-			client, err := newTokenClientFor(cmd.Context(), &acct, urlOverride, tokenOverride)
+			client, err := clientFor(cmd)
 			if err != nil {
 				return err
 			}
@@ -331,7 +434,7 @@ func NewTokenCmd() *cobra.Command {
 		Short: "List the owner's tokens (never their values)",
 		Args:  cobra.NoArgs, SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := newTokenClientFor(cmd.Context(), &acct, urlOverride, tokenOverride)
+			client, err := clientFor(cmd)
 			if err != nil {
 				return err
 			}
@@ -356,7 +459,7 @@ func NewTokenCmd() *cobra.Command {
 		Short: "Revoke one token by id (owner-scoped)",
 		Args:  cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newTokenClientFor(cmd.Context(), &acct, urlOverride, tokenOverride)
+			client, err := clientFor(cmd)
 			if err != nil {
 				return err
 			}
@@ -367,6 +470,55 @@ func NewTokenCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.AddCommand(create, list, revoke)
+	var editName, editRoute string
+	var editScopes []string
+	var editRPD int
+	edit := &cobra.Command{
+		Use:   "edit ID [--name N] [--scope a,b] [--requests-per-day N] [--route-policy P]",
+		Short: "Edit one token: name, scopes, requests per day, route policy (the console's edit)",
+		Long: "Edit one token by id. Only the flags you give change; --scope replaces\n" +
+			"the whole scope set. The calling token may not edit itself, and must\n" +
+			"hold the target's current scopes and every new one (never *:admin).\n" +
+			"The token value never changes: rotate with create, then revoke.",
+		Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var e TokenEdit
+			if cmd.Flags().Changed("name") {
+				e.Name = &editName
+			}
+			if cmd.Flags().Changed("scope") {
+				e.Scopes = splitScopes(editScopes)
+				if len(e.Scopes) == 0 {
+					return fmt.Errorf("fleet: --scope needs at least one scope")
+				}
+			}
+			if cmd.Flags().Changed("requests-per-day") {
+				e.RequestsPerDay = &editRPD
+			}
+			if cmd.Flags().Changed("route-policy") {
+				e.RoutePolicy = &editRoute
+			}
+			client, err := clientFor(cmd)
+			if err != nil {
+				return err
+			}
+			row, err := client.Edit(args[0], e)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return writeJSON(cmd.OutOrStdout(), row)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "edited %s name=%s scopes=%s expires=%s\n",
+				row.ID, row.Name, strings.Join(row.Scopes, ","), row.ExpiresAt)
+			return nil
+		},
+	}
+	edit.Flags().StringVar(&editName, "name", "", "new name (1-64 chars of [a-z0-9._-])")
+	edit.Flags().StringSliceVar(&editScopes, "scope", nil, "the full new scope set; repeat or comma-separate")
+	edit.Flags().IntVar(&editRPD, "requests-per-day", 0, "LLM requests per day (0 = no cap)")
+	edit.Flags().StringVar(&editRoute, "route-policy", "", "routing posture: local_first, privacy, cost or smart (empty = account default)")
+	edit.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	c.AddCommand(create, list, edit, revoke)
 	return c
 }

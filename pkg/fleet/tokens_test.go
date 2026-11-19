@@ -185,6 +185,48 @@ func (f *fakeCloudbox) serveTokens(w http.ResponseWriter, r *http.Request) {
 		delete(f.byID, id)
 		delete(f.byValue, row.value)
 		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/v1/tokens/"):
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/tokens/")
+		var body struct {
+			Name   *string  `json:"name"`
+			Scopes []string `json:"scopes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			f.writeErr(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		row, ok := f.byID[id]
+		if !ok || row.owner != caller.owner {
+			f.writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		if "Bearer "+row.value == r.Header.Get("Authorization") {
+			f.writeErr(w, http.StatusConflict, "a token cannot edit itself")
+			return
+		}
+		held := map[string]bool{}
+		for _, sc := range caller.scopes {
+			held[sc] = true
+		}
+		for _, sc := range append(append([]string{}, row.scopes...), body.Scopes...) {
+			if !held[sc] {
+				f.writeErr(w, http.StatusForbidden, "scope "+sc+" is not held by the calling token")
+				return
+			}
+		}
+		if body.Name != nil {
+			row.name = *body.Name
+		}
+		if body.Scopes != nil {
+			row.scopes = body.Scopes
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": row.id, "name": row.name, "scopes": row.scopes,
+			"expires_at": row.expires.Format(time.RFC3339),
+		})
 	default:
 		f.writeErr(w, http.StatusNotFound, "not found")
 	}
@@ -293,6 +335,11 @@ func tokenHost(t *testing.T, srv *httptest.Server, token string) {
 	t.Setenv("BASHY_FLEET_TOKEN", token)
 	t.Setenv("BASHY_SECRETS_TOKEN", "secrets-token")
 	t.Setenv("BASHY_API_KEY", "")
+	// The owner-minter ladder must not pick up the developer's own minter.
+	t.Setenv(MinterTokenEnv, "")
+	prev := minterBound
+	minterBound = func(string) (string, bool) { return "", false }
+	t.Cleanup(func() { minterBound = prev })
 }
 
 func startFake(t *testing.T) (*fakeCloudbox, *httptest.Server) {
@@ -826,5 +873,92 @@ func TestMintBaseFromBareServerAddr(t *testing.T) {
 		if got := mintBaseURL(tc.in); got != tc.want {
 			t.Fatalf("mintBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// ---- edit + owner minter (Sprint 672 K2) ----------------------------------
+
+func TestTokenCmdEditRescopesAndRenames(t *testing.T) {
+	_, srv := startFake(t)
+	tokenHost(t, srv, "caller-token")
+	c, _ := NewTokenClient("", "")
+	m, err := c.Create("host-a", []string{"tasks:read"}, "24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := runTokenCmd(t, "edit", m.ID, "--name", "host-a-session", "--scope", "tasks:read,tasks:write")
+	if err != nil {
+		t.Fatalf("edit: %v (stdout=%q stderr=%q)", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "name=host-a-session") || !strings.Contains(stdout, "scopes=tasks:read,tasks:write") {
+		t.Fatalf("edit output = %q", stdout)
+	}
+	if strings.Contains(stdout+stderr, m.Token) {
+		t.Fatal("edit must never print a token value")
+	}
+	// Escalation and an empty edit are refused before or by the server.
+	if _, _, err := runTokenCmd(t, "edit", m.ID, "--scope", "secrets:read"); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("escalation: want 403, got %v", err)
+	}
+	if _, _, err := runTokenCmd(t, "edit", m.ID); err == nil || !strings.Contains(err.Error(), "nothing to change") {
+		t.Fatalf("empty edit: want refusal, got %v", err)
+	}
+}
+
+// The minter ladder: --token, then --token-secret from the vault, then
+// $CLOUDBOX_MINTER_TOKEN, then its secrets.map binding, else the usual ladder.
+func TestTokenCallerOverrideOrder(t *testing.T) {
+	prevB, prevV := minterBound, vaultSecretValue
+	t.Cleanup(func() { minterBound, vaultSecretValue = prevB, prevV })
+	minterBound = func(name string) (string, bool) {
+		if name == MinterTokenEnv {
+			return "bound-minter", true
+		}
+		return "", false
+	}
+	vaultSecretValue = func(name string) (string, error) {
+		if name == "cloudbox-owner-minter" {
+			return "vault-minter", nil
+		}
+		return "", fmt.Errorf("no such secret %s", name)
+	}
+	t.Setenv(MinterTokenEnv, "env-minter")
+	for _, c := range []struct{ flag, secret, want string }{
+		{"flag-token", "cloudbox-owner-minter", "flag-token"},
+		{"", "cloudbox-owner-minter", "vault-minter"},
+		{"", "", "env-minter"},
+	} {
+		got, err := tokenCallerOverride(c.flag, c.secret)
+		if err != nil || got != c.want {
+			t.Fatalf("tokenCallerOverride(%q,%q) = %q, %v; want %q", c.flag, c.secret, got, err, c.want)
+		}
+	}
+	t.Setenv(MinterTokenEnv, "")
+	if got, _ := tokenCallerOverride("", ""); got != "bound-minter" {
+		t.Fatalf("binding fallback = %q", got)
+	}
+	minterBound = func(string) (string, bool) { return "", false }
+	if got, _ := tokenCallerOverride("", ""); got != "" {
+		t.Fatalf("no minter anywhere must fall back to the ladder, got %q", got)
+	}
+	if _, err := tokenCallerOverride("", "missing"); err == nil {
+		t.Fatal("an unreadable --token-secret must fail, not fall back")
+	}
+}
+
+// --token-secret authenticates the command with the vault value.
+func TestTokenCmdTokenSecret(t *testing.T) {
+	_, srv := startFake(t)
+	tokenHost(t, srv, "poor-token") // the ladder's token can't mint tasks:write
+	prev := vaultSecretValue
+	t.Cleanup(func() { vaultSecretValue = prev })
+	vaultSecretValue = func(string) (string, error) { return "caller-token", nil }
+	stdout, stderr, err := runTokenCmd(t, "--token-secret", "cloudbox-owner-minter", "create",
+		"--name", "host-b", "--scope", "tasks:write", "--ttl", "90d", "--to-secret", "host-b-token", "--json")
+	if err != nil {
+		t.Fatalf("create with --token-secret: %v (stdout=%q stderr=%q)", err, stdout, stderr)
+	}
+	if strings.Contains(stdout+stderr, "caller-token") {
+		t.Fatal("the calling token must never be printed")
 	}
 }
