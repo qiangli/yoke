@@ -601,3 +601,50 @@ func TestClaimSerializesEffectMutations(t *testing.T) {
 		t.Fatal("mutation changed held pickup")
 	}
 }
+
+// Cancel attempts precisely between the claim's retirement check and Save
+// must refuse, including when both commands belong to the same episode.
+func TestClaimSerializesCancellation(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "local work")
+	id := soleID(t, dir)
+	rec, _ := stored(dir, id)
+	_, err := Claim(context.Background(), dir, rec, coord.Self(), func() error {
+		if _, err := runResume(t, "--cancel", id); err == nil {
+			t.Fatal("cancellation entered held pickup")
+		}
+		cur, _ := stored(dir, id)
+		if cur.CancelledAt != nil || cur.ResumedAt != nil {
+			t.Fatal("refused cancellation changed the record")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runResume(t, "--cancel", id); err == nil || !strings.Contains(err.Error(), "already claimed") {
+		t.Fatalf("cancel after pickup = %v", err)
+	}
+	cur, _ := stored(dir, id)
+	if cur.ResumedAt == nil || cur.CancelledAt != nil {
+		t.Fatal("pickup stamp lost or cancelled")
+	}
+}
+
+func TestCancellationBlocksStaleClaim(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "local work")
+	id := soleID(t, dir)
+	stale, _ := stored(dir, id)
+	if _, err := runResume(t, "--cancel", id); err != nil {
+		t.Fatal(err)
+	}
+	applied := false
+	if _, err := Claim(context.Background(), dir, stale, coord.Self(), func() error { applied = true; return nil }); err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("claim after cancellation = %v", err)
+	}
+	cur, _ := stored(dir, id)
+	if applied || cur.CancelledAt == nil || cur.CancelledBy == nil || cur.ResumedAt != nil {
+		t.Fatal("claim lost cancellation or applied cancelled work")
+	}
+}

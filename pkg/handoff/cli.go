@@ -307,6 +307,20 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				if err != nil {
 					return err
 				}
+				// Cancellation and pickup share one critical section: a cancel
+				// must not be acknowledged then erased by the pickup stamp.
+				g, lock, err := coord.AcquireAttachedRef(cmd.Context(), coord.Request{
+					Ref: ClaimRef(rec.ID), Holder: coord.Self(), Mode: coord.ModeAttached,
+					Intent: "resume --cancel " + rec.ID,
+				})
+				if err != nil {
+					return err
+				}
+				defer func() { _ = coord.ReleaseAttached(coord.DefaultDir(), g.Claim, lock) }()
+				// The selected snapshot may predate a completed pickup.
+				if cur, ok := stored(dir, rec.ID); ok {
+					rec = cur
+				}
 				if rec.ResumedAt != nil {
 					return fmt.Errorf("%s is already claimed; nothing to cancel", rec.ID)
 				}
