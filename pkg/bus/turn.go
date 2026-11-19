@@ -2,6 +2,8 @@ package bus
 
 import (
 	"fmt"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -184,6 +186,89 @@ func PrepareLaunchPreamble(agent string) PreparedPreamble {
 	return prepareAdmission(agent, snapshot)
 }
 
+// inboxMaxItems bounds one turn preamble to a small, fixed number of inline
+// messages plus one counter line, no matter how large the unread backlog is.
+// A fresh binding with no cursor starts at the beginning of history, and an
+// unbounded render hands it that whole history every turn (with only
+// represented records acknowledged, the rest is re-sent forever). The default
+// shows one message — addressed to this agent first, then highest priority,
+// then newest — and counts the rest. BASHY_CHAT_INBOX_MAX=N raises the inline
+// count; BASHY_CHAT_INBOX=off (honored by the chat front door) is unchanged.
+func inboxMaxItems() int {
+	const defaultInboxMaxItems = 1
+	raw := strings.TrimSpace(os.Getenv("BASHY_CHAT_INBOX_MAX"))
+	if raw == "" {
+		return defaultInboxMaxItems
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultInboxMaxItems
+	}
+	return n
+}
+
+// orderInboxFor sorts a turn's items the way the cap spends them: messages
+// addressed to this agent (or the role it reads as) first, then highest
+// priority, then newest.
+func orderInboxFor(agent string, items []admission.Item) {
+	agent = strings.TrimSpace(agent)
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		ad, bd := isAddressedTo(agent, a), isAddressedTo(agent, b)
+		if ad != bd {
+			return ad
+		}
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		return a.Sequence > b.Sequence
+	})
+}
+
+func isAddressedTo(agent string, item admission.Item) bool {
+	if agent == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(item.To), agent)
+}
+
+// splitInbox divides a turn's ordered items into the inline head and the
+// counted tail. max <= 0 means no cap.
+func splitInbox(items []admission.Item, max int) (show, withheld []admission.Item) {
+	if max > 0 && len(items) > max {
+		return items[:max], items[max:]
+	}
+	return items, nil
+}
+
+// inboxCounterLine is the one indicator line for a capped tail: how many were
+// shown of how many unread, how many of the unread ones are addressed to this
+// agent, and the one command that reads them. The withheld records stay
+// durable in their stores; this line is what keeps the cap from being a
+// silent drop.
+func inboxCounterLine(agent string, admitted, total, addressed int) string {
+	return fmt.Sprintf("%d of %d unread (%d addressed to you) — read more: bashy inbox --as %s",
+		admitted, total, addressed, strconv.Quote(agent))
+}
+
+func inboxBytes(items []admission.Item) int {
+	n := 0
+	for _, item := range items {
+		n += len(item.Body)
+	}
+	return n
+}
+
+func countAddressedTo(agent string, items []admission.Item) int {
+	n := 0
+	for _, item := range items {
+		if isAddressedTo(agent, item) {
+			n++
+		}
+	}
+	return n
+}
+
 func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
 	items := make([]admission.Item, 0, len(snapshot.Items)+1)
 	for _, pending := range snapshot.Items {
@@ -197,18 +282,62 @@ func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
 			Acknowledge: func() error { return snapshot.CommitItem(p.Seq) },
 		})
 	}
+	var host []admission.Item
 	if PrepareTurnItems != nil {
-		host, err := PrepareTurnItems(agent)
+		var err error
+		host, err = PrepareTurnItems(agent)
 		if err != nil {
 			return PreparedPreamble{err: err}
 		}
 		items = append(items, host...)
 	}
-	rendered, err := admission.Render(items, admission.Options{BudgetBytes: DefaultTurnAdmissionBytes})
+	orderInboxFor(agent, items)
+	show, withheld := splitInbox(items, inboxMaxItems())
+	// A counted tail is only honest when every withheld record names where to
+	// read it. This is the same floor admission.Render holds for its own
+	// unrepresented set: without a retrieval reference the counter line would
+	// be a silent drop, so the preamble fails instead of consuming it.
+	for _, item := range withheld {
+		if strings.TrimSpace(item.OverflowRef) == "" {
+			return PreparedPreamble{err: fmt.Errorf("admission: unrepresented item %s:%s has no source retrieval reference", item.Source, item.ID)}
+		}
+	}
+	rendered, err := admission.Render(show, admission.Options{BudgetBytes: DefaultTurnAdmissionBytes})
 	if err != nil {
 		return PreparedPreamble{err: err}
 	}
-	prepared := PreparedPreamble{Text: rendered.Text, ack: []func() error{rendered.Commit}, report: rendered.Report}
+	if len(withheld) == 0 {
+		prepared := PreparedPreamble{Text: rendered.Text, ack: []func() error{rendered.Commit}, report: rendered.Report}
+		return mergeLegacyHost(agent, prepared)
+	}
+	// The cap withheld records this turn only counts. The counter line tells
+	// the agent exactly that, so committing advances every watermark past the
+	// whole accounted snapshot — shown and counted alike. DEMOTE, NEVER DROP:
+	// no store deletes on acknowledgement, and every record stays retrievable
+	// by its artifact reference.
+	text := joinPreambles(rendered.Text, inboxCounterLine(agent,
+		rendered.Report.AdmittedItems, len(items), countAddressedTo(agent, items)))
+	report := rendered.Report
+	report.InputItems = len(items)
+	report.InputBytes = inboxBytes(items)
+	report.OmittedItems += len(withheld)
+	report.OmittedBytes += inboxBytes(withheld)
+	report.UnrepresentedItems += len(withheld)
+	report.UnrepresentedBytes += inboxBytes(withheld)
+	acks := []func() error{func() error { return snapshot.Commit() }}
+	for _, h := range host {
+		if h.Acknowledge != nil {
+			acks = append(acks, h.Acknowledge)
+		}
+	}
+	prepared := PreparedPreamble{Text: text, ack: acks, report: report}
+	return mergeLegacyHost(agent, prepared)
+}
+
+// mergeLegacyHost preserves the exact delivery contract for hosts that still
+// wire the whole-snapshot PrepareTurnInbox callback instead of the
+// record-scoped PrepareTurnItems adapter.
+func mergeLegacyHost(agent string, prepared PreparedPreamble) PreparedPreamble {
 	// The legacy callback represents a whole host-owned snapshot with one
 	// acknowledgement. It cannot safely participate in record-scoped admission:
 	// reducing it to one header and then committing would consume bodies that the
