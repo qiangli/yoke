@@ -1,10 +1,13 @@
 package meet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/chat"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"strings"
 	"testing"
 	"time"
@@ -126,7 +129,7 @@ func TestDeliberationAdmission(t *testing.T) {
 	st, p := deliberationFixture(t)
 	called := false
 	invoke := func(context.Context, chat.Options) (chat.Result, error) { called = true; return chat.Result{}, nil }
-	for _, actor := range []string{"outsider", ""} {
+	for _, actor := range []string{"outsider"} {
 		if _, e := deliberateWith(context.Background(), st.ID, actor, p, invoke); e == nil {
 			t.Fatal("unauthorized")
 		}
@@ -141,5 +144,71 @@ func TestDeliberationAdmission(t *testing.T) {
 	cmd := NewMeetCmd()
 	if c, _, e := cmd.Find([]string{"deliberate"}); e != nil || c.Name() != "deliberate" {
 		t.Fatal("missing CLI")
+	}
+}
+
+func TestDeliberationAuthenticatedOrganizer(t *testing.T) {
+	st, p := deliberationFixture(t)
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	store := fleet.NewInstanceStore(t.TempDir())
+	oldStore, oldSession := bus.InstanceStoreFn, bus.CurrentSessionClaim
+	bus.InstanceStoreFn = func() *fleet.InstanceStore { return store }
+	bus.CurrentSessionClaim = func(string) string { return "deliberation-test-session" }
+	t.Cleanup(func() { bus.InstanceStoreFn = oldStore; bus.CurrentSessionClaim = oldSession })
+	inst, err := store.Open(fleet.Family{Name: "panel-organizer", Policy: fleet.PolicySingle, Bindings: []string{"codex"}}, fleet.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_PRINCIPAL", inst.URN())
+	calls := 0
+	invoke := func(context.Context, chat.Options) (chat.Result, error) {
+		calls++
+		return chat.Result{Output: `{"text":"proposal"}`}, nil
+	}
+	// Neither the API nor CLI may impersonate the human organizer.
+	for _, as := range []string{st.Initiator, "another-organizer"} {
+		if _, err := deliberateWith(context.Background(), st.ID, as, p, invoke); err == nil {
+			t.Fatal("spoof accepted", as)
+		}
+		cmd := NewMeetCmd()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs([]string{"deliberate", st.ID, "--as", as})
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "cannot author as") {
+			t.Fatalf("CLI spoof: %v", err)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("unauthorized launch")
+	}
+	if events, _ := readTranscript(st.ID); len(events) != 0 {
+		t.Fatal("unauthorized transcript", events)
+	}
+	st.Initiator = ""
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deliberateWith(context.Background(), st.ID, "", p, invoke); !errors.Is(err, ErrNotOrganizer) {
+		t.Fatalf("unnamed organizer: %v", err)
+	}
+	if calls != 0 {
+		t.Fatal("unnamed organizer launched")
+	}
+	st.Initiator = inst.MailAddress()
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, as := range []string{"", inst.UUID, inst.MailAddress()} {
+		result, err := deliberateWith(context.Background(), st.ID, as, p, invoke)
+		if err != nil || result.Stop != "concluded-proposal" {
+			t.Fatalf("own instance: %+v %v", result, err)
+		}
+	}
+	events, _ := readTranscript(st.ID)
+	for _, ev := range events {
+		if ev.Kind == "deliberation-start" && ev.Speaker != inst.MailAddress() {
+			t.Fatal("wrong attribution", ev)
+		}
 	}
 }

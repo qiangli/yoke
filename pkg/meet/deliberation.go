@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/chat"
 )
 
@@ -69,6 +70,10 @@ func Deliberate(ctx context.Context, ref, actor string, p DeliberationPlan, runn
 
 func deliberateWith(ctx context.Context, ref, actor string, p DeliberationPlan, invoke func(context.Context, chat.Options) (chat.Result, error)) (result DeliberationResult, err error) {
 	result.Status = "proposal"
+	actor, err = bus.ResolveAuthoredActor(actor)
+	if err != nil {
+		return result, err
+	}
 	st, err := roomOf(ref)
 	if err != nil {
 		return result, err
@@ -82,8 +87,11 @@ func deliberateWith(ctx context.Context, ref, actor string, p DeliberationPlan, 
 	if err != nil {
 		return result, err
 	}
-	if err = requireOrganizer(st, actor); err != nil {
-		return result, err
+	// Paid orchestration must fail closed for legacy unnamed organizers. Do
+	// not inherit roster recovery exceptions or delegated role-holder powers.
+	org := st.initiatorName()
+	if org == "" || actor == "" || !(strings.EqualFold(actor, org) || strings.EqualFold(canonAgent(actor), canonAgent(org))) {
+		return result, fmt.Errorf("meet: deliberation requires the authenticated named organizer: %w", ErrNotOrganizer)
 	}
 	if st.board() || st.Status != "open" {
 		return result, fmt.Errorf("meet: deliberation requires an open meeting")

@@ -10,9 +10,6 @@ func newDeliberationCmd() *cobra.Command {
 	var p DeliberationPlan
 	var actor string
 	cmd := &cobra.Command{Use: "deliberate ROOM", Short: "Bounded independent proposals, critique and targeted evidence consultation", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if actor == "" {
-			actor = humanName()
-		}
 		r, err := Deliberate(cmd.Context(), args[0], actor, p, nil)
 		if e := json.NewEncoder(cmd.OutOrStdout()).Encode(r); e != nil {
 			return e
@@ -20,7 +17,7 @@ func newDeliberationCmd() *cobra.Command {
 		return err
 	}}
 	f := cmd.Flags()
-	f.StringVar(&actor, "as", "", "Organizer identity")
+	f.StringVar(&actor, "as", "", "Organizer identity (must match authenticated caller; defaults to current actor)")
 	f.StringVar(&p.Question, "question", "", "Question to deliberate")
 	f.StringSliceVar(&p.Proposers, "proposers", nil, "Independent proposer seats (at least two)")
 	f.StringSliceVar(&p.Experts, "experts", nil, "Eligible targeted evidence experts")
