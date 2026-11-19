@@ -119,7 +119,11 @@ func TestPreparedTurnDoesNotAcknowledgeBeforeSuccessfulInjection(t *testing.T) {
 	}
 }
 
-func TestTurnAdmissionBoundsLargeMixedBatchAndKeepsOmissionsUnread(t *testing.T) {
+// The per-turn cap bounds a large batch to one inline message plus a counter
+// line, and a delivered counter advances the watermark past the counted tail:
+// the next turn is quiet, while every record stays durable (DEMOTE, NEVER
+// DROP).
+func TestTurnAdmissionCapsBatchAndDeliveredCounterAdvancesWatermark(t *testing.T) {
 	isolate(t)
 	joinLive(t, "bounded-session", "/tmp/bounded.sock")
 	subscribe(t, Subscription{Subscriber: "bounded", Topics: []string{"*"}, Instance: "bounded-session"})
@@ -138,11 +142,14 @@ func TestTurnAdmissionBoundsLargeMixedBatchAndKeepsOmissionsUnread(t *testing.T)
 	if len(prepared.Text) > DefaultTurnAdmissionBytes {
 		t.Fatalf("preamble is %d bytes", len(prepared.Text))
 	}
-	if !strings.Contains(prepared.Text, "BLOCKED ownership changed") || !strings.Contains(prepared.Text, admission.OverflowSchemaVersion) {
-		t.Fatalf("urgent/overflow projection missing:\n%s", prepared.Text)
+	if !strings.Contains(prepared.Text, "BLOCKED ownership changed") {
+		t.Fatalf("capped preamble lost the addressed urgent item:\n%s", prepared.Text)
 	}
-	if prepared.AdmissionReport().UnrepresentedItems == 0 {
-		t.Fatal("large batch unexpectedly had no unrepresented records")
+	if !strings.Contains(prepared.Text, "1 of 33 unread (1 addressed to you)") {
+		t.Fatalf("capped preamble hides the counted tail:\n%s", prepared.Text)
+	}
+	if rep := prepared.AdmissionReport(); rep.InputItems != 33 || rep.UnrepresentedItems == 0 {
+		t.Fatalf("capped report must account the whole batch, got %+v", rep)
 	}
 	if err := prepared.Commit(); err != nil {
 		t.Fatal(err)
@@ -151,8 +158,29 @@ func TestTurnAdmissionBoundsLargeMixedBatchAndKeepsOmissionsUnread(t *testing.T)
 	if err := retry.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if retry.AdmissionReport().InputItems == 0 {
-		t.Fatal("committing represented headers silently consumed omitted bodies")
+	if retry.AdmissionReport().InputItems != 0 {
+		t.Fatalf("a delivered counter re-sent the counted tail: %+v", retry.AdmissionReport())
+	}
+	// DEMOTE, NEVER DROP: the watermark moved, the records did not.
+	timeline, err := watchTimeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifies := 0
+	for _, e := range timeline {
+		if e.Type == room.EventNotify {
+			notifies++
+		}
+	}
+	if notifies != 33 {
+		t.Fatalf("committing the preamble dropped timeline records: %d notify events", notifies)
+	}
+	pending, err := ReadPending("bounded")
+	if err != nil || len(pending) != 33 {
+		t.Fatalf("committing the preamble dropped pending records: %d (err %v)", len(pending), err)
+	}
+	if unread, err := UnreadPending("bounded"); err != nil || len(unread) != 0 {
+		t.Fatalf("counted tail stayed unread after a delivered counter: %d (err %v)", len(unread), err)
 	}
 }
 
