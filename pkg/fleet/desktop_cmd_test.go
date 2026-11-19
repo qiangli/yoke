@@ -287,3 +287,65 @@ func TestDesktopPolicyRoute(t *testing.T) {
 		t.Fatalf("a refused route set reached the server: %d calls", len(calls))
 	}
 }
+
+func TestDesktopRequestAndOwnerRequests(t *testing.T) {
+	type call struct {
+		method, path, auth string
+		body               map[string]any
+	}
+	var calls []call
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := call{method: r.Method, path: r.URL.RequestURI(), auth: r.Header.Get("Authorization")}
+		if r.Body != nil {
+			json.NewDecoder(r.Body).Decode(&c.body)
+		}
+		calls = append(calls, c)
+		switch {
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(204)
+		case r.Method == http.MethodPost:
+			w.Write([]byte(`{"id":7,"people":2,"new":false}`))
+		default:
+			w.Write([]byte(`{"requests":[{"id":7,"wish":"make it purple","people":2}]}`))
+		}
+	}))
+	defer server.Close()
+	t.Setenv(SuperadminSessionEnv, "session-test")
+	run := func(args ...string) (string, error) {
+		cmd := NewDesktopCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(append(args, "--master", server.URL))
+		err := cmd.Execute()
+		return out.String(), err
+	}
+	if out, err := run("request", "make", "it", "purple", "--reason", "theme: unsupported value", "--token", "person-token"); err != nil || !strings.Contains(out, `"people":2`) {
+		t.Fatalf("request: %q %v", out, err)
+	}
+	if out, err := run("policy", "requests", "ls"); err != nil || !strings.Contains(out, "make it purple") {
+		t.Fatalf("ls: %q %v", out, err)
+	}
+	if _, err := run("policy", "requests", "rm", "7"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("policy", "requests", "rm", "seven"); err == nil {
+		t.Fatal("a non-numeric id was sent")
+	}
+	want := []struct{ method, path, auth string }{
+		{"POST", "/api/v1/desktop/request", "Bearer person-token"},
+		{"GET", "/api/v1/desktop-policy/requests", "Bearer session-test"},
+		{"DELETE", "/api/v1/desktop-policy/requests?id=7", "Bearer session-test"},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i, w := range want {
+		if calls[i].method != w.method || calls[i].path != w.path || calls[i].auth != w.auth {
+			t.Fatalf("call %d = %+v, want %+v", i, calls[i], w)
+		}
+	}
+	if calls[0].body["wish"] != "make it purple" || calls[0].body["reason"] != "theme: unsupported value" {
+		t.Fatalf("request body = %v", calls[0].body)
+	}
+}

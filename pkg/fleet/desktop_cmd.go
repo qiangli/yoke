@@ -120,6 +120,21 @@ func NewDesktopCmd() *cobra.Command {
 	root.AddCommand(&cobra.Command{Use: "wish WORDS...", Short: "Ask for a change in words; it applies only if it validates against the schema", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
 		return write(cmd, "wish", map[string]any{"wish": strings.Join(a, " ")}, false)
 	}})
+	var reason string
+	request := &cobra.Command{Use: "request WORDS...", Short: "Suggest a refused wish to the owner (people in the owner's circles; words only, nothing applied)", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
+		c, err := client(cmd)
+		if err != nil {
+			return err
+		}
+		raw, err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/desktop/request", map[string]any{"wish": strings.Join(a, " "), "reason": reason})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+		return err
+	}}
+	request.Flags().StringVar(&reason, "reason", "", "why it was refused (the refusal text)")
+	root.AddCommand(request)
 	root.AddCommand(&cobra.Command{Use: "undo", Short: "Step back one change (repeat to keep stepping back)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return write(cmd, "undo", map[string]any{}, false) }})
 	root.AddCommand(&cobra.Command{Use: "shape-only [on|off|toggle]", Short: "Toggle the single-Shape-button presentation", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
 		mode := "toggle"
@@ -193,7 +208,7 @@ func NewDesktopCmd() *cobra.Command {
 // session is read from the same environment variable as bashy superadmin.
 func newDesktopPolicyCmd() *cobra.Command {
 	var master string
-	policy := &cobra.Command{Use: "policy", Short: "Set the daily wish allowance and the wish route (superadmin, or a satellite's owner)"}
+	policy := &cobra.Command{Use: "policy", Short: "Set the daily wish allowance and the wish route, and read suggested wishes (superadmin, or a satellite's owner)"}
 	policy.PersistentFlags().StringVar(&master, "master", "", "Cloudbox or satellite URL (default: the saved account's)")
 	client := func(cmd *cobra.Command) (*boundary.Client, error) {
 		session := strings.TrimSpace(os.Getenv(SuperadminSessionEnv))
@@ -240,6 +255,17 @@ func newDesktopPolicyCmd() *cobra.Command {
 		return call(cmd, http.MethodDelete, path+"?owner="+url.QueryEscape(a[0]), nil)
 	}})
 	policy.AddCommand(newDesktopRouteCmd(call))
+	requests := &cobra.Command{Use: "requests", Short: "Refused wishes people in your circles suggested (most asked first)"}
+	requests.AddCommand(&cobra.Command{Use: "ls", Short: "List suggestions with how many people asked (never who)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return call(cmd, http.MethodGet, "/api/v1/desktop-policy/requests", nil)
+	}})
+	requests.AddCommand(&cobra.Command{Use: "rm ID", Short: "Dismiss a suggestion", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
+		if _, err := strconv.ParseUint(a[0], 10, 64); err != nil {
+			return fmt.Errorf("ID must be a number: %q", a[0])
+		}
+		return call(cmd, http.MethodDelete, "/api/v1/desktop-policy/requests?id="+a[0], nil)
+	}})
+	policy.AddCommand(requests)
 	return policy
 }
 
