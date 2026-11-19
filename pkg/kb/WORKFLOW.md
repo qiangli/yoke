@@ -1,10 +1,19 @@
 # Group outcome learning
 
-`bashy kb workflow -f report.json` previews a proposal. Add `--apply` and an
-explicit `--ring repo|host|agent` to store it using the existing KB candidate
-note writer. It does not run a model, execute report text, send feedback, learn
-a skill, or activate a shaped version. JSON output includes the note slug,
-current status, deduplication result, merged provenance and review guidance.
+`bashy kb workflow -f report.json` previews a proposal without writing.
+`--apply` fails closed: the CLI has no trusted complete-workflow resolver yet.
+Integrators call `ProposeWorkflow(dir, ring, report, apply, verifier)` with a
+trusted `WorkflowVerifier` that independently resolves **every** report against
+completed-workflow evidence and binds workflow, exact candidate, reported
+outcome and applicability. A nil resolver, rejected evidence, or any unverified
+or cancelled outcome refuses storage. A caller-supplied boolean is not evidence.
+The resolver also checks previously stored reports when merging provenance.
+
+Successful verification writes only an ordinary KB candidate note. It does not
+validate knowledge, execute report text, send feedback, learn a skill, or activate
+a shaped version. JSON output includes slug, status, deduplication result,
+merged provenance and review guidance. Page attribution uses the generic role
+`workflow-proposer`; human OS logins and host identities are not stamped.
 
 Example input (illustrative references, not a completed-workflow attestation):
 
@@ -29,7 +38,8 @@ Example input (illustrative references, not a completed-workflow attestation):
 Use `kind: incident` for a failure guardrail. Outcomes are **reported**
 `passed`, `failed`, `cancelled`, or `unverified`. Every report requires a
 reporter, episode, evidence reference and summary. These are supplied claims,
-not authenticated identities or verification grants. The importer rejects
+not authenticated identities or verification grants. The preview accepts all reported outcomes; storage requires independently
+verified completed outcomes (`passed` or `failed`). The importer rejects
 unknown fields, incomplete provenance and trailing JSON. Shareable rings use
 the existing privacy check, including provenance and references.
 
@@ -47,8 +57,9 @@ A later report on a validated, stale or superseded note requires explicit
 review/supersession; an identical retry leaves that record untouched. Ordinary
 `kb validate` remains a separate evidence-bearing action and serializes with
 workflow import. No report outcome fills the KB validation evidence field.
-Evidence references are not dereferenced automatically; reviewers must inspect
-the source identity, actual gate result, applicability and unresolved failures.
+The integrating verifier must resolve source identity, actual workflow gate
+result, applicability and unresolved failures independently of the submitted
+report. A package gate alone does not establish completion of a group workflow.
 
 Reuse existing downstream channels after review:
 
@@ -64,7 +75,6 @@ Reuse existing downstream channels after review:
 Sprint 666 evidence boundaries: S1 supplies explicit adoption and result-room
 references; S5 supplies candidate, ownership and external-effect continuity;
 S10 supplies the actual complete workflow gate and baseline measurements.
-Record each source separately. Until S10 evidence exists, retain `unverified`
-for the integrated outcome and do not claim a completed workflow or measured
-improvement. Package tests validate the importer mechanics, not those live
+Record each source separately. Until S10 evidence exists, preview only; do not store a proposal or claim a
+completed workflow or measured improvement. Package tests validate the importer mechanics, not those live
 workflows. Test fixtures in `workflow_test.go` are synthetic reports.

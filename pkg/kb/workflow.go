@@ -111,7 +111,7 @@ func newWorkflowCmd(dir, ring *string) *cobra.Command {
 	var file string
 	var apply bool
 	cmd := &cobra.Command{
-		Use: "workflow", Short: "Preview group outcome learning; --apply writes candidate notes only",
+		Use: "workflow", Short: "Preview group outcome learning; storage requires an independent resolver",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			var input io.Reader = c.InOrStdin()
@@ -143,67 +143,112 @@ func newWorkflowCmd(dir, ring *string) *cobra.Command {
 			if err := normalizeWorkflow(&w); err != nil {
 				return err
 			}
-			// Apply the existing shareable-write check to the complete payload,
-			// including references and provenance, before any store mutation.
-			if *ring != "agent" {
-				if err := shareableWriteCheck(workflowBody(w)); err != nil {
-					return err
-				}
-			}
-			slug := workflowKey(w)
-			s := openRing(*dir, *ring)
-			if apply {
-				lock, err := workflowLock(s)
-				if err != nil {
-					return err
-				}
-				defer lock.Release()
-			}
-			p, err := s.Load(slug)
-			duplicate := false
-			if err == nil {
-				if p.Workflow == nil || workflowKey(*p.Workflow) != slug {
-					return fmt.Errorf("kb: workflow slug collision")
-				}
-				merged := mergeWorkflowReports(p.Workflow.Reports, w.Reports)
-				duplicate = len(merged) == len(p.Workflow.Reports)
-				if !duplicate && p.Status != StatusCandidate {
-					return fmt.Errorf("kb: workflow is %s; use explicit supersede/review for new evidence", p.Status)
-				}
-				w.Reports = merged
-			} else if !os.IsNotExist(err) {
+			result, err := ProposeWorkflow(*dir, *ring, w, apply, nil)
+			if err != nil {
 				return err
 			}
-			if p == nil {
-				typ := TypeRunbook
-				if w.Kind == "incident" {
-					typ = TypeGotcha
-				}
-				p = &Page{Slug: slug, Form: FormNote, Type: typ, Status: StatusCandidate,
-					Title: w.Kind + ": " + w.Finding, Description: w.Applicability,
-					Source: &Source{Tool: ToolID(), Host: HostID(), Episode: EpisodeID()},
-					Tags:   []string{"group-workflow", "todo:cdae01f261b1"}}
-			}
-			if !duplicate {
-				p.Workflow = &w
-				p.Body = workflowBody(w)
-				if apply {
-					if err := s.Write(p, "workflow-propose"); err != nil {
-						return err
-					}
-				}
-			}
-			return json.NewEncoder(c.OutOrStdout()).Encode(struct {
-				Slug      string           `json:"slug"`
-				Status    string           `json:"status"`
-				Applied   bool             `json:"applied"`
-				Duplicate bool             `json:"duplicate"`
-				Workflow  WorkflowLearning `json:"workflow"`
-				Next      string           `json:"next"`
-			}{slug, p.Status, apply, duplicate, w, workflowBody(w)})
+			return json.NewEncoder(c.OutOrStdout()).Encode(result)
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "-", "workflow JSON file, or - for stdin (reported evidence only)")
-	cmd.Flags().BoolVar(&apply, "apply", false, "persist as an ordinary candidate KB note; never validate or activate")
+	cmd.Flags().BoolVar(&apply, "apply", false, "request storage (refused until a trusted workflow resolver is integrated)")
 	return cmd
+}
+
+// WorkflowVerifier must independently resolve every report against trusted
+// completed-workflow evidence, binding its workflow, exact candidate, outcome
+// and applicability. It must not trust report text or a caller-supplied verdict.
+// Returning nil permits proposal storage only, never validation or activation.
+type WorkflowVerifier func(WorkflowLearning) error
+
+type WorkflowProposal struct {
+	Slug      string           `json:"slug"`
+	Status    string           `json:"status"`
+	Applied   bool             `json:"applied"`
+	Duplicate bool             `json:"duplicate"`
+	Workflow  WorkflowLearning `json:"workflow"`
+	Next      string           `json:"next"`
+}
+
+// ProposeWorkflow composes a trusted outcome resolver with the existing KB
+// candidate writer. Without a resolver only a no-write preview is possible.
+func ProposeWorkflow(dir, ring string, w WorkflowLearning, apply bool, verify WorkflowVerifier) (*WorkflowProposal, error) {
+	w.Reports = append([]WorkflowReport(nil), w.Reports...)
+	if err := normalizeWorkflow(&w); err != nil {
+		return nil, err
+	}
+	if ring != "repo" && ring != "host" && ring != "agent" {
+		return nil, fmt.Errorf("kb: invalid workflow ring %q", ring)
+	}
+	if apply && verify == nil {
+		return nil, fmt.Errorf("kb: independently verified workflow evidence is required")
+	}
+
+	// Apply the existing shareable-write check to the complete payload,
+	// including references and provenance, before any store mutation.
+	if ring != "agent" {
+		if err := shareableWriteCheck(workflowBody(w)); err != nil {
+			return nil, err
+		}
+	}
+	slug := workflowKey(w)
+	s := openRing(dir, ring)
+	if apply {
+		lock, err := workflowLock(s)
+		if err != nil {
+			return nil, err
+		}
+		defer lock.Release()
+	}
+	p, err := s.Load(slug)
+	duplicate := false
+	if err == nil {
+		if p.Workflow == nil || workflowKey(*p.Workflow) != slug {
+			return nil, fmt.Errorf("kb: workflow slug collision")
+		}
+		merged := mergeWorkflowReports(p.Workflow.Reports, w.Reports)
+		duplicate = len(merged) == len(p.Workflow.Reports)
+		if !duplicate && p.Status != StatusCandidate {
+			return nil, fmt.Errorf("kb: workflow is %s; use explicit supersede/review for new evidence", p.Status)
+		}
+		w.Reports = merged
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if apply {
+		if verify == nil {
+			return nil, fmt.Errorf("kb: independently verified workflow evidence is required")
+		}
+		for _, r := range w.Reports {
+			if r.Outcome == "unverified" || r.Outcome == "cancelled" {
+				return nil, fmt.Errorf("kb: incomplete or unverified workflow evidence")
+			}
+		}
+		// Give the resolver a copy so it cannot alter the proposal after normalization.
+		evidence := w
+		evidence.Reports = append([]WorkflowReport(nil), w.Reports...)
+		if err := verify(evidence); err != nil {
+			return nil, fmt.Errorf("kb: workflow verification: %w", err)
+		}
+	}
+	if p == nil {
+		typ := TypeRunbook
+		if w.Kind == "incident" {
+			typ = TypeGotcha
+		}
+		p = &Page{Slug: slug, Form: FormNote, Type: typ, Status: StatusCandidate,
+			Title: w.Kind + ": " + w.Finding, Description: w.Applicability,
+			Source: &Source{Tool: "workflow-proposer", Episode: EpisodeID()},
+			Tags:   []string{"group-workflow", "todo:cdae01f261b1"}}
+	}
+	if !duplicate {
+		p.Workflow = &w
+		p.Body = workflowBody(w)
+		if apply {
+			if err := s.Write(p, "workflow-propose"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &WorkflowProposal{slug, p.Status, apply, duplicate, w, workflowBody(w)}, nil
 }

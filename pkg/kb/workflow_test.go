@@ -14,12 +14,9 @@ func workflowFixture() WorkflowLearning {
 }
 func importWorkflow(t *testing.T, dir string, w WorkflowLearning, apply bool) (string, error) {
 	t.Helper()
-	b, _ := json.Marshal(w)
-	args := []string{"workflow"}
-	if apply {
-		args = append(args, "--apply")
-	}
-	return run(t, dir, string(b), args...)
+	result, err := ProposeWorkflow(dir, "repo", w, apply, func(w WorkflowLearning) error { return nil })
+	b, _ := json.Marshal(result)
+	return string(b), err
 }
 func TestWorkflowCandidateDedupAndProvenance(t *testing.T) {
 	dir := t.TempDir()
@@ -45,7 +42,7 @@ func TestWorkflowCandidateDedupAndProvenance(t *testing.T) {
 	}
 	w.Reports[0].Reporter = "reviewer"
 	w.Reports[0].Ref = "todo:705359dbde34"
-	w.Reports[0].Outcome = "unverified"
+	w.Reports[0].Outcome = "passed"
 	if _, err := importWorkflow(t, dir, w, true); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +102,7 @@ func TestWorkflowConcurrentReports(t *testing.T) {
 	}
 }
 func TestWorkflowRejectsMalformedAndKeepsOutcomesCandidate(t *testing.T) {
-	for _, outcome := range []string{"passed", "failed", "unverified", "cancelled"} {
+	for _, outcome := range []string{"passed", "failed"} {
 		t.Run(outcome, func(t *testing.T) {
 			dir := t.TempDir()
 			w := workflowFixture()
@@ -165,5 +162,118 @@ func TestWorkflowPrivacyAndSizeBeforeWrite(t *testing.T) {
 	b, _ := json.Marshal(w)
 	if _, err := run(t, dir, string(b)+strings.Repeat(" ", 1<<20), "workflow", "--apply"); err == nil {
 		t.Fatal("oversized payload accepted")
+	}
+}
+
+func TestWorkflowRequiresIndependentVerification(t *testing.T) {
+	for _, outcome := range []string{"passed", "failed", "unverified", "cancelled"} {
+		for _, resolver := range []string{"missing", "reject", "accept"} {
+			t.Run(outcome+"/"+resolver, func(t *testing.T) {
+				dir := t.TempDir()
+				w := workflowFixture()
+				w.Reports[0].Outcome = outcome
+				var verify WorkflowVerifier
+				if resolver == "reject" {
+					verify = func(WorkflowLearning) error { return fmt.Errorf("candidate does not match trusted workflow gate") }
+				}
+				if resolver == "accept" {
+					verify = func(got WorkflowLearning) error {
+						if got.Candidate != w.Candidate || got.Workflow != w.Workflow || got.Applicability != w.Applicability || got.Reports[0].Ref != w.Reports[0].Ref {
+							t.Fatal("resolver lost evidence scope")
+						}
+						return nil
+					}
+				}
+				_, err := ProposeWorkflow(dir, "repo", w, true, verify)
+				allowed := resolver == "accept" && (outcome == "passed" || outcome == "failed")
+				if (err == nil) != allowed {
+					t.Fatalf("allowed=%v err=%v", allowed, err)
+				}
+				pages, _ := Open(dir).List()
+				if !allowed && len(pages) != 0 {
+					t.Fatal("refused evidence wrote knowledge")
+				}
+			})
+		}
+	}
+}
+
+func TestWorkflowWrittenPageOmitsHumanLogin(t *testing.T) {
+	for _, ring := range []string{"repo", "host", "agent"} {
+		t.Run(ring, func(t *testing.T) {
+			for _, key := range []string{"WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_AGENT", "CLAUDECODE"} {
+				t.Setenv(key, "")
+			}
+			t.Setenv("USER", "synthetic-private-login")
+			t.Setenv("LOGNAME", "synthetic-private-login")
+			dir := t.TempDir()
+			w := workflowFixture()
+			result, err := ProposeWorkflow(dir, ring, w, true, func(WorkflowLearning) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := os.ReadFile(Open(dir).PagePath(result.Slug))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(page), "synthetic-private-login") {
+				t.Fatal("written page leaked human login")
+			}
+			p, err := Open(dir).Load(result.Slug)
+			if err != nil || p.Source.Tool != "workflow-proposer" || p.Status != StatusCandidate {
+				t.Fatalf("unexpected provenance: %+v %v", p, err)
+			}
+		})
+	}
+}
+
+func TestWorkflowResolverBindsCompletedFixture(t *testing.T) {
+	trusted := workflowFixture()
+	trusted.Reports[0].Summary = "Synthetic completed recovery fixture"
+	resolver := func(w WorkflowLearning) error {
+		if w.Workflow != trusted.Workflow || w.Candidate != trusted.Candidate || w.Applicability != trusted.Applicability {
+			return fmt.Errorf("workflow scope mismatch")
+		}
+		for _, r := range w.Reports {
+			if r.Ref != trusted.Reports[0].Ref || r.Outcome != trusted.Reports[0].Outcome {
+				return fmt.Errorf("report not established by completed fixture")
+			}
+		}
+		return nil
+	}
+	for _, field := range []string{"unchanged", "workflow", "candidate", "applicability", "ref", "outcome"} {
+		t.Run(field, func(t *testing.T) {
+			w := workflowFixture()
+			switch field {
+			case "workflow":
+				w.Workflow = "different-workflow"
+			case "candidate":
+				w.Candidate = "different-candidate"
+			case "applicability":
+				w.Applicability = "different-scope"
+			case "ref":
+				w.Reports[0].Ref = "unknown-gate"
+			case "outcome":
+				w.Reports[0].Outcome = "failed"
+			}
+			dir := t.TempDir()
+			_, err := ProposeWorkflow(dir, "repo", w, true, resolver)
+			if (err == nil) != (field == "unchanged") {
+				t.Fatalf("unexpected result: %v", err)
+			}
+			pages, _ := Open(dir).List()
+			if field != "unchanged" && len(pages) != 0 {
+				t.Fatal("unverified evidence persisted")
+			}
+		})
+	}
+	b, _ := json.Marshal(trusted)
+	dir := t.TempDir()
+	if _, err := run(t, dir, string(b), "workflow", "--apply"); err == nil {
+		t.Fatal("CLI trusted reported success without resolver")
+	}
+	pages, _ := Open(dir).List()
+	if len(pages) != 0 {
+		t.Fatal("CLI refusal wrote a page")
 	}
 }
