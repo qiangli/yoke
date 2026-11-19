@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/principal"
 )
@@ -196,5 +197,45 @@ func TestClaimReleasesTheLease(t *testing.T) {
 		Ref: ClaimRef(id), Holder: taker("codex-b", "ep-bbb"), Mode: coord.ModeLease,
 	}); err != nil {
 		t.Fatalf("the take held its lease past the stamp: %v", err)
+	}
+}
+
+// The kernel hold can precede both diagnostic metadata and the ledger entry.
+// Keep the named-refusal contract without treating missing metadata as a grant.
+func TestClaimWaitsForHolderPublication(t *testing.T) {
+	want := &coord.Conflict{Claim: &coord.Claim{Holder: taker("winner", "episode")}}
+	calls := 0
+	_, lock, err := acquireHandoffWith(context.Background(), coord.Request{}, func(context.Context, coord.Request) (coord.Grant, *lockfile.Lock, error) {
+		calls++
+		if calls == 1 {
+			return coord.Grant{}, nil, lockfile.ErrHeld
+		}
+		return coord.Grant{}, nil, want
+	})
+	if calls != 2 || lock != nil || err != want {
+		t.Fatalf("calls=%d lock=%v error=%v", calls, lock, err)
+	}
+}
+
+func TestClaimPublicationWaitCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	_, lock, err := acquireHandoffWith(ctx, coord.Request{}, func(context.Context, coord.Request) (coord.Grant, *lockfile.Lock, error) {
+		calls++
+		cancel()
+		return coord.Grant{}, nil, lockfile.ErrHeld
+	})
+	if calls != 1 || lock != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("calls=%d lock=%v error=%v", calls, lock, err)
+	}
+}
+
+func TestClaimPublicationWaitBounded(t *testing.T) {
+	_, lock, err := acquireHandoffWith(context.Background(), coord.Request{}, func(context.Context, coord.Request) (coord.Grant, *lockfile.Lock, error) {
+		return coord.Grant{}, nil, lockfile.ErrHeld
+	})
+	if lock != nil || !errors.Is(err, lockfile.ErrHeld) || !strings.Contains(err.Error(), "holder metadata unavailable") {
+		t.Fatalf("lock=%v error=%v", lock, err)
 	}
 }

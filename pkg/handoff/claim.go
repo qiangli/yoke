@@ -5,10 +5,12 @@ package handoff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/policy/coord"
 	"github.com/qiangli/yoke/pkg/principal"
 )
@@ -80,7 +82,7 @@ func claimFrom(ctx context.Context, dir, sidecarDir string, rec *Record, holder 
 			rec.ID, rec.SupersededBy)
 	}
 	ref := ClaimRef(rec.ID)
-	g, lock, err := coord.AcquireAttachedRef(ctx, coord.Request{
+	g, lock, err := acquireHandoff(ctx, coord.Request{
 		Ref:    ref,
 		Holder: holder,
 		Mode:   coord.ModeAttached,
@@ -132,6 +134,38 @@ func claimFrom(ctx context.Context, dir, sidecarDir string, rec *Record, holder 
 		return nil, err
 	}
 	return rec, nil
+}
+
+// acquireHandoff tolerates the publication gap between the kernel hold and
+// its diagnostic holder/ledger record. Retry only an unnamed contention error;
+// never bypass the kernel hold or infer ownership from diagnostic metadata.
+func acquireHandoff(ctx context.Context, req coord.Request) (coord.Grant, *lockfile.Lock, error) {
+	return acquireHandoffWith(ctx, req, coord.AcquireAttachedRef)
+}
+
+func acquireHandoffWith(ctx context.Context, req coord.Request, acquire func(context.Context, coord.Request) (coord.Grant, *lockfile.Lock, error)) (coord.Grant, *lockfile.Lock, error) {
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return coord.Grant{}, nil, err
+		}
+		g, lock, err := acquire(ctx, req)
+		if !errors.Is(err, lockfile.ErrHeld) {
+			return g, lock, err
+		}
+		// A populated lock diagnostic is already actionable.
+		if _, ok := lockfile.HeldBy(err); ok {
+			return g, lock, err
+		}
+		select {
+		case <-ctx.Done():
+			return coord.Grant{}, nil, ctx.Err()
+		case <-deadline.C:
+			return coord.Grant{}, nil, fmt.Errorf("handoff %s is busy; holder metadata unavailable, retry later: %w", req.Ref.Name, err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // stored reads the store's copy of a record. A record that arrived by scp and

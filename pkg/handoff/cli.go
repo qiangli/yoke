@@ -309,7 +309,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				}
 				// Cancellation and pickup share one critical section: a cancel
 				// must not be acknowledged then erased by the pickup stamp.
-				g, lock, err := coord.AcquireAttachedRef(cmd.Context(), coord.Request{
+				g, lock, err := acquireHandoff(cmd.Context(), coord.Request{
 					Ref: ClaimRef(rec.ID), Holder: coord.Self(), Mode: coord.ModeAttached,
 					Intent: "resume --cancel " + rec.ID,
 				})
@@ -353,7 +353,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				// its final effect check and durable ownership stamp.
 				self := coord.Self()
 				ref := ClaimRef(rec.ID)
-				g, lock, err := coord.AcquireAttachedRef(cmd.Context(), coord.Request{
+				g, lock, err := acquireHandoff(cmd.Context(), coord.Request{
 					Ref: ref, Holder: self, Mode: coord.ModeAttached, Intent: "resume effect mutation " + rec.ID,
 				})
 				if err != nil {
