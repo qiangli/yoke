@@ -1,4 +1,4 @@
-import{r as Qt,j as We}from"./index-BCbgEqY-.js";/**
+import{r as Qt,j as We}from"./index-BxK4sSCY.js";/**
  * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
  * @license MIT
  *

@@ -1001,7 +1001,7 @@ test("action adoption requires preview and fresh confirmation after edits", asyn
   await page.route("**/api/rooms/*/actions/adopt", async route => {
     const body = route.request().postDataJSON(); submitted.push(body);
     if (body.confirm) confirms++;
-    await route.fulfill({ json: { room: "launch-room", preview: !body.confirm, results: [{ action: { id: "action-1", text: "Publish reviewed report" }, story: body.confirm ? "todo:reviewed" : "", note: "" }] } });
+    await route.fulfill({ json: { room: "launch-room", preview: !body.confirm, results: [{ action: { id: "action-1", text: "Publish reviewed report" }, story: body.confirm ? "todo:reviewed" : "todo:planned", note: "Server resolved candidate" }] } });
   });
   await page.goto(`${baseURL}/?mock=1&room=launch-room`);
   await page.getByLabel("Candidate action").selectOption("action-1");
@@ -1010,6 +1010,8 @@ test("action adoption requires preview and fresh confirmation after edits", asyn
   await expect(page.getByRole("button", { name: "Confirm adoption" })).toHaveCount(0);
   await page.getByRole("button", { name: "Preview tracked work" }).click();
   await expect(page.getByLabel("Adoption preview")).toContainText("Consequences:");
+  await expect(page.getByLabel("Server preview artifact")).toContainText("todo:planned");
+  await expect(page.getByLabel("Server preview artifact")).toContainText("Server resolved candidate");
   await page.getByLabel("Owner", { exact: true }).fill("reviewer");
   await expect(page.getByRole("button", { name: "Confirm adoption" })).toHaveCount(0);
   await page.getByRole("button", { name: "Preview tracked work" }).click();

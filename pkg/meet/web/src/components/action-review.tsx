@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 
 const actionSchema = z.object({ id: z.string(), text: z.string(), owner: z.string().optional(), source: z.string(), adopted: z.boolean(), story: z.string().optional() })
 const listSchema = z.object({ actions: actionSchema.array().nullable() })
-const resultSchema = z.object({ room: z.string(), preview: z.boolean(), results: z.array(z.object({ story: z.string().optional(), note: z.string().optional(), action: z.object({ id: z.string(), text: z.string() }) })).optional() })
+const resultSchema = z.object({ room: z.string(), preview: z.boolean(), results: z.array(z.object({ story: z.string().optional(), note: z.string().optional(), action: z.object({ id: z.string(), text: z.string() }).passthrough() }).passthrough()).optional() })
 type Action = z.infer<typeof actionSchema>
 type Terms = { actions: { action: string; owner: string; accept: string[]; depends: string[] }[]; sprint: number }
 async function api(room: string, suffix = "", body?: unknown) {
@@ -23,7 +23,7 @@ export function ActionReview({ room }: { room: string }) {
   const [accept, setAccept] = useState("")
   const [depends, setDepends] = useState("")
   const [sprint, setSprint] = useState("")
-  const [preview, setPreview] = useState<{ terms: Terms; text: string; source: string } | null>(null)
+  const [preview, setPreview] = useState<{ terms: Terms; text: string; source: string; artifact: z.infer<typeof resultSchema> } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [result, setResult] = useState("")
@@ -58,7 +58,8 @@ export function ActionReview({ room }: { room: string }) {
         setActions(listSchema.parse(await api(room)).actions || [])
       } else {
         if (!response.preview) throw new Error("Expected a read-only preview.")
-        setPreview({ terms, text: action.text, source: action.source })
+        if (!response.results?.length || response.results[0].action.id !== selected) throw new Error("Preview did not return the selected action artifact.")
+        setPreview({ terms, text: action.text, source: action.source, artifact: response })
       }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
@@ -82,6 +83,8 @@ export function ActionReview({ room }: { room: string }) {
       <p className="text-xs">Consequences: adds linked work to sprint {preview.terms.sprint}. The owner must deliver evidence; milestone review and execution approvals remain separate.</p>
       <p className="text-xs">Artifact: room {room}, action {selected} ({preview.source})</p>
       <p className="text-xs">{preview.text}</p><pre className="whitespace-pre-wrap text-xs">{JSON.stringify(preview.terms, null, 2)}</pre>
+      <p className="text-xs">Server preview artifact:</p>
+      <pre aria-label="Server preview artifact" className="whitespace-pre-wrap text-xs">{JSON.stringify(preview.artifact, null, 2)}</pre>
       <Button disabled={busy} onClick={() => void run(true)}>Confirm adoption</Button>
     </div>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
