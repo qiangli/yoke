@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -515,10 +516,22 @@ func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[str
 }
 
 // fleetBindingFingerprint invalidates a probe if the selected argv, declared
-// environment, or executable at the same path changes. Credential values stay
-// out of the cache; their state is bounded by the probe TTL.
+// environment, credential projection, or executable at the same path changes.
+// Credential values stay out of the cache; their state is bounded by the probe TTL.
 func fleetBindingFingerprint(launch *weaveAgentLaunch, path string) string {
 	material := launch.Tool + "\x00" + strings.Join(launch.Args, "\x00") + "\x00" + strings.Join(launch.Env, "\x00")
+	preserved := append([]string(nil), launch.PreserveEnv...)
+	sort.Strings(preserved)
+	material += "\x00preserve\x00" + strings.Join(preserved, "\x00")
+	aliases := make([]string, 0, len(launch.CredentialEnvAliases))
+	for target := range launch.CredentialEnvAliases {
+		aliases = append(aliases, target)
+	}
+	sort.Strings(aliases)
+	for _, target := range aliases {
+		// Source order is precedence when several credentials are present.
+		material += "\x00alias\x00" + target + "\x00" + strings.Join(launch.CredentialEnvAliases[target], "\x00")
+	}
 	if info, err := os.Stat(path); err == nil {
 		material += fmt.Sprintf("\x00%d\x00%d", info.Size(), info.ModTime().UnixNano())
 	}

@@ -79,7 +79,10 @@ func TestClassifyVerdicts(t *testing.T) {
 		// Said SOMETHING, but not the word. Fails: a pass must be earned by
 		// evidence, not by the absence of a signature we happened to list.
 		{"answered without the token", "Sure! The answer is OK.", false, ProbeFailed},
-		{"answered with the token", "here you go: PROBE_OK", false, ProbeOK},
+		{"answered after preamble", "tool banner\nPROBE_OK\n", false, ProbeOK},
+		{"prompt echo", "Reply with exactly PROBE_OK and do nothing else.", false, ProbeFailed},
+		{"token in prose", "here you go: PROBE_OK", false, ProbeFailed},
+		{"timed out after token", "PROBE_OK", true, ProbeFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

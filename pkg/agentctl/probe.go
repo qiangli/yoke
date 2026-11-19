@@ -98,9 +98,10 @@ func Classify(raw string, timedOut bool) (ProbeStatus, string) {
 			return ProbeNeedsAuth, "waiting for a human: " + sig
 		}
 	}
-	// THE ONLY WAY TO PASS. The agent said the word, so the whole chain — argv,
-	// flags, model id, credentials, the model itself — worked.
-	if strings.Contains(raw, "PROBE_OK") {
+	// A standalone answer line is required. A CLI that echoes the prompt can
+	// print PROBE_OK without ever reaching the model. A timed-out probe has not
+	// demonstrated a completed answer either.
+	if !timedOut && probeAnswered(raw) {
 		return ProbeOK, "launched headless and answered"
 	}
 
@@ -117,7 +118,7 @@ func Classify(raw string, timedOut bool) (ProbeStatus, string) {
 	// So the signature lists above are for DIAGNOSIS — telling an operator whether
 	// to re-peg a model, fix an argv, or go and log in. They are not what earns a
 	// pass. Only the agent saying PROBE_OK earns a pass.
-	if timedOut && len(strings.TrimSpace(raw)) < 40 {
+	if timedOut && len(strings.TrimSpace(raw)) < 40 && !probeAnswered(raw) {
 		return ProbeNeedsAuth, "stalled with no output — most likely an interactive gate"
 	}
 	if timedOut {
@@ -127,6 +128,15 @@ func Classify(raw string, timedOut bool) (ProbeStatus, string) {
 		return ProbeFailed, "produced no output"
 	}
 	return ProbeFailed, "ran, but never said PROBE_OK — read the output: " + firstLine(raw)
+}
+
+func probeAnswered(raw string) bool {
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.TrimSpace(ansiRE.ReplaceAllString(line, "")) == "PROBE_OK" {
+			return true
+		}
+	}
+	return false
 }
 
 // firstLine picks the most useful line to show an operator.

@@ -84,6 +84,38 @@ func TestExactBindingProbeGatesAssignment(t *testing.T) {
 	}
 }
 
+func TestBindingFingerprintInvalidatesCredentialProjection(t *testing.T) {
+	launch := &weaveAgentLaunch{
+		Tool: "agent-cli", Args: []string{"--model", "bound-model"},
+		PreserveEnv:          []string{"TOKEN_B", "TOKEN_A"},
+		CredentialEnvAliases: map[string][]string{"API_KEY": {"SOURCE_B", "SOURCE_A"}},
+	}
+	readyCacheBinding := fleetBindingFingerprint(launch, "nonexistent-test-binary")
+	launch.PreserveEnv = []string{"TOKEN_A", "TOKEN_B"}
+	if got := fleetBindingFingerprint(launch, "nonexistent-test-binary"); got != readyCacheBinding {
+		t.Fatal("reordering equivalent preserved names invalidated the probe")
+	}
+	launch.CredentialEnvAliases["API_KEY"] = []string{"SOURCE_A", "SOURCE_B"}
+	if got := fleetBindingFingerprint(launch, "nonexistent-test-binary"); got == readyCacheBinding {
+		t.Fatal("changed credential source precedence reused ready probe")
+	}
+	launch.CredentialEnvAliases["API_KEY"] = []string{"SOURCE_B", "SOURCE_A"}
+	launch.PreserveEnv[0] = "TOKEN_C"
+	if got := fleetBindingFingerprint(launch, "nonexistent-test-binary"); got == readyCacheBinding {
+		t.Fatal("changed preserved credential name reused ready probe")
+	}
+	launch.PreserveEnv[0] = "TOKEN_A"
+	launch.CredentialEnvAliases["API_KEY"][0] = "SOURCE_C"
+	if got := fleetBindingFingerprint(launch, "nonexistent-test-binary"); got == readyCacheBinding {
+		t.Fatal("changed credential source reused ready probe")
+	}
+	launch.CredentialEnvAliases["API_KEY"][0] = "SOURCE_B"
+	launch.CredentialEnvAliases = map[string][]string{"OTHER_KEY": {"SOURCE_B", "SOURCE_A"}}
+	if got := fleetBindingFingerprint(launch, "nonexistent-test-binary"); got == readyCacheBinding {
+		t.Fatal("changed credential target reused ready probe")
+	}
+}
+
 // pinFleetWith installs a scratch registry over the test ring and returns its
 // catalog for setup.
 func pinFleetWith(t *testing.T) *fleet.Catalog {
