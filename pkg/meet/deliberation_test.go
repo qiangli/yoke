@@ -15,6 +15,12 @@ import (
 
 func deliberationFixture(t *testing.T) (*State, DeliberationPlan) {
 	st := newRoom(t)
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("USER", "panel-human")
+	st.Human, st.Initiator = "panel-human", "panel-human"
+	oldDetect := bus.DetectHarness
+	bus.DetectHarness = nil
+	t.Cleanup(func() { bus.DetectHarness = oldDetect })
 	st.Participants = []string{"codex", "claude", "critic", "facilitator", "expert", "bystander"}
 	if e := st.save(); e != nil {
 		t.Fatal(e)
@@ -161,6 +167,7 @@ func TestDeliberationAuthenticatedOrganizer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("BASHY_PRINCIPAL", inst.URN())
+	bus.DetectHarness = func() (string, bool) { return "codex", true }
 	calls := 0
 	invoke := func(context.Context, chat.Options) (chat.Result, error) {
 		calls++
@@ -210,5 +217,52 @@ func TestDeliberationAuthenticatedOrganizer(t *testing.T) {
 		if ev.Kind == "deliberation-start" && ev.Speaker != inst.MailAddress() {
 			t.Fatal("wrong attribution", ev)
 		}
+	}
+}
+
+func TestDeliberationUnattributedHarnessHumanSpoof(t *testing.T) {
+	st, p := deliberationFixture(t)
+	bus.DetectHarness = func() (string, bool) { return "codex", true }
+	// The authored helper accepts this account-resolved person. Assert that
+	// precondition so this regression specifically exercises the reported hole.
+	actor, err := bus.ResolveAuthoredActor(st.Initiator)
+	if err != nil || actor != st.Initiator {
+		t.Fatalf("human resolution: %q %v", actor, err)
+	}
+	calls := 0
+	invoke := func(context.Context, chat.Options) (chat.Result, error) {
+		calls++
+		return chat.Result{Output: `{"text":"proposal"}`}, nil
+	}
+	if _, err := deliberateWith(context.Background(), st.ID, st.Initiator, p, invoke); err == nil {
+		t.Fatal("unattributed harness impersonated human")
+	}
+	cmd := NewMeetCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"deliberate", st.ID, "--as", st.Initiator})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "cannot deliberate as a human") {
+		t.Fatalf("CLI spoof: %v", err)
+	}
+	if calls != 0 {
+		t.Fatal("unauthorized panel")
+	}
+	if events, err := readTranscript(st.ID); err != nil || len(events) != 0 {
+		t.Fatalf("unauthorized transcript: %v %v", events, err)
+	}
+	// Outside an agent harness, only the account-bound human can organize.
+	bus.DetectHarness = func() (string, bool) { return "", false }
+	t.Setenv("USER", "different-human")
+	if _, err := deliberateWith(context.Background(), st.ID, st.Initiator, p, invoke); err == nil {
+		t.Fatal("other account impersonated organizer")
+	}
+	if calls != 0 {
+		t.Fatal("unauthorized account launched panel")
+	}
+	t.Setenv("USER", "")
+	t.Setenv("LOGNAME", st.Initiator)
+	result, err := deliberateWith(context.Background(), st.ID, st.Initiator, p, invoke)
+	if err != nil || result.Stop != "concluded-proposal" {
+		t.Fatalf("human organizer: %+v %v", result, err)
 	}
 }

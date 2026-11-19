@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -70,7 +71,7 @@ func Deliberate(ctx context.Context, ref, actor string, p DeliberationPlan, runn
 
 func deliberateWith(ctx context.Context, ref, actor string, p DeliberationPlan, invoke func(context.Context, chat.Options) (chat.Result, error)) (result DeliberationResult, err error) {
 	result.Status = "proposal"
-	actor, err = bus.ResolveAuthoredActor(actor)
+	actor, err = resolveDeliberationActor(actor)
 	if err != nil {
 		return result, err
 	}
@@ -239,4 +240,36 @@ func validateDeliberation(st *State, p DeliberationPlan) error {
 		seen[key] = true
 	}
 	return nil
+}
+
+// resolveDeliberationActor applies the same harness and account boundary as
+// responsibility routing. The authored-message helper alone intentionally
+// permits human names inside harnesses; paid orchestration must not.
+func resolveDeliberationActor(requested string) (string, error) {
+	actor, err := bus.ResolveAuthoredActor(requested)
+	if err != nil {
+		return "", err
+	}
+	agent := false
+	if id, ok := bus.ExplicitInstanceID(actor); ok {
+		inst, err := bus.InstanceStoreFn().Get(id)
+		agent = err == nil && inst.Active() && strings.EqualFold(actor, inst.MailAddress())
+	} else {
+		_, agent = registeredAgentFn(actor)
+	}
+	if !agent {
+		if bus.DetectHarness != nil {
+			if _, detected := bus.DetectHarness(); detected {
+				return "", fmt.Errorf("meet: an agent session cannot deliberate as a human")
+			}
+		}
+		self := strings.TrimSpace(os.Getenv("USER"))
+		if self == "" {
+			self = strings.TrimSpace(os.Getenv("LOGNAME"))
+		}
+		if self == "" || !strings.EqualFold(actor, self) {
+			return "", fmt.Errorf("meet: a human may deliberate only under the current principal")
+		}
+	}
+	return actor, nil
 }
