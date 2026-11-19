@@ -418,19 +418,86 @@ func clearAgentEnv(t *testing.T) {
 }
 
 // Agents share the operator's OS account: a worker launched with BASHY_AGENT is
-// not the room's human even though $USER names them and --by is omitted.
-func TestAgentSessionUnderSharedAccountHasNoAuthority(t *testing.T) {
+// its own principal, never the room's human, even though $USER names them and
+// --by is omitted or borrows their name.
+func TestAgentSessionUnderSharedAccountIsItsOwnPrincipal(t *testing.T) {
 	clearAgentEnv(t)
 	t.Setenv("USER", "room-human")
 	if p, err := callerPrincipal(""); err != nil || p != "room-human" {
 		t.Fatalf("human shell: %q %v", p, err)
 	}
 	t.Setenv("BASHY_AGENT", "worker")
-	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
-		t.Fatalf("agent with USER=room-human accepted: %v", err)
+	if p, err := callerPrincipal(""); err != nil || p != "worker" {
+		t.Fatalf("agent must be itself, got %q %v", p, err)
 	}
 	if _, err := callerPrincipal("room-human"); !errors.Is(err, ErrNoAuthority) {
-		t.Fatalf("agent with matching --by accepted: %v", err)
+		t.Fatalf("agent borrowing the human's name accepted: %v", err)
+	}
+	// A bare harness with no agent identity is unattributed.
+	clearAgentEnv(t)
+	t.Setenv("USER", "room-human")
+	t.Setenv("CLAUDECODE", "1")
+	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("unattributed harness accepted: %v", err)
+	}
+}
+
+// An agent organizer or sprint manager may confirm adoption under its own
+// identity; an unrelated agent, the secretary and an outsider may not; the human
+// still may.
+func TestAdoptionByAuthorizedAgentOrganizer(t *testing.T) {
+	st := newTestSession(t)
+	st.Initiator = "lead-bot"
+	st.RoleHolders = map[string]string{"conductor": "mgr-bot"}
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = record(st, "action", "qiangli", "", "bob: write the plan")
+	_, _ = record(st, "action", "qiangli", "", "bob: write the docs")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	acts, _ := RoomActions(st.ID, store)
+	if len(acts) != 2 {
+		t.Fatalf("candidates %+v", acts)
+	}
+	req := func(by string, i int) AdoptRequest {
+		return AdoptRequest{Store: store, Confirm: true, By: by, Actions: []ActionSpec{{Action: acts[i].ID, Accept: []string{"x"}}}}
+	}
+	for _, by := range []string{"worker", "codex", "claude", "mallory"} {
+		if _, err := AdoptActions(st.ID, req(by, 0)); !errors.Is(err, ErrNoAuthority) {
+			t.Fatalf("by %q: want ErrNoAuthority, got %v", by, err)
+		}
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatal("refused adoption wrote a story")
+	}
+	if _, err := AdoptActions(st.ID, req("lead-bot", 0)); err != nil {
+		t.Fatalf("agent organizer: %v", err)
+	}
+	if _, err := AdoptActions(st.ID, req("mgr-bot", 1)); err != nil {
+		t.Fatalf("role holder: %v", err)
+	}
+	// Repeat by the human adds nothing.
+	for _, i := range []int{0, 1} {
+		if _, err := AdoptActions(st.ID, req("qiangli", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if all, _ := store.List(); len(all) != 2 {
+		t.Fatalf("want 2 stories, got %d", len(all))
+	}
+	// End to end through the CLI principal: the launched organizer is itself.
+	clearAgentEnv(t)
+	t.Setenv("USER", "qiangli")
+	t.Setenv("BASHY_AGENT", "lead-bot")
+	p, err := callerPrincipal("")
+	if err != nil || requireAdoptionAuthority(st, p) != nil {
+		t.Fatalf("launched organizer: %q %v", p, err)
+	}
+	t.Setenv("BASHY_AGENT", "worker")
+	p, _ = callerPrincipal("")
+	if !errors.Is(requireAdoptionAuthority(st, p), ErrNoAuthority) {
+		t.Fatal("unrelated launched agent accepted")
 	}
 }
 

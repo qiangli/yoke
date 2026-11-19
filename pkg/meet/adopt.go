@@ -647,8 +647,9 @@ func newAdoptCmd() *cobra.Command {
 		Long: "Without --confirm this only lists the room's actions and their adoption state.\n" +
 			"Adopting is explicit: name each action with --action and give it at least one\n" +
 			"--accept ID=CRITERION; --owner ID=NAME and --depends ID=ACTION|STORY are optional.\n" +
-			"--confirm needs the calling user to be the room's human or convener; an agent, the\n" +
-			"secretary or an outsider is refused, and --by cannot name anyone else.\n" +
+			"--confirm needs the caller, under their own identity, to be the room's human or\n" +
+			"convener, or the agent that is its organizer or sprint manager; the secretary,\n" +
+			"another agent or an outsider is refused, and --by cannot name anyone else.\n" +
 			"Secretary-proposed actions are never adopted unless named. Re-running is\n" +
 			"safe: the action ID is stable, so an adopted action never yields a second story.\n" +
 			"--reconcile reports (with --confirm, requests) reconciliation for stories whose action changed.",

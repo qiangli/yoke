@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/issue"
 	"github.com/qiangli/yoke/pkg/principal"
@@ -17,8 +18,8 @@ import (
 // sprint` already use. Meet imports pkg/todo only; it never imports weave, which
 // imports Meet.
 
-// ErrNoAuthority marks an adoption attempted without explicit human authority.
-var ErrNoAuthority = errors.New("meet: adoption needs an explicit human confirmation")
+// ErrNoAuthority marks an adoption attempted without explicit authority.
+var ErrNoAuthority = errors.New("meet: adoption needs explicit confirmation from the room's human or its organizer/sprint manager")
 
 // ActionStore answers which story register the browser routes and API callers
 // use when the request does not name one. An embedder may replace it.
@@ -77,29 +78,76 @@ func storeFor(s *issue.Store) (*issue.Store, error) {
 	return ActionStore()
 }
 
-// requireHumanAuthority refuses an adopter that is a seated agent: the secretary,
-// the chair or any other participant. A synthesis or a proposal is never an
-// authority; only a person naming the actions is.
-func requireHumanAuthority(st *State, by string) error {
+// requireAdoptionAuthority decides whether by may confirm an adoption. Two
+// principals qualify, each under its OWN identity:
+//
+//   - the room's person, or the human who convened it;
+//   - an agent that holds the room's organizer or sprint-manager seat — the
+//     initiator that convened it, a verified permanent-role holder, or the current
+//     holder of the seat the room advertises for (DefaultTo).
+//
+// A secretary's synthesis, a proposal, a plain participant, an observer and an
+// unknown name carry no authority. by is a name the CALLER has already bound to a
+// real principal (callerPrincipal for the CLI, a verified vouch for the browser);
+// this check never trusts it beyond comparing it with the room.
+func requireAdoptionAuthority(st *State, by string) error {
 	who := strings.TrimSpace(strings.TrimPrefix(by, "@"))
 	if who == "" {
-		return fmt.Errorf("%w: no confirming person named", ErrNoAuthority)
+		return fmt.Errorf("%w: no confirming principal named", ErrNoAuthority)
 	}
-	canon := canonAgent(who)
-	for _, seat := range append([]string{st.Secretary, st.chair()}, st.Participants...) {
-		if seat != "" && (strings.EqualFold(seat, who) || strings.EqualFold(canonAgent(seat), canon)) {
-			return fmt.Errorf("%w: %s is a seated agent, not the human who agrees the action", ErrNoAuthority, who)
-		}
+	if agentHoldsOrganizerSeat(st, who) {
+		return nil
 	}
-	if _, ok := fleet.New().Agent(who); ok {
-		return fmt.Errorf("%w: %s is an agent, not the human who agrees the action", ErrNoAuthority, who)
+	if isAgentIdentity(st, who) {
+		return fmt.Errorf("%w: agent %s is neither this room's organizer nor its sprint manager", ErrNoAuthority, who)
 	}
 	// An unknown name is not a human: only the room's own person, or the human
 	// who convened it, holds the authority. Observers watch; they do not decide.
 	if sameHuman(who, st.Human) || (st.initiatorKind() == "human" && sameHuman(who, st.initiatorName())) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s is neither this room's human nor the person who convened it", ErrNoAuthority, who)
+	return fmt.Errorf("%w: %s is neither this room's human, its organizer nor its sprint manager", ErrNoAuthority, who)
+}
+
+// isAgentIdentity reports whether name is a seated or fleet agent.
+func isAgentIdentity(st *State, name string) bool {
+	canon := canonAgent(name)
+	for _, seat := range append([]string{st.Secretary, st.chair()}, st.Participants...) {
+		if seat != "" && (strings.EqualFold(seat, name) || strings.EqualFold(canonAgent(seat), canon)) {
+			return true
+		}
+	}
+	if org := st.initiatorName(); org != "" && st.initiatorKind() == "agent" && (strings.EqualFold(org, name) || strings.EqualFold(canonAgent(org), canon)) {
+		return true
+	}
+	_, ok := fleet.New().Agent(name)
+	return ok
+}
+
+func sameAgent(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	return a != "" && b != "" && (strings.EqualFold(a, b) || strings.EqualFold(canonAgent(a), canonAgent(b)))
+}
+
+// agentHoldsOrganizerSeat is true for the agent that convened the room, a
+// verified permanent-role holder, or the current holder of the room's advertised
+// seat (the sprint's manager). Unlike requireOrganizer an unnamed initiator
+// grants nothing: adoption writes work, so there is no permissive fallback.
+func agentHoldsOrganizerSeat(st *State, who string) bool {
+	if st.initiatorKind() == "agent" && sameAgent(who, st.initiatorName()) {
+		return true
+	}
+	for _, h := range st.RoleHolders {
+		if sameAgent(who, h) {
+			return true
+		}
+	}
+	if label := strings.TrimSpace(st.DefaultTo); label != "" {
+		if holder, _ := bus.RoleHolderFor(label); sameAgent(who, holder) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameHuman(a, b string) bool {
@@ -110,19 +158,24 @@ func sameHuman(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-// callerPrincipal is who is actually at the CLI: the OS user, provided no agent
-// identity is attached to the process. A --by naming
-// anyone else is refused — the flag cannot lend authority, it can only repeat
-// who the caller already is.
+// callerPrincipal is who is actually at the CLI, under their own identity: an
+// agent session is the agent its launcher named (BASHY_PRINCIPAL / BASHY_AGENT,
+// which only the launcher can set), otherwise the OS user at a bare shell. A bare
+// harness with no agent identity is unattributed and refused, and --by cannot
+// name anyone but the caller — the flag repeats who the caller already is.
 func callerPrincipal(by string) (string, error) {
-	// An agent session — launched (BASHY_AGENT, BASHY_PRINCIPAL) or a bare
-	// harness (CLAUDECODE, …) — is never the room's human, whatever $USER says:
-	// agents share the operator's OS account.
+	by = strings.TrimSpace(strings.TrimPrefix(by, "@"))
 	if ref, ok := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self(); ok {
-		return "", fmt.Errorf("%w: caller is an agent session (%s), not a human", ErrNoAuthority, ref.Name)
+		if ref.Kind != principal.KindAgent || strings.TrimSpace(ref.Name) == "" {
+			return "", fmt.Errorf("%w: caller is an unattributed %s session (%s); run as a launched agent or a human shell", ErrNoAuthority, ref.Kind, ref.Name)
+		}
+		if by != "" && !sameAgent(by, ref.Name) {
+			return "", fmt.Errorf("%w: --by %s is not the calling agent (%s)", ErrNoAuthority, by, ref.Name)
+		}
+		return ref.Name, nil
 	}
 	me := humanName()
-	if by = strings.TrimSpace(by); by != "" && !strings.EqualFold(by, me) {
+	if by != "" && !strings.EqualFold(by, me) {
 		return "", fmt.Errorf("%w: --by %s is not the calling user (%s)", ErrNoAuthority, by, me)
 	}
 	return me, nil
@@ -202,7 +255,7 @@ func RoomActions(ref string, store *issue.Store) ([]ActionView, error) {
 
 // AdoptActions previews or adopts the named actions as linked sprint stories.
 // Without Confirm nothing is written. With Confirm the caller must be a human
-// (see requireHumanAuthority) and each action needs acceptance criteria. Adopting
+// (see requireAdoptionAuthority) and each action needs acceptance criteria. Adopting
 // an action twice, concurrently or not, yields one story.
 func AdoptActions(ref string, req AdoptRequest) (*AdoptResponse, error) {
 	st, current, err := roomActions(ref)
@@ -220,7 +273,7 @@ func AdoptActions(ref string, req AdoptRequest) (*AdoptResponse, error) {
 		return resp, err
 	}
 	if req.Confirm {
-		if err := requireHumanAuthority(st, req.By); err != nil {
+		if err := requireAdoptionAuthority(st, req.By); err != nil {
 			return nil, err
 		}
 	}
@@ -316,7 +369,7 @@ func ReconcileActions(ref string, req ReconcileRequest) ([]ReconcileFinding, err
 		return nil, err
 	}
 	if req.Confirm {
-		if err := requireHumanAuthority(st, req.By); err != nil {
+		if err := requireAdoptionAuthority(st, req.By); err != nil {
 			return nil, err
 		}
 	}
