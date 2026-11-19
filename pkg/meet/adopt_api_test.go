@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -396,5 +397,89 @@ func TestAgentSessionUnderSharedAccountHasNoAuthority(t *testing.T) {
 	}
 	if _, err := callerPrincipal("room-human"); !errors.Is(err, ErrNoAuthority) {
 		t.Fatalf("agent with matching --by accepted: %v", err)
+	}
+}
+
+// A note posted through Mark carrying the marker text cannot pre-seed the
+// idempotency key and suppress the real notice.
+func TestPreseededMarkerNoteDoesNotSuppressNotices(t *testing.T) {
+	st := newTestSession(t)
+	tickingClock(t)
+	ev, _ := record(st, "action", "qiangli", "", "bob: write the plan")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	acts, _ := RoomActions(st.ID, store)
+	if _, err := AdoptActions(st.ID, AdoptRequest{Store: store, Confirm: true, By: "qiangli", Actions: []ActionSpec{{Action: acts[0].ID, Accept: []string{"x"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := store.List()
+	story := all[0]
+	for _, m := range []string{"outcome-id:" + story.ID, "reconcile-id:" + story.ID} {
+		if _, err := Mark(st.ID, "note", "spoof ["+m+"]"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := retractRecord(st, ev, "qiangli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileActions(st.ID, ReconcileRequest{Confirm: true, By: "qiangli", Store: store}); err != nil {
+		t.Fatal(err)
+	}
+	if n := countNotes(t, st.ID, "reconcile: story"); n != 1 {
+		t.Fatalf("reconcile notice suppressed by spoof: %d", n)
+	}
+	story.Status = todo.StatusDone
+	if _, err := store.Save(story); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReturnOutcome(st.ID, OutcomeRequest{Story: story.ID, Evidence: []string{"commit:abc123"}, By: "qiangli", Store: store}); err != nil {
+		t.Fatal(err)
+	}
+	if n := countNotes(t, st.ID, "commit:abc123"); n != 1 {
+		t.Fatalf("outcome notice suppressed by spoof: %d", n)
+	}
+}
+
+// A retraction landing after the candidate scan, before the locked write, stops
+// the adoption.
+func TestRetractionBeforeLockedWriteBlocksAdoption(t *testing.T) {
+	st := newTestSession(t)
+	tickingClock(t)
+	ev, _ := record(st, "action", "qiangli", "", "bob: write the plan")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	acts, _ := RoomActions(st.ID, store)
+	beforeAdoptLock = func() { _, _ = retractRecord(st, ev, "qiangli") }
+	t.Cleanup(func() { beforeAdoptLock = nil })
+	_, err := AdoptActions(st.ID, AdoptRequest{Store: store, Confirm: true, By: "qiangli", Actions: []ActionSpec{{Action: acts[0].ID, Accept: []string{"x"}}}})
+	if err == nil || !strings.Contains(err.Error(), "withdrawn") {
+		t.Fatalf("want withdrawn error, got %v", err)
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatal("withdrawn action was filed")
+	}
+}
+
+// An unreadable transcript is an error on the write paths, not an empty room.
+func TestUnreadableTranscriptFailsWritePaths(t *testing.T) {
+	st := newTestSession(t)
+	_, _ = record(st, "action", "qiangli", "", "bob: write the plan")
+	dir, err := storeDir(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := dir + "/transcript.jsonl"
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p, 0o755); err != nil { // open succeeds, read fails
+		t.Fatal(err)
+	}
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	if _, err := RoomActions(st.ID, store); err == nil {
+		t.Fatal("RoomActions ignored a transcript read error")
+	}
+	if err := postOnce(st, "qiangli", "outcome-id:x", "n"); err == nil {
+		t.Fatal("postOnce ignored a transcript read error")
 	}
 }

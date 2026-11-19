@@ -128,29 +128,38 @@ func callerPrincipal(by string) (string, error) {
 	return me, nil
 }
 
-// roomMarked reports whether the room's transcript already carries a note with
-// the idempotency marker, so a retry after a crash does not post it twice.
-func roomMarked(room, marker string) bool {
-	events, _ := readTranscript(room)
+// roomMarked reports whether the room's transcript already carries a notice
+// written by the adoption code under this marker, so a retry after a crash does
+// not post it twice. Only the dedicated Marker field counts: note text is
+// caller-controlled and cannot pre-seed it.
+func roomMarked(room, marker string) (bool, error) {
+	events, err := readTranscript(room)
+	if err != nil {
+		return false, err
+	}
 	for _, e := range events {
-		if e.Kind == "note" && strings.Contains(e.Text, marker) {
-			return true
+		if e.Kind == "note" && e.Marker == marker {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // postOnce records a note unless the room already holds its marker.
 func postOnce(st *State, by, marker, text string) error {
-	if roomMarked(st.ID, marker) {
-		return nil
+	done, err := roomMarked(st.ID, marker)
+	if err != nil || done {
+		return err
 	}
-	_, err := record(st, "note", by, "", text+" ["+marker+"]")
-	return err
+	ev := Event{Round: st.Round, Speaker: by, Kind: "note", Text: sanitizeTurn(text), Marker: marker, TS: nowFn()}
+	return appendEvent(st.ID, ev)
 }
 
 // afterNotify is a test seam between the room post and the story mark.
 var afterNotify func() error
+
+// beforeAdoptLock is a test seam between the candidate scan and the locked write.
+var beforeAdoptLock func()
 
 // roomActions loads the room and its active candidate actions.
 func roomActions(ref string) (*State, []agreedAction, error) {
@@ -158,7 +167,10 @@ func roomActions(ref string) (*State, []agreedAction, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	events, _ := readTranscript(st.ID)
+	events, err := readTranscript(st.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("meet: reading room %s: %w", st.ID, err)
+	}
 	return st, agreedActions(st.ID, events, loadSynthesis(st.ID)), nil
 }
 
@@ -240,7 +252,33 @@ func AdoptActions(ref string, req AdoptRequest) (*AdoptResponse, error) {
 			return nil, err
 		}
 	}
-	resp.Results, err = adoptActions(st.ID, reg, selected, specs, strings.TrimSpace(req.By), sprint, req.Confirm)
+	by := strings.TrimSpace(req.By)
+	if !req.Confirm {
+		resp.Results, err = adoptActionsLocked(st.ID, reg, selected, specs, by, sprint, false)
+		return resp, err
+	}
+	if beforeAdoptLock != nil {
+		beforeAdoptLock()
+	}
+	// Re-read the room under the register lock: a retraction that landed after
+	// the candidate scan must stop the adoption, not be filed anyway.
+	err = withStoreLock(reg, func() error {
+		_, fresh, err := roomActions(st.ID)
+		if err != nil {
+			return err
+		}
+		active := map[string]bool{}
+		for _, a := range fresh {
+			active[a.ID] = true
+		}
+		for _, a := range selected {
+			if !active[a.ID] {
+				return fmt.Errorf("meet: action %s was withdrawn from room %s before it could be adopted", a.ID, st.ID)
+			}
+		}
+		resp.Results, err = adoptActionsLocked(st.ID, reg, selected, specs, by, sprint, true)
+		return err
+	})
 	return resp, err
 }
 

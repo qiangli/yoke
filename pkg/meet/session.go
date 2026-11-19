@@ -107,6 +107,11 @@ type Event struct {
 	// rather than discover a hole where it used to be.
 	Retracts string `json:"retracts,omitempty"`
 
+	// Marker is the idempotency key of a system-written adoption notice
+	// (outcome or reconcile). It is a dedicated field, set only by the adoption
+	// code, so no note a caller posts through Mark or the HTTP routes can carry it.
+	Marker string `json:"marker,omitempty"`
+
 	// Raw is the agent's UN-normalized output, carried to a client only when it
 	// explicitly asked to debug the transport (see renderEvent). It is never
 	// stored — the record holds prose — and is absent from every ordinary read,
