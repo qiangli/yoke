@@ -31,12 +31,13 @@ func newRouteCmd() *cobra.Command {
 					return encodeErr
 				}
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "question → %s: %s (%s)\n", receipt.Question.To, receipt.Question.State, receipt.Question.Channel)
+				fmt.Fprintf(cmd.OutOrStdout(), "route %s\n", receipt.OperationID)
+				fmt.Fprintf(cmd.OutOrStdout(), "question → %s: %s (%s, %s)\n", receipt.Question.To, receipt.Question.State, receipt.Question.Channel, receipt.Question.Ref)
 				for _, d := range receipt.Observers {
-					fmt.Fprintf(cmd.OutOrStdout(), "digest → %s: %s (%s)\n", d.To, d.State, d.Channel)
+					fmt.Fprintf(cmd.OutOrStdout(), "digest → %s: %s (%s, %s)\n", d.To, d.State, d.Channel, d.Ref)
 				}
 				if receipt.Escalation != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "escalation → %s: %s (%s)\n", receipt.Escalation.To, receipt.Escalation.State, receipt.Escalation.Channel)
+					fmt.Fprintf(cmd.OutOrStdout(), "escalation → %s: %s (%s, %s)\n", receipt.Escalation.To, receipt.Escalation.State, receipt.Escalation.Channel, receipt.Escalation.Ref)
 				}
 				if receipt.Fallback != "" {
 					fmt.Fprintln(cmd.OutOrStdout(), "fallback: "+receipt.Fallback)
