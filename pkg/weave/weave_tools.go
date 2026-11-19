@@ -273,11 +273,13 @@ var authGateSignatures = []string{
 	"you must log in", "session expired", "no api key", "api key not",
 }
 
-// ReadyStatus values from liveProbeReady.
+// ReadyStatus values from an output-gated live probe.
 const (
 	ReadyOK        = "ready"          // ran headless and responded / parsed fine
 	ReadyNeedsAuth = "needs-login"    // blocked on an auth/trust gate
 	ReadyStale     = "stale-contract" // rejected a launch flag (contract drift)
+	ReadyBadModel  = "bad-model"      // bound model id rejected by the tool
+	ReadyFailed    = "failed"         // ran but did not prove the bound model usable
 )
 
 // liveProbeReady runs the tool headless on a trivial prompt and classifies
@@ -285,17 +287,24 @@ const (
 // from one silently blocked on an auth/trust gate. It is the readiness check
 // `fleet --auth` and a conductor pre-flight use so an unauthenticated tool
 // (installed and "available" on PATH) is caught before it stalls a real run.
-func liveProbeReady(tool string, args []string) (status, note string) {
+func liveProbeReady(tool string, args []string, childEnv ...[]string) (status, note string) {
 	full := append(append([]string{}, args...), "Reply with exactly PROBE_OK and do nothing else.")
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, tool, full...)
+	if len(childEnv) > 0 {
+		cmd.Env = childEnv[0]
+	}
 	if d, err := os.MkdirTemp("", "weave-ready-probe-"); err == nil {
 		cmd.Dir = d
 		defer os.RemoveAll(d)
 	}
-	out, _ := cmd.CombinedOutput()
-	return classifyReadyOutput(string(out), ctx.Err() == context.DeadlineExceeded)
+	out, err := cmd.CombinedOutput()
+	status, note = classifyReadyOutput(string(out), ctx.Err() == context.DeadlineExceeded)
+	if err != nil && status == ReadyOK {
+		return ReadyFailed, "probe exited unsuccessfully: " + err.Error()
+	}
+	return status, note
 }
 
 // classifyReadyOutput turns a readiness-probe's combined output (and whether it
@@ -313,9 +322,11 @@ func classifyReadyOutput(raw string, timedOut bool) (status, note string) {
 	case agentctl.ProbeNeedsAuth:
 		return ReadyNeedsAuth, note
 	case agentctl.ProbeBadModel:
-		return ReadyStale, note
-	default:
+		return ReadyBadModel, note
+	case agentctl.ProbeOK:
 		return ReadyOK, note
+	default:
+		return ReadyFailed, note
 	}
 }
 

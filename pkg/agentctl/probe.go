@@ -59,6 +59,7 @@ func (s ProbeStatus) OK() bool { return s == ProbeOK }
 // an operator told only "it failed" has to go and find that out.
 var modelErrSignatures = []string{
 	"invalid --model", "unknown model", "model not found", "unsupported model",
+	"model_not_found",
 	"is not recognized as a known model", "no such model", "model not available",
 	"supported api model names", "but you passed", // deepseek via litellm
 }

@@ -2,6 +2,7 @@ package weave
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/llmbudget"
+	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 // weaveDefaultFleet is the last-resort roster used only when the catalog has
@@ -32,6 +35,20 @@ func weaveDefaultRoster() []string {
 // fleetProbeTTL bounds how long a cached --probe capability result is trusted
 // before re-probing. Existence (PATH lookup) is cheap and never cached.
 const fleetProbeTTL = time.Hour
+
+var fleetProbeAdmission = func(ctx context.Context, req llmbudget.Request) (llmbudget.Admission, error) {
+	return llmbudget.DefaultFromEnv().Preview(ctx, req)
+}
+
+func fleetBudgetPreview(launch *weaveAgentLaunch) (llmbudget.Admission, error) {
+	host, err := os.Hostname()
+	if err != nil {
+		return llmbudget.Admission{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return fleetProbeAdmission(ctx, llmbudget.Request{Model: launch.ModelName, ModelID: launch.Model, Agent: launch.Nick, Host: host, Concurrency: 1, HostSlots: 1, UnknownTokens: true, TTL: time.Minute})
+}
 
 func newWeaveFleetCmd() *cobra.Command {
 	var flags weaveOutputFlags
@@ -70,9 +87,10 @@ Without --probe, a row is only reported as installed: PATH evidence says
 nothing about whether the tool can do work. A probed row is usable only when
 its smoke turn produced the required stdout token.
 
-Availability is mostly a TOOL property — PATH, throttle, sign-in all belong to
-the binary, and two agents sharing a tool share them. What an agent adds is the
-model: the half that decides whether the launch is even meaningful.
+PATH and cooldown belong to the tool. A named agent's live verdict belongs to
+the exact tool:model binding and selected launch argv; a successful probe of
+one model never validates another. Probes spend provider capacity and run only
+when --probe or --auth is explicitly requested.
 
 The roster defaults to the catalog's "weave" roster (seeded with
 ` + fmt.Sprintf("%v", weaveDefaultFleet) + ` tools; reshape it as fleet data);
@@ -86,7 +104,7 @@ expands the roster to every agent in the registry.`,
 	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools (default: the \"weave\" roster)")
 	cmd.Flags().BoolVar(&agents, "agents", false, "Roster every agent in the registry (`bashy agent list`) instead of the default tool roster")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Run and cache an output-gated smoke turn (may use provider capacity)")
-	cmd.Flags().BoolVar(&auth, "auth", false, "Also probe AUTH-readiness (headless launch on a trivial prompt; catches a tool that is installed but not signed in, before it stalls a real run)")
+	cmd.Flags().BoolVar(&auth, "auth", false, "Probe the exact binding headlessly and report credential/model failure reasons (uses provider capacity)")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())
 	cmd.AddCommand(newWeaveFleetReviewCmd())
 	return cmd
@@ -237,6 +255,8 @@ type fleetRow struct {
 	Auth          string    `json:"auth,omitempty"`      // ready | needs-login | stale-contract
 	AuthNote      string    `json:"auth_note,omitempty"` // why
 	AuthHint      string    `json:"auth_hint,omitempty"` // how to fix (needs-login only)
+	ProbeReason   string    `json:"probe_reason,omitempty"`
+	ProbeStatus   string    `json:"probe_status,omitempty"`
 
 	// launch is the resolved agent, when the entry named one. Unexported: it
 	// is machinery, not part of the wire shape.
@@ -251,6 +271,9 @@ type fleetProbeEntry struct {
 	Capable  bool      `json:"capable"`
 	Version  string    `json:"version"`
 	Path     string    `json:"path"`
+	Binding  string    `json:"binding,omitempty"`
+	Reason   string    `json:"reason,omitempty"`
+	Status   string    `json:"status,omitempty"`
 	ProbedAt time.Time `json:"probed_at"`
 }
 
@@ -294,10 +317,21 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 	dirty := false
 	rows := make([]fleetRow, 0, len(roster))
 	for _, name := range roster {
-		row, d := fleetRowForEntry(dir, name, now, probe, cache)
+		row, d := fleetRowForEntry(dir, name, now, probe || auth, cache)
 		dirty = dirty || d
-		if auth && row.Found && row.CoolingUnit == "" && row.Reason == "" {
-			row.probeAuth()
+		if auth && row.Probed {
+			row.AuthProbed = true
+			row.Auth, row.AuthNote = row.ProbeStatus, row.ProbeReason
+			if row.Auth == "" {
+				if row.Capable {
+					row.Auth = ReadyOK
+				} else {
+					row.Auth = ReadyFailed
+				}
+			}
+			if row.Auth == ReadyNeedsAuth {
+				_, row.AuthHint = row.headlessArgs()
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -327,6 +361,12 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 			if r.Probed {
 				m["probed"], m["usable"] = true, r.Capable
 				m["probed_at"] = r.ProbedAt.Format(time.RFC3339)
+				if r.ProbeStatus != "" {
+					m["probe_status"] = r.ProbeStatus
+				}
+				if r.ProbeReason != "" {
+					m["probe_reason"] = r.ProbeReason
+				}
 				if r.Version != "" {
 					m["version"] = r.Version
 				}
@@ -365,6 +405,10 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 				}
 			case ReadyStale:
 				fmt.Fprintf(cmd.OutOrStdout(), "%-16s   auth: STALE-CONTRACT — %s\n", "", r.AuthNote)
+			case ReadyBadModel:
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s   auth: BAD-MODEL — %s\n", "", r.AuthNote)
+			case ReadyFailed:
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s   auth: FAILED — %s\n", "", r.AuthNote)
 			}
 		}
 	}
@@ -385,7 +429,11 @@ func (r fleetRow) statusLine(label string) string {
 		return fmt.Sprintf("%-16s %s until %s — last invocation hit a provider limit; not assignable",
 			label, strings.ToUpper(r.CooldownCause), r.coolingUntil.Local().Format("2006-01-02 15:04"))
 	case r.Probed && !r.Capable:
-		return fmt.Sprintf("%-16s UNUSABLE  smoke output lacked %s (probed %s; %s)", label, fleet.SmokeToken, r.ProbedAt.Local().Format("2006-01-02 15:04"), r.Path)
+		reason := r.ProbeReason
+		if reason == "" {
+			reason = "smoke output lacked " + fleet.SmokeToken
+		}
+		return fmt.Sprintf("%-16s UNUSABLE  %s (probed %s; %s)", label, reason, r.ProbedAt.Local().Format("2006-01-02 15:04"), r.Path)
 	case r.Probed:
 		return fmt.Sprintf("%-16s USABLE    smoke token confirmed (probed %s; %s)", label, r.ProbedAt.Local().Format("2006-01-02 15:04"), r.Path)
 	default:
@@ -407,18 +455,6 @@ func (r *fleetRow) headlessArgs() ([]string, string) {
 	return p.HeadlessArgs, p.AuthHint
 }
 
-// probeAuth runs the row's real headless invocation on a trivial prompt. For an
-// agent that means the model flag is included — a sign-in probe that omitted it
-// would not exercise the launch the orchestrator is about to make.
-func (r *fleetRow) probeAuth() {
-	args, hint := r.headlessArgs()
-	status, note := liveProbeReady(r.Tool, args)
-	r.AuthProbed, r.Auth, r.AuthNote = true, status, note
-	if status == ReadyNeedsAuth {
-		r.AuthHint = hint
-	}
-}
-
 // fleetRowForEntry evaluates one roster entry — an agent or a bare tool.
 //
 // An agent's assignability is its TOOL's assignability plus its model's. The
@@ -434,7 +470,7 @@ func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[str
 		return fleetRowFor(dir, name, now, probe, cache) // a bare tool, exactly as before
 	}
 
-	row, dirty := fleetRowForBinary(dir, launch.ToolName, launch.Tool, now, probe, cache)
+	row, dirty := fleetRowForBinary(dir, launch.ToolName, launch.Tool, now, false, cache)
 	row.launch = launch
 	if launch.ManagedTool != nil && !row.Found && row.Reason == "" {
 		// A pinned tool that is not in the bashy cache yet: not missing, just
@@ -449,7 +485,83 @@ func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[str
 		row.Available = false
 		row.Reason = "model " + launch.ModelName + ": " + chk.Reason
 	}
+	if probe && row.Found && row.Reason == "" {
+		admission, budgetErr := fleetBudgetPreview(launch)
+		if budgetErr != nil || admission.Decision.Action != "" && admission.Decision.Action != llmbudget.Allow {
+			row.Reason = "probe blocked by account/spending policy: " + admission.Decision.Reason
+			if budgetErr != nil {
+				row.Reason = "probe blocked by account/spending policy: " + budgetErr.Error()
+			}
+			return row, dirty
+		}
+		row.Probed = true
+		key := "agent:" + row.Binding
+		fingerprint := fleetBindingFingerprint(launch, row.Path)
+		ent, found := cache[key]
+		if !found || ent.ProbedAt.After(now) || now.Sub(ent.ProbedAt) > fleetProbeTTL || ent.Path != row.Path || ent.Binding != fingerprint {
+			parentEnv := os.Environ()
+			childEnv := secrets.ScrubAgentEnv(parentEnv)
+			childEnv = secrets.ProjectAgentEnv(childEnv, parentEnv, launch.PreserveEnv, launch.CredentialEnvAliases)
+			childEnv = agentlaunch.ApplyLaunchEnv(childEnv, *launch)
+			status, note := liveProbeReady(row.Path, launch.Args, childEnv)
+			ent = fleetProbeEntry{Path: row.Path, ProbedAt: now, Binding: fingerprint, Capable: status == ReadyOK, Status: status, Reason: note}
+			cache[key] = ent
+			dirty = true
+		}
+		row.Capable, row.ProbedAt, row.ProbeReason, row.ProbeStatus = ent.Capable, ent.ProbedAt, ent.Reason, ent.Status
+		row.Available = row.Capable && row.CoolingUnit == ""
+	}
 	return row, dirty
+}
+
+// fleetBindingFingerprint invalidates a probe if the selected argv, declared
+// environment, or executable at the same path changes. Credential values stay
+// out of the cache; their state is bounded by the probe TTL.
+func fleetBindingFingerprint(launch *weaveAgentLaunch, path string) string {
+	material := launch.Tool + "\x00" + strings.Join(launch.Args, "\x00") + "\x00" + strings.Join(launch.Env, "\x00")
+	if info, err := os.Stat(path); err == nil {
+		material += fmt.Sprintf("\x00%d\x00%d", info.Size(), info.ModTime().UnixNano())
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
+}
+
+// cachedBindingReady is the dispatch gate. Assignment reads evidence only: a
+// provider turn is charged solely when an operator explicitly runs --probe.
+func cachedBindingReady(dir, name string, now time.Time) error {
+	row, _ := fleetRowForEntry(dir, name, now, false, nil)
+	if row.Reason != "" {
+		return fmt.Errorf("%s: %s", name, row.Reason)
+	}
+	if !row.Found {
+		return fmt.Errorf("%s: tool %s is not installed in this venue", name, row.Tool)
+	}
+	if row.CoolingUnit != "" {
+		return fmt.Errorf("%s: %s until %s", name, row.CooldownCause, row.CoolingUnit)
+	}
+	launch, err := weaveResolveAgent(name)
+	if err != nil {
+		return err
+	}
+	if launch == nil {
+		return fmt.Errorf("%s is not an exact tool:model binding", name)
+	}
+	key := "agent:" + launch.Binding()
+	ent, ok := loadFleetProbeCache(dir)[key]
+	fingerprint := fleetBindingFingerprint(launch, row.Path)
+	if !ok || ent.Path != row.Path || ent.Binding != fingerprint || ent.ProbedAt.After(now) || now.Sub(ent.ProbedAt) > fleetProbeTTL {
+		return fmt.Errorf("%s (%s): no fresh exact-binding probe in this venue; from the target repository run `bashy weave fleet --fleet %s --probe` (uses provider capacity, subject to existing account and spending permissions)", name, launch.Binding(), name)
+	}
+	if !ent.Capable {
+		return fmt.Errorf("%s (%s): unusable at %s: %s; inspect the binding and re-probe after repair", name, launch.Binding(), ent.ProbedAt.Format(time.RFC3339), ent.Reason)
+	}
+	admission, budgetErr := fleetBudgetPreview(launch)
+	if budgetErr != nil {
+		return fmt.Errorf("%s: account/spending policy check failed: %w", name, budgetErr)
+	}
+	if admission.Decision.Action != "" && admission.Decision.Action != llmbudget.Allow {
+		return fmt.Errorf("%s: account/spending policy refused: %s", name, admission.Decision.Reason)
+	}
+	return nil
 }
 
 // fleetRowFor evaluates one tool's assignability: existence on PATH (always),
@@ -508,12 +620,12 @@ func fleetRowForBinary(dir, tool, binary string, now time.Time, probe bool, cach
 	if probe && row.Found {
 		row.Probed = true
 		ent, fresh := cache[tool]
-		if !fresh || now.Sub(ent.ProbedAt) > fleetProbeTTL || ent.Path != row.Path {
+		if !fresh || ent.ProbedAt.After(now) || now.Sub(ent.ProbedAt) > fleetProbeTTL || ent.Path != row.Path {
 			ent = probeToolCapability(tool, row.Path, now)
 			cache[tool] = ent
 			dirty = true
 		}
-		row.Capable, row.Version, row.ProbedAt = ent.Capable, ent.Version, ent.ProbedAt
+		row.Capable, row.Version, row.ProbedAt, row.ProbeReason, row.ProbeStatus = ent.Capable, ent.Version, ent.ProbedAt, ent.Reason, ent.Status
 	}
 	row.Available = row.Found && !cooling && row.Probed && row.Capable
 	return row, dirty
@@ -532,8 +644,17 @@ func probeToolCapability(tool, path string, now time.Time) fleetProbeEntry {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	argv[0] = path // execute the exact path LookPath resolved on this host.
-	out, _ := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
-	ent.Capable = strings.Contains(string(out), fleet.SmokeToken)
+	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+	ent.Capable = err == nil && strings.Contains(string(out), fleet.SmokeToken)
+	if ent.Capable {
+		ent.Status = ReadyOK
+		ent.Reason = "smoke token confirmed"
+	} else {
+		ent.Status = ReadyFailed
+	}
+	if !ent.Capable {
+		ent.Reason = "smoke output lacked " + fleet.SmokeToken
+	}
 	return ent
 }
 

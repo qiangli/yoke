@@ -17,6 +17,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func seedAssignmentReady(t *testing.T, root string) {
+	t.Helper()
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := weaveResolveAgent("agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _ := fleetRowForEntry(dir, "agent-a", time.Now(), false, nil)
+	if !row.Found {
+		t.Fatalf("fixture tool not found: %+v", row)
+	}
+	fingerprint := fleetBindingFingerprint(launch, row.Path)
+	saveFleetProbeCache(dir, map[string]fleetProbeEntry{"agent:" + launch.Binding(): {Capable: true, Path: row.Path, Binding: fingerprint, ProbedAt: time.Now()}})
+}
+
 func TestAssignDispatch(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
@@ -43,7 +61,15 @@ func TestAssignDispatch(t *testing.T) {
 			cmd.SetOut(&out)
 			cmd.SetContext(context.Background())
 			launches, events, fallbacks := 0, 0, 0
-			deps := sprintAssignDeps{launch: func(_ *cobra.Command, r sprintAssignLaunch) error {
+			deps := sprintAssignDeps{preflight: func(agent string) error {
+				if agent != "agent-a" {
+					t.Fatalf("preflight checked %s, actual pick is agent-a", agent)
+				}
+				if launches != 0 {
+					t.Fatal("preflight ran after launch")
+				}
+				return nil
+			}, launch: func(_ *cobra.Command, r sprintAssignLaunch) error {
 				launches++
 				if r.Env["BASHY_AGENT"] != "agent-a" {
 					t.Fatalf("missing identity: %+v", r)
@@ -98,14 +124,24 @@ func TestReviewDispatchDominanceAndEscalation(t *testing.T) {
 		cmd := &cobra.Command{}
 		cmd.SetOut(&out)
 		events := 0
+		checked := false
 		record := func(kind string, e sprintAssignEvent) error {
+			if !checked {
+				t.Fatal("review recorded before readiness preflight")
+			}
 			events++
 			if kind != "review-assign" || e.Agent != "agent-b" {
 				t.Fatalf("%s %+v", kind, e)
 			}
 			return nil
 		}
-		if err := sprintReviewDispatch(cmd, "story", author, 3, "tool-a", pool, dry, record); err != nil {
+		if err := sprintReviewDispatch(cmd, "story", author, 3, "tool-a", pool, dry, record, func(agent string) error {
+			if agent != "agent-b" {
+				t.Fatalf("preflight checked %s", agent)
+			}
+			checked = true
+			return nil
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(out.String(), "agent-b") || events != map[bool]int{true: 0, false: 1}[dry] {
@@ -149,7 +185,7 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 	old := fleetCatalog
 	fleetCatalog = func() *fleet.Catalog { return cat }
 	t.Cleanup(func() { fleetCatalog = old })
-	for _, err := range []error{cat.SaveTool(fleet.Tool{Name: "tool-a"}), cat.SaveModel(fleet.Model{Name: "model-a", Band: 3, CostMicro: 100}), cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3})} {
+	for _, err := range []error{cat.SaveTool(fleet.Tool{Name: "tool-a", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "sh", Launch: fleet.ToolLaunch{Exec: "sh --model {model} {prompt}"}}}), cat.SaveModel(fleet.Model{Name: "model-a", Band: 3, CostMicro: 100}), cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3})} {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,6 +205,7 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 	if _, err = todopkg.RepoStore(root).Save(story); err != nil {
 		t.Fatal(err)
 	}
+	seedAssignmentReady(t, root)
 	launched := 0
 	oldLaunch := sprintAssignLaunchWorker
 	t.Cleanup(func() { sprintAssignLaunchWorker = oldLaunch })
@@ -283,6 +320,25 @@ func TestAssignCommandSeedsLinksAndInjectsIdentity(t *testing.T) {
 			}
 		})
 	}
+	capCmd := newSprintAssignCmd()
+	capCmd.SetArgs([]string{"1", story.ID, "--repo", root, "--dry-run", "--require-capability", "image"})
+	var capOut bytes.Buffer
+	capCmd.SetOut(&capOut)
+	capCmd.SetErr(&capOut)
+	if err := capCmd.Execute(); err != nil || !strings.Contains(capOut.String(), "missing declared capability image") || !strings.Contains(capOut.String(), "capacity wait") {
+		t.Fatalf("capability filter: %v, %s", err, capOut.String())
+	}
+	refusal := newSprintAssignCmd()
+	refusal.SetArgs([]string{"1", story.ID, "--repo", root, "--agent", "agent-a"})
+	refusal.SetOut(&bytes.Buffer{})
+	refusal.SetErr(&bytes.Buffer{})
+	if err := refusal.Execute(); err == nil || !strings.Contains(err.Error(), "--probe") {
+		t.Fatalf("missing probe did not refuse before seed: %v", err)
+	}
+	if pending, err := todopkg.RepoStore(root).Resolve(story.ID); err != nil || pending.Weave != 0 || launched != 0 {
+		t.Fatalf("refusal seeded or launched work: %+v, %v, launches=%d", pending, err, launched)
+	}
+	seedAssignmentReady(t, root)
 	for _, dry := range []bool{true, false} {
 		cmd := newSprintAssignCmd()
 		args := []string{"1", story.ID, "--repo", root, "--points", "5", "--agent", "agent-a"}
@@ -448,7 +504,7 @@ func TestSprintAssignIdleTimeout(t *testing.T) {
 	fleetCatalog = func() *fleet.Catalog { return cat }
 	t.Cleanup(func() { fleetCatalog = oldFleet })
 	for _, err := range []error{
-		cat.SaveTool(fleet.Tool{Name: "tool-a"}),
+		cat.SaveTool(fleet.Tool{Name: "tool-a", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "sh", Launch: fleet.ToolLaunch{Exec: "sh --model {model} {prompt}"}}}),
 		cat.SaveModel(fleet.Model{Name: "model-a", Band: 3, CostMicro: 100}),
 		cat.SaveAgent(fleet.Agent{Name: "agent-a", Tool: "tool-a", Model: "model-a", Band: 3}),
 	} {
@@ -456,6 +512,7 @@ func TestSprintAssignIdleTimeout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	seedAssignmentReady(t, root)
 	board, _ := sprintStoreDir()
 	if err := withWeaveQueueLock(board, func(q *weaveQueue) error {
 		q.Stories = append(q.Stories, &weaveStory{ID: 1, Title: "dispatch", Column: "doing"})

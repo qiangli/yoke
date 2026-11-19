@@ -1,13 +1,88 @@
 package weave
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/fleet/fleettest"
+	"github.com/qiangli/yoke/pkg/llmbudget"
 )
+
+func TestExactBindingProbeGatesAssignment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	cat := pinFleetWith(t)
+	bin := filepath.Join(t.TempDir(), "bound-probe")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ncase \"$2\" in good) echo PROBE_OK;; *) echo model_not_found >&2;; esac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveTool(fleet.Tool{Name: "bound-probe", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: bin, Launch: fleet.ToolLaunch{Exec: bin + " --model {model} {prompt}"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"good", "bad"} {
+		if err := cat.SaveModel(fleet.Model{Name: name, Kind: fleet.ModelKindSubscription, UpstreamID: name}); err != nil {
+			t.Fatal(err)
+		}
+		if err := cat.SaveAgent(fleet.Agent{Name: name + "-agent", Tool: "bound-probe", Model: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	now := time.Now()
+	if err := cachedBindingReady(dir, "good-agent", now); err == nil || !strings.Contains(err.Error(), "--probe") {
+		t.Fatalf("missing evidence: %v", err)
+	}
+	cache := map[string]fleetProbeEntry{}
+	good, _ := fleetRowForEntry(dir, "good-agent", now, true, cache)
+	bad, _ := fleetRowForEntry(dir, "bad-agent", now, true, cache)
+	if !good.Capable || bad.Capable || !strings.Contains(bad.ProbeReason, "model") {
+		t.Fatalf("good=%+v bad=%+v", good, bad)
+	}
+	saveFleetProbeCache(dir, cache)
+	if err := cachedBindingReady(dir, "good-agent", now); err != nil {
+		t.Fatalf("usable binding refused: %v", err)
+	}
+	if err := cachedBindingReady(dir, "bad-agent", now); err == nil || !strings.Contains(err.Error(), "unusable") {
+		t.Fatalf("dead binding accepted: %v", err)
+	}
+	if err := cachedBindingReady(dir, "good-agent", now.Add(fleetProbeTTL+time.Second)); err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Fatalf("stale evidence accepted: %v", err)
+	}
+	if err := os.Chtimes(bin, now.Add(time.Minute), now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cachedBindingReady(dir, "good-agent", now); err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Fatalf("changed executable reused old probe: %v", err)
+	}
+	oldAdmission := fleetProbeAdmission
+	fleetProbeAdmission = func(_ context.Context, req llmbudget.Request) (llmbudget.Admission, error) {
+		if req.Host == "" || req.Model != "good" || req.Agent != "good-agent" || req.HostSlots != 1 {
+			t.Fatalf("budget preview lost venue or binding: %+v", req)
+		}
+		return llmbudget.Admission{Decision: llmbudget.Decision{Action: llmbudget.Block, Reason: "metered spend denied"}}, nil
+	}
+	t.Cleanup(func() { fleetProbeAdmission = oldAdmission })
+	launch, err := weaveResolveAgent("good-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache["agent:"+launch.Binding()] = fleetProbeEntry{Capable: true, Path: bin, Binding: fleetBindingFingerprint(launch, bin), ProbedAt: now}
+	saveFleetProbeCache(dir, cache)
+	if err := cachedBindingReady(dir, "good-agent", now); err == nil || !strings.Contains(err.Error(), "metered spend denied") {
+		t.Fatalf("policy denial accepted at assignment: %v", err)
+	}
+	blocked, dirty := fleetRowForEntry(dir, "good-agent", now, true, map[string]fleetProbeEntry{})
+	if dirty || blocked.Probed || !strings.Contains(blocked.Reason, "metered spend denied") {
+		t.Fatalf("policy denial ran probe: %+v dirty=%v", blocked, dirty)
+	}
+}
 
 // pinFleetWith installs a scratch registry over the test ring and returns its
 // catalog for setup.

@@ -42,9 +42,10 @@ type sprintAssignLaunch struct {
 	IdleTimeout time.Duration
 }
 type sprintAssignDeps struct {
-	seed   func() (int64, error)
-	launch func(*cobra.Command, sprintAssignLaunch) error
-	record func(string, sprintAssignEvent) error
+	seed      func() (int64, error)
+	preflight func(string) error
+	launch    func(*cobra.Command, sprintAssignLaunch) error
+	record    func(string, sprintAssignEvent) error
 }
 
 func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladder.Entrant, lines ladder.Lines, manual string, dry bool, repo string, deps sprintAssignDeps, idleTimeout ...time.Duration) error {
@@ -84,6 +85,11 @@ func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladd
 	if dry {
 		return nil
 	}
+	if deps.preflight != nil {
+		if err := deps.preflight(pick.Agent); err != nil {
+			return err
+		}
+	}
 	run, err := deps.seed()
 	if err != nil {
 		return err
@@ -108,7 +114,7 @@ func sprintAssignDispatch(cmd *cobra.Command, task ladder.StoryTask, pool []ladd
 	return deps.launch(cmd, sprintAssignLaunch{Repo: repo, Agent: pick.Agent, Run: run, Env: map[string]string{"BASHY_AGENT": pick.Agent}, IdleTimeout: launchIdle})
 }
 
-func sprintReviewDispatch(cmd *cobra.Command, story string, author ladder.DutyStanding, band int, vendor string, pool []ladder.Entrant, dry bool, record func(string, sprintAssignEvent) error) error {
+func sprintReviewDispatch(cmd *cobra.Command, story string, author ladder.DutyStanding, band int, vendor string, pool []ladder.Entrant, dry bool, record func(string, sprintAssignEvent) error, preflight ...func(string) error) error {
 	_ = author
 	lower := make([]ladder.Entrant, 0, len(pool))
 	for _, e := range pool {
@@ -131,6 +137,11 @@ func sprintReviewDispatch(cmd *cobra.Command, story string, author ladder.DutySt
 	fmt.Fprintf(cmd.OutOrStdout(), "reviewer=%s reason=%s\n", pick.Agent, pick.Reason)
 	if dry {
 		return nil
+	}
+	if len(preflight) > 0 && preflight[0] != nil {
+		if err := preflight[0](pick.Agent); err != nil {
+			return err
+		}
 	}
 	for _, e := range pool {
 		if e.Agent == pick.Agent && e.Band < band {
@@ -346,6 +357,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 	var repo, manual, author string
 	var scriptFile, scriptRunner string
 	var excludeTools, excludeAgents []string
+	var requiredCaps []string
 	var points, band, authorBand int
 	var dry bool
 	var idleTimeout time.Duration
@@ -358,6 +370,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print selection without mutation or launch")
 	cmd.Flags().StringArrayVar(&excludeTools, "exclude-tool", nil, "exclude tool (repeatable; adds to BASHY_SPRINT_DISPATCH_EXCLUDE tool:TOOL,agent:NAME)")
 	cmd.Flags().StringArrayVar(&excludeAgents, "exclude-agent", nil, "exclude agent binding (repeatable; adds to environment exclusions)")
+	cmd.Flags().StringArrayVar(&requiredCaps, "require-capability", nil, "require a declared model capability (repeatable)")
 	if review {
 		cmd.Flags().StringVar(&author, "author", "", "author tool:model")
 		cmd.Flags().IntVar(&authorBand, "author-band", 0, "author band (3, 4 or 5)")
@@ -409,7 +422,7 @@ func sprintAssignCommand(review bool) *cobra.Command {
 			effIdleTimeout = idleTimeout
 		}
 		if scriptFile != "" || scriptRunner != "" {
-			if manual != "" || len(excludeTools) > 0 || len(excludeAgents) > 0 {
+			if manual != "" || len(excludeTools) > 0 || len(excludeAgents) > 0 || len(requiredCaps) > 0 {
 				return fmt.Errorf("script assignment cannot combine fleet selection flags")
 			}
 			return sprintAssignScript(cmd, id, root, story, points, band, scriptFile, scriptRunner, dry, effIdleTimeout)
@@ -421,6 +434,35 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		pool, lines, err := sprintAssignPool(root, events, time.Now(), exclusions)
 		if err != nil {
 			return err
+		}
+		if len(requiredCaps) > 0 {
+			eligible := pool[:0]
+			for _, entrant := range pool {
+				_, _, model, bindErr := fleetCatalog().Binding(entrant.Agent)
+				missing := ""
+				if bindErr != nil {
+					missing = bindErr.Error()
+				}
+				for _, required := range requiredCaps {
+					found := false
+					for _, declared := range model.Capabilities {
+						if declared == required {
+							found = true
+							break
+						}
+					}
+					if !found {
+						missing = required
+						break
+					}
+				}
+				if missing != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "excluded=%s reason=missing declared capability %s (catalog checked %s)\n", entrant.Agent, missing, time.Now().Format(time.RFC3339))
+					continue
+				}
+				eligible = append(eligible, entrant)
+			}
+			pool = eligible
 		}
 		record := func(kind string, e sprintAssignEvent) error { return sprintAssignRecord(cmd, id, kind, e) }
 		if !dry {
@@ -453,7 +495,45 @@ func sprintAssignCommand(review bool) *cobra.Command {
 					filtered = append(filtered, e)
 				}
 			}
-			return sprintReviewDispatch(cmd, story.ID, standing, authorBand, vendor, filtered, dry, record)
+			return sprintReviewDispatch(cmd, story.ID, standing, authorBand, vendor, filtered, dry, record, func(selected string) error {
+				queueDir, err := weaveQueueDir(root)
+				if err != nil {
+					return err
+				}
+				if err := cachedBindingReady(queueDir, selected, time.Now()); err != nil {
+					return fmt.Errorf("review assignment refused: %w", err)
+				}
+				fresh, _, err := sprintAssignPool(root, events, time.Now(), exclusions)
+				if err != nil {
+					return err
+				}
+				free := false
+				for _, e := range fresh {
+					if e.Agent == selected {
+						free = e.Free
+						break
+					}
+				}
+				if !free {
+					return fmt.Errorf("review assignment refused: %s became busy or ineligible", selected)
+				}
+				binding, _, model, _ := fleetCatalog().Binding(selected)
+				for _, required := range requiredCaps {
+					found := false
+					for _, declared := range model.Capabilities {
+						if declared == required {
+							found = true
+							break
+						}
+					}
+					if !found {
+						return fmt.Errorf("review assignment refused: %s lost required capability %s", selected, required)
+					}
+				}
+				probeAt := loadFleetProbeCache(queueDir)["agent:"+binding.MatrixKey()].ProbedAt
+				fmt.Fprintf(cmd.OutOrStdout(), "readiness=%s binding=%s venue=local-host required_capabilities=%v capacity=local-queue-free evidence=bound-model-smoke+catalog+local-queue probe_at=%s checked_at=%s\n", selected, binding.MatrixKey(), requiredCaps, probeAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+				return nil
+			})
 		}
 		rating, err := ladder.StoryInitialRating(ladder.Points(points))
 		if err != nil {
@@ -473,7 +553,33 @@ func sprintAssignCommand(review bool) *cobra.Command {
 			}
 		}
 		task := ladder.StoryTask{ID: story.ID, Duty: ladder.DutyCode, Band: band, Points: ladder.Points(points), Rating: rating}
-		return sprintAssignDispatch(cmd, task, pool, lines, manual, dry, root, sprintAssignDeps{seed: func() (int64, error) { return sprintAssignSeed(cmd, id, root, story, points, band) }, record: record, launch: func(cmd *cobra.Command, r sprintAssignLaunch) error {
+		preflight := func(selected string) error {
+			found := false
+			for _, entrant := range pool {
+				if entrant.Agent == selected {
+					found = true
+					if !entrant.Free {
+						return fmt.Errorf("assignment refused before launch: %s is busy in the local queue (checked %s)", selected, time.Now().Format(time.RFC3339))
+					}
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("assignment refused before launch: %s lacks a required capability or is ineligible; inspect the exclusion reasons above", selected)
+			}
+			queueDir, err := weaveQueueDir(root)
+			if err != nil {
+				return err
+			}
+			if err := cachedBindingReady(queueDir, selected, time.Now()); err != nil {
+				return fmt.Errorf("assignment refused before launch: %w", err)
+			}
+			binding, _, selectedModel, _ := fleetCatalog().Binding(selected)
+			probeAt := loadFleetProbeCache(queueDir)["agent:"+binding.MatrixKey()].ProbedAt
+			fmt.Fprintf(cmd.OutOrStdout(), "readiness=%s binding=%s venue=local-host required_capabilities=%v capability_band=%d band_source=%s band_season=%d capacity=local-queue-free evidence=bound-model-smoke+catalog+local-queue probe_at=%s checked_at=%s\n", selected, binding.MatrixKey(), requiredCaps, selectedModel.Band, selectedModel.BandSource, selectedModel.BandSeason, probeAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+			return nil
+		}
+		return sprintAssignDispatch(cmd, task, pool, lines, manual, dry, root, sprintAssignDeps{seed: func() (int64, error) { return sprintAssignSeed(cmd, id, root, story, points, band) }, preflight: preflight, record: record, launch: func(cmd *cobra.Command, r sprintAssignLaunch) error {
 			// Re-read availability after seeding: do not use clones to bypass a busy base.
 			fresh, _, err := sprintAssignPool(root, events, time.Now(), exclusions)
 			if err != nil {
@@ -487,6 +593,29 @@ func sprintAssignCommand(review bool) *cobra.Command {
 			}
 			if !free {
 				return fmt.Errorf("agent %s became busy or ineligible; run #%d remains queued", r.Agent, r.Run)
+			}
+			_, _, currentModel, err := fleetCatalog().Binding(r.Agent)
+			if err != nil {
+				return fmt.Errorf("run #%d remains queued: %w", r.Run, err)
+			}
+			for _, required := range requiredCaps {
+				found := false
+				for _, declared := range currentModel.Capabilities {
+					if declared == required {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("run #%d remains queued: %s lost required capability %s", r.Run, r.Agent, required)
+				}
+			}
+			queueDir, err := weaveQueueDir(root)
+			if err != nil {
+				return err
+			}
+			if err := cachedBindingReady(queueDir, r.Agent, time.Now()); err != nil {
+				return fmt.Errorf("run #%d remains queued: %w", r.Run, err)
 			}
 			story.Assignee = r.Agent
 			if _, err = todopkg.RepoStore(root).Save(story); err != nil {

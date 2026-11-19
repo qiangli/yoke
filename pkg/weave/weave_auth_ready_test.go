@@ -21,9 +21,10 @@ func TestClassifyReadyOutput(t *testing.T) {
 		{"unauthorized", "HTTP 401 Unauthorized", false, ReadyNeedsAuth},
 		{"stale flag", "error: unexpected argument '--workspace' found", false, ReadyStale},
 		{"unknown option", "unknown option: --sandbox", false, ReadyStale},
+		{"bad bound model", "400 model_not_found", false, ReadyBadModel},
 		{"probe ok", "some preamble\nPROBE_OK\n", false, ReadyOK},
-		{"responded no gate", "Here is my answer: the file has 3 lines.", false, ReadyOK},
-		{"timed out but produced work", "I analyzed the repo and started editing cmds/foo/foo.go with a full implementation ...", true, ReadyOK},
+		{"responded no gate", "Here is my answer: the file has 3 lines.", false, ReadyFailed},
+		{"timed out but produced work", "I analyzed the repo and started editing cmds/foo/foo.go with a full implementation ...", true, ReadyFailed},
 		{"stalled empty timeout", "\n  \n", true, ReadyNeedsAuth},
 	}
 	for _, tc := range tests {
