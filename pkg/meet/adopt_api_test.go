@@ -431,6 +431,7 @@ func TestAgentSessionUnderSharedAccountIsItsOwnPrincipal(t *testing.T) {
 		t.Fatalf("human shell: %q %v", p, err)
 	}
 	t.Setenv("BASHY_AGENT", "worker")
+	preclaim(t, "worker", "worker-session")
 	if p, err := callerPrincipal(""); err != nil || p != "worker" {
 		t.Fatalf("agent must be itself, got %q %v", p, err)
 	}
@@ -481,6 +482,52 @@ func TestDeclaredAgentNeedsItsLiveClaim(t *testing.T) {
 	t.Setenv("BASHY_AGENT", "ghost")
 	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
 		t.Fatalf("unregistered declared agent accepted: %v", err)
+	}
+}
+
+// preclaim seats name with a live claim bound to session, as a launched
+// agent's inbox watcher would, and makes this process that session.
+func preclaim(t *testing.T, name, session string) {
+	t.Helper()
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID(name), Nick: name, Tool: "codex", Binding: "codex:test",
+		Mode: "interactive", PID: os.Getpid(), OwnerPID: os.Getpid(),
+		SessionClaim: bus.HashSessionClaim(session), Principal: "operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bus.CurrentSessionClaim = func(string) string { return session }
+	t.Cleanup(func() { bus.CurrentSessionClaim = nil })
+}
+
+// A declared organizer name with nobody holding the seat is refused and does
+// not take the seat; once the real session has claimed it, it is allowed.
+func TestUnclaimedDeclaredOrganizerRefusedBeforeWrite(t *testing.T) {
+	st := newTestSession(t)
+	st.Initiator = "lead-bot"
+	if err := st.save(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = record(st, "action", "qiangli", "", "bob: write the plan")
+	store := &issue.Store{Root: t.TempDir(), Sub: "todo"}
+	todo.DefaultSprint, todo.PrepareSprint = nil, nil
+	acts, _ := RoomActions(st.ID, store)
+	registerFleet(t, "lead-bot")
+	clearAgentEnv(t)
+	t.Setenv("USER", "room-human")
+	t.Setenv("BASHY_AGENT", "lead-bot")
+	if p, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("unclaimed declared organizer accepted: %q %v", p, err)
+	}
+	if _, live, _ := room.Find(room.AgentClaimID("lead-bot")); live {
+		t.Fatal("refused caller took the organizer seat")
+	}
+	if all, _ := store.List(); len(all) != 0 || len(acts) != 1 {
+		t.Fatalf("story written before authority: %d", len(all))
+	}
+	preclaim(t, "lead-bot", "real")
+	if p, err := callerPrincipal(""); err != nil || p != "lead-bot" {
+		t.Fatalf("preclaimed organizer: %q %v", p, err)
 	}
 }
 
@@ -542,6 +589,7 @@ func TestAdoptionByAuthorizedAgentOrganizer(t *testing.T) {
 	clearAgentEnv(t)
 	t.Setenv("USER", "qiangli")
 	t.Setenv("BASHY_AGENT", "lead-bot")
+	preclaim(t, "lead-bot", "lead-session")
 	p, err := callerPrincipal("")
 	if err != nil || requireAdoptionAuthority(st, p) != nil {
 		t.Fatalf("launched organizer: %q %v", p, err)

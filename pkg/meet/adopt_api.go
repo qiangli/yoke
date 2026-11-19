@@ -9,6 +9,7 @@ import (
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/issue"
+	"github.com/qiangli/yoke/pkg/room"
 	"github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -182,6 +183,22 @@ func callerPrincipal(by string) (string, error) {
 		requested = declared
 		if _, registered := agentRegistered(declared); !registered {
 			return "", fmt.Errorf("%w: agent %q is not a registered agent", ErrNoAuthority, declared)
+		}
+	}
+	if declared != "" {
+		// ResolveAuthoredActor seats an UNCLAIMED declared identity on first
+		// use, which would let any worker export BASHY_AGENT=<organizer> and
+		// take the seat. Adoption needs a claim that already exists.
+		canon, _ := agentRegistered(declared)
+		card, live, ferr := room.Find(room.AgentClaimID(canon))
+		if ferr == nil && !live && canon != room.AgentClaimID(canon) {
+			card, live, ferr = room.Find(canon)
+		}
+		if ferr != nil {
+			return "", fmt.Errorf("%w: inspect session claim for %q: %v", ErrNoAuthority, canon, ferr)
+		}
+		if !live || (card.PID <= 0 && card.OwnerPID <= 0) {
+			return "", fmt.Errorf("%w: agent %q holds no live session claim; start its session (inbox watcher) before adopting", ErrNoAuthority, canon)
 		}
 	}
 	actor, err := bus.ResolveAuthoredActor(requested)
