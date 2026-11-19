@@ -2,6 +2,7 @@ package meet
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -871,5 +872,60 @@ func TestBriefBudgetHiddenTailRefusesMarkSeen(t *testing.T) {
 	}
 	if got := SeenSeq(st.ID, "codex"); got != acked.Through {
 		t.Fatalf("ack-all cursor = %d, want through %d", got, acked.Through)
+	}
+}
+
+// The total budget must charge ballot weight, not just short questions.
+// Twenty pending polls sharing a full 64-choice ballot of max-length
+// choices carry ~20*64*288B of ballot alone: without choices and tally
+// keys in the accounting, the brief would emit 300KiB+ while the declared
+// 256KiB budget saw only short questions and cut nothing.
+func TestBriefBudgetChargesBallotWeight(t *testing.T) {
+	choices := make([]string, 0, BriefPollChoiceLimit)
+	for c := 0; c < BriefPollChoiceLimit; c++ {
+		choices = append(choices, fmt.Sprintf("option-%d-%s", c, strings.Repeat("x", BriefChoiceTextBytes)))
+	}
+	st := newTestSession(t)
+	base := fixedNow()
+	seq := 0
+	next := func(e Event) {
+		seq++
+		e.TS = base.Add(time.Duration(seq) * time.Second)
+		if err := AppendEvent(st.ID, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 20; i++ {
+		next(Event{Speaker: "qiangli", Kind: "poll", Role: string(RoleChair),
+			Question: fmt.Sprintf("which way for lane %d?", i),
+			Choices:  choices, Text: "poll open"})
+	}
+	// Two tied votes on the newest ballot: disagreement preserved, no
+	// winner, and two full-length tally keys the budget must charge too.
+	next(Event{Speaker: "codex", Kind: "vote", Choice: choices[0], Choices: choices, Text: "vote"})
+	next(Event{Speaker: "opencode", Kind: "vote", Choice: choices[1], Choices: choices, Text: "vote"})
+	res, err := Brief(st.ID, BriefOptions{Reader: "codex", Limit: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No per-list cap hid anything at this limit: the budget did the hiding.
+	if res.QuestionsHidden == 0 {
+		t.Fatalf("the total budget must hide oldest polls once ballot weight counts, hid %d", res.QuestionsHidden)
+	}
+	newest := false
+	for _, q := range res.Questions {
+		if strings.Contains(q.Question, "lane 19?") {
+			newest = true
+		}
+	}
+	if !newest {
+		t.Fatal("the budget must hide the oldest polls, never the newest")
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > BriefTotalBytes {
+		t.Fatalf("twenty full ballots grew the brief to %d bytes over the %d budget", len(raw), BriefTotalBytes)
 	}
 }

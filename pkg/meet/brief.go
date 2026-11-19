@@ -801,10 +801,26 @@ func capBriefPolls(questions []BriefPoll, limit int) ([]BriefPoll, int) {
 }
 
 // briefItemBytes is the byte weight of one rendered item for the total
-// budget: its text plus a fixed per-item overhead for the envelope. Poll
-// questions add their Question text at the call sites.
+// budget: its text plus a fixed per-item overhead for the envelope.
 func briefItemBytes(it BriefItem) int {
 	return len(it.Text) + 64
+}
+
+// briefPollBytes is the byte weight of one pending poll for the total
+// budget: the item and its question, plus every ballot choice and every
+// tally key with its serialized overhead. A ballot is data, not prose —
+// without this, twenty pending polls at inflated --limit could emit over
+// 300KiB of choices while the declared 256KiB budget saw only short
+// questions and cut nothing.
+func briefPollBytes(q BriefPoll) int {
+	total := briefItemBytes(q.BriefItem) + len(q.Question) + 64
+	for _, c := range q.Choices {
+		total += len(c) + 32
+	}
+	for k := range q.Tally {
+		total += len(k) + 32
+	}
+	return total
 }
 
 // enforceBriefBudget drops the oldest items of the longest lists until the
@@ -835,7 +851,7 @@ func enforceBriefBudget(res *BriefResult) (budgetHiddenUnseen int) {
 		total += briefItemBytes(it)
 	}
 	for _, q := range res.Questions {
-		total += briefItemBytes(q.BriefItem) + len(q.Question)
+		total += briefPollBytes(q)
 	}
 	for total > BriefTotalBytes {
 		dropped, unseen := dropOldestFromLongest(res)
@@ -864,7 +880,7 @@ func enforceBriefBudget(res *BriefResult) (budgetHiddenUnseen int) {
 			total += briefItemBytes(it)
 		}
 		for _, q := range res.Questions {
-			total += briefItemBytes(q.BriefItem) + len(q.Question)
+			total += briefPollBytes(q)
 		}
 	}
 	return budgetHiddenUnseen
