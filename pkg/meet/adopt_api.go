@@ -7,6 +7,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/issue"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -109,10 +110,17 @@ func sameHuman(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-// callerPrincipal is who is actually at the CLI: the OS user. A --by naming
+// callerPrincipal is who is actually at the CLI: the OS user, provided no agent
+// identity is attached to the process. A --by naming
 // anyone else is refused — the flag cannot lend authority, it can only repeat
 // who the caller already is.
 func callerPrincipal(by string) (string, error) {
+	// An agent session — launched (BASHY_AGENT, BASHY_PRINCIPAL) or a bare
+	// harness (CLAUDECODE, …) — is never the room's human, whatever $USER says:
+	// agents share the operator's OS account.
+	if ref, ok := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self(); ok {
+		return "", fmt.Errorf("%w: caller is an agent session (%s), not a human", ErrNoAuthority, ref.Name)
+	}
 	me := humanName()
 	if by = strings.TrimSpace(by); by != "" && !strings.EqualFold(by, me) {
 		return "", fmt.Errorf("%w: --by %s is not the calling user (%s)", ErrNoAuthority, by, me)

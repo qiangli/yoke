@@ -285,6 +285,7 @@ func TestAdoptionAuthorityBindsToRoomPrincipal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The CLI cannot borrow the room's human through --by.
+	clearAgentEnv(t)
 	t.Setenv("USER", "mallory")
 	if _, err := callerPrincipal("qiangli"); !errors.Is(err, ErrNoAuthority) {
 		t.Fatalf("spoofed --by accepted: %v", err)
@@ -367,5 +368,33 @@ func TestReconcileCrashBetweenPostAndMarkStillTellsRoomOnce(t *testing.T) {
 	}
 	if n := countNotes(t, st.ID, "reconcile: story"); n != 1 {
 		t.Fatalf("room got %d reconcile notices", n)
+	}
+}
+
+// clearAgentEnv removes every marker that makes the process an agent session, so
+// a test can stand in for a bare human shell even when run under a harness.
+func clearAgentEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"BASHY_PRINCIPAL", "BASHY_AGENT_ID", "BASHY_AGENT", "WEAVE_AGENT", "AGENT", "AI_AGENT",
+		"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID", "GEMINI_CLI", "GOOSE_TERMINAL",
+		"OPENCODE_CLIENT", "CLINE_ACTIVE", "HERMES_AGENT", "KIMI_CODE", "OPENCLAW"} {
+		t.Setenv(k, "")
+	}
+}
+
+// Agents share the operator's OS account: a worker launched with BASHY_AGENT is
+// not the room's human even though $USER names them and --by is omitted.
+func TestAgentSessionUnderSharedAccountHasNoAuthority(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv("USER", "room-human")
+	if p, err := callerPrincipal(""); err != nil || p != "room-human" {
+		t.Fatalf("human shell: %q %v", p, err)
+	}
+	t.Setenv("BASHY_AGENT", "worker")
+	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("agent with USER=room-human accepted: %v", err)
+	}
+	if _, err := callerPrincipal("room-human"); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("agent with matching --by accepted: %v", err)
 	}
 }
