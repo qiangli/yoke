@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { ActionReview } from "./action-review"
 
 import {
   Check,
@@ -80,6 +81,7 @@ export function RoomDetails({
       <Separator />
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-7 p-5">
+          {state && <ActionReview key={state.id} room={state.id} />}
           <section>
             <SectionTitle icon={ClipboardList}>Agenda</SectionTitle>
             <ol className="mt-3 space-y-3">

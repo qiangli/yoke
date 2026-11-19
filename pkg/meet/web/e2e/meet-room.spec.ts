@@ -990,3 +990,37 @@ test("the Term view says how to get a terminal when the agent has none", async (
   await page.getByRole("button", { name: "Show the agent's live terminal" }).click();
   await expect(page.locator('[data-console-status="unavailable"]')).toContainText("bashy chat --agent");
 });
+
+// S3 UI contract: the endpoint remains the authority; intercepted responses let
+// this checkout verify the controls independently of the S1 producer pin.
+test("action adoption requires preview and fresh confirmation after edits", async ({ page }) => {
+  let changed = false;
+  let confirms = 0;
+  const submitted: any[] = [];
+  await page.route("**/api/rooms/*/actions", route => route.fulfill({ json: { actions: [{ id: "action-1", text: changed ? "Changed operation" : "Publish reviewed report", source: "proposed", adopted: false }] } }));
+  await page.route("**/api/rooms/*/actions/adopt", async route => {
+    const body = route.request().postDataJSON(); submitted.push(body);
+    if (body.confirm) confirms++;
+    await route.fulfill({ json: { room: "launch-room", preview: !body.confirm, results: [{ action: { id: "action-1", text: "Publish reviewed report" }, story: body.confirm ? "todo:reviewed" : "", note: "" }] } });
+  });
+  await page.goto(`${baseURL}/?mock=1&room=launch-room`);
+  await page.getByLabel("Candidate action").selectOption("action-1");
+  await page.getByLabel("Sprint", { exact: true }).fill("666");
+  await page.getByLabel("Acceptance criteria").fill("Artifact and diff verified");
+  await expect(page.getByRole("button", { name: "Confirm adoption" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Preview tracked work" }).click();
+  await expect(page.getByLabel("Adoption preview")).toContainText("Consequences:");
+  await page.getByLabel("Owner", { exact: true }).fill("reviewer");
+  await expect(page.getByRole("button", { name: "Confirm adoption" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Preview tracked work" }).click();
+  changed = true;
+  await page.getByRole("button", { name: "Confirm adoption" }).click();
+  await expect(page.getByRole("alert")).toContainText("changed");
+  expect(confirms).toBe(0);
+  await page.getByRole("button", { name: "Preview tracked work" }).click();
+  await expect(page.getByLabel("Adoption preview")).toContainText("Changed operation");
+  await page.getByRole("button", { name: "Confirm adoption" }).click();
+  await expect(page.getByRole("status")).toContainText("todo:reviewed");
+  expect(confirms).toBe(1);
+  expect(submitted.at(-1).actions).toEqual(submitted.at(-2).actions);
+});
