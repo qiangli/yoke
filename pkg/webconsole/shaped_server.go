@@ -128,7 +128,49 @@ func (o ShapeOptions) goTool() string {
 	if o.GoTool != "" {
 		return o.GoTool
 	}
-	return "go"
+	return defaultGoTool()
+}
+
+// defaultGoTool is "go" when one is on PATH. Otherwise it is the toolchain
+// bashy provisions for itself (`bashy go`): a host with only bashy installed
+// still builds shaped app servers. The console runs inside the bashy binary,
+// so that binary is asked for its GOROOT once.
+var defaultGoTool = sync.OnceValue(func() string {
+	return resolveGoTool(exec.LookPath, os.Executable, func(self string) (string, error) {
+		out, err := exec.Command(self, "go", "env", "GOROOT").Output()
+		return strings.TrimSpace(lastLine(string(out))), err
+	})
+})
+
+func resolveGoTool(lookPath func(string) (string, error), self func() (string, error), goroot func(string) (string, error)) string {
+	if _, err := lookPath("go"); err == nil {
+		return "go"
+	}
+	exe, err := self()
+	if err != nil {
+		return "go"
+	}
+	root, err := goroot(exe)
+	if err != nil || root == "" {
+		return "go"
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name = "go.exe"
+	}
+	tool := filepath.Join(root, "bin", name)
+	if _, err := os.Stat(tool); err != nil {
+		return "go"
+	}
+	return tool
+}
+
+func lastLine(s string) string {
+	s = strings.TrimRight(s, "\r\n")
+	if i := strings.LastIndexAny(s, "\r\n"); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 func (o ShapeOptions) serverIdle() time.Duration {
