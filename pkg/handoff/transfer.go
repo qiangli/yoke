@@ -699,6 +699,9 @@ func checkSidecar(rec *Record, side *Transfer) error {
 	}
 	seen := map[string]bool{}
 	for _, id := range want {
+		if seen[id] {
+			return fmt.Errorf("handoff %s declares duplicate effect %s", rec.ID, id)
+		}
 		seen[id] = true
 	}
 	for _, id := range got {
@@ -706,6 +709,7 @@ func checkSidecar(rec *Record, side *Transfer) error {
 			return fmt.Errorf("handoff %s declares transfer metadata but its sidecar carries undeclared effect %s: re-export the record WITH its sidecar instead of resuming from a mixed pair",
 				rec.ID, id)
 		}
+		delete(seen, id) // Each declared ID must occur exactly once.
 	}
 	if side.NoExternalEffects != rec.Transfer.NoExternalEffects {
 		return fmt.Errorf("handoff %s declares transfer metadata but its sidecar disagrees on external-effect scope: re-export the record WITH its sidecar instead of resuming from a mixed pair",

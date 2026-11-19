@@ -24,8 +24,9 @@ import (
 // gets the standard coord refusal naming the winner instead of silence.
 //
 // MatchName in its own domain: a handoff id denotes one record and collides
-// with nothing else on the host. Lease mode only — a take is a detached agent
-// hold, not a child-scoped one, and it is never merely announced.
+// with nothing else on the host. Pickup and effect mutations use an attached
+// kernel hold so even concurrent calls by one episode serialize and process
+// death releases the lock. Lease mode remains available for existing callers.
 const ClaimKind = "handoff"
 
 // ClaimTTL bounds a take that never finishes. It matches coord's own lease TTL
@@ -37,7 +38,7 @@ func init() {
 	coord.RegisterKind(coord.Kind{
 		Name:  ClaimKind,
 		Match: coord.MatchName,
-		Modes: []string{coord.ModeLease},
+		Modes: []string{coord.ModeLease, coord.ModeAttached},
 		TTL:   ClaimTTL,
 	})
 }
@@ -62,6 +63,10 @@ func ClaimRef(id string) coord.Ref { return coord.Ref{Kind: ClaimKind, Name: id}
 // nothing twice, and returns the record as stored. Another holder's stamp is a
 // refusal.
 func Claim(ctx context.Context, dir string, rec *Record, holder principal.Ref, apply func() error) (*Record, error) {
+	return claimFrom(ctx, dir, dir, rec, holder, apply)
+}
+
+func claimFrom(ctx context.Context, dir, sidecarDir string, rec *Record, holder principal.Ref, apply func() error) (*Record, error) {
 	// A retired handoff is never taken: a cancelled one was explicitly killed
 	// by the human, a superseded one was replaced by a newer seat of the same
 	// role. Claiming either would fork the recovery — two live seats where the
@@ -75,10 +80,10 @@ func Claim(ctx context.Context, dir string, rec *Record, holder principal.Ref, a
 			rec.ID, rec.SupersededBy)
 	}
 	ref := ClaimRef(rec.ID)
-	g, err := coord.AcquireRef(ctx, coord.Request{
+	g, lock, err := coord.AcquireAttachedRef(ctx, coord.Request{
 		Ref:    ref,
 		Holder: holder,
-		Mode:   coord.ModeLease,
+		Mode:   coord.ModeAttached,
 		Intent: "resume --claim " + rec.ID,
 	})
 	if err != nil {
@@ -86,7 +91,7 @@ func Claim(ctx context.Context, dir string, rec *Record, holder principal.Ref, a
 	}
 	// Release on every path, cancellation included: a take that was abandoned
 	// mid-flight must not leave the seat unclaimable.
-	defer func() { _ = coord.ReleaseRef(context.WithoutCancel(ctx), ref, holder, g.Epoch) }()
+	defer func() { _ = coord.ReleaseAttached(coord.DefaultDir(), g.Claim, lock) }()
 
 	// Under the claim the stamp on disk is the truth. rec may have been read
 	// before the claim was taken — long enough ago for a winner to have stamped
@@ -100,6 +105,19 @@ func Claim(ctx context.Context, dir string, rec *Record, holder principal.Ref, a
 		}
 		return nil, fmt.Errorf("%s was already claimed by %s at %s — a handoff is taken once; "+
 			"`bashy resume --all` for the register", rec.ID, claimantName(cur), cur.ResumedAt.UTC().Format(time.RFC3339))
+	}
+
+	// Refresh the declaration under the same coordination used by CLI effect
+	// mutations. A pre-lock snapshot can have missed a newly uncertain effect.
+	if cur, ok := stored(dir, rec.ID); ok {
+		rec = cur
+	}
+	tr, err := ComposeChecked(sidecarDir, rec)
+	if err != nil {
+		return nil, err
+	}
+	if len(tr.UncertainEffects()) > 0 {
+		return nil, fmt.Errorf("pickup refused: external effects uncertain — reconcile before retry")
 	}
 
 	if apply != nil {

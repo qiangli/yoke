@@ -5,12 +5,15 @@ package handoff
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/policy/coord"
 )
 
 // cliEnv isolates one resume/handoff CLI run: its own HOME, room and store,
@@ -510,5 +513,91 @@ func TestNoEffectsCrashWindowRefuses(t *testing.T) {
 		t.Fatalf("claim succeeded from the crash window:\n%s", out)
 	} else if !strings.Contains(err.Error(), "sidecar") && !strings.Contains(err.Error(), "scope") {
 		t.Fatalf("claim refusal must name the half export: %v", err)
+	}
+}
+
+// Equal lengths and membership alone cannot prove a complete effect scope.
+func TestDuplicateEffectIDsRefusePickup(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "two external effects")
+	id := soleID(t, dir)
+	for _, op := range []string{"push image", "notify channel"} {
+		if _, err := runResume(t, "--declare-effect", op, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := runResume(t, "--reconcile-effect", "fx-1", "--as", "applied", id); err != nil {
+		t.Fatal(err)
+	}
+	side, err := LoadTransfer(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side.Effects[1] = side.Effects[0] // hide uncertain fx-2 with safe fx-1
+	if _, err := SaveTransfer(dir, side); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runResume(t, "--claim", id); err == nil {
+		t.Fatal("duplicate sidecar IDs opened pickup")
+	}
+	rec, _ := stored(dir, id)
+	if rec.ResumedAt != nil {
+		t.Fatal("corrupt sidecar stamped ownership")
+	}
+	rec.Transfer.Effects[1] = rec.Transfer.Effects[0]
+	if err := checkSidecar(rec, side); err == nil {
+		t.Fatal("duplicate declaration accepted")
+	}
+}
+
+// A safe pre-lock snapshot must not hide an effect declared before pickup.
+func TestClaimRechecksEffectsUnderLock(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "interrupted work")
+	id := soleID(t, dir)
+	stale, _ := stored(dir, id)
+	if _, err := ComposeChecked(dir, stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runResume(t, "--declare-effect", "notify channel", id); err != nil {
+		t.Fatal(err)
+	}
+	applied := false
+	if _, err := Claim(context.Background(), dir, stale, taker("replacement", "new"), func() error { applied = true; return nil }); err == nil || !strings.Contains(err.Error(), "uncertain") {
+		t.Fatalf("stale snapshot claim = %v", err)
+	}
+	if applied {
+		t.Fatal("unsafe claim applied work")
+	}
+	cur, _ := stored(dir, id)
+	if cur.ResumedAt != nil || len(cur.Transfer.Effects) != 1 {
+		t.Fatal("claim lost effect or stamped ownership")
+	}
+}
+
+// Effect writers cannot enter between the final check and ownership stamp.
+func TestClaimSerializesEffectMutations(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "local work")
+	id := soleID(t, dir)
+	rec, _ := stored(dir, id)
+	_, err := Claim(context.Background(), dir, rec, coord.Self(), func() error {
+		for _, args := range [][]string{
+			{"--declare-effect", "notify channel", id},
+			{"--reconcile-effect", "fx-1", "--as", "applied", id},
+			{"--no-external-effects", id},
+		} {
+			if _, err := runResume(t, args...); err == nil {
+				t.Fatalf("mutation entered held pickup: %v", args)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := stored(dir, id)
+	if cur.ResumedAt == nil || len(cur.Transfer.Effects) != 0 {
+		t.Fatal("mutation changed held pickup")
 	}
 }

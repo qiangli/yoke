@@ -335,6 +335,22 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				if err != nil {
 					return err
 				}
+				// Serialize the entire read/modify/write with pickup, including
+				// its final effect check and durable ownership stamp.
+				self := coord.Self()
+				ref := ClaimRef(rec.ID)
+				g, lock, err := coord.AcquireAttachedRef(cmd.Context(), coord.Request{
+					Ref: ref, Holder: self, Mode: coord.ModeAttached, Intent: "resume effect mutation " + rec.ID,
+				})
+				if err != nil {
+					return err
+				}
+				defer func() { _ = coord.ReleaseAttached(coord.DefaultDir(), g.Claim, lock) }()
+				// Re-read after acquisition so concurrent declarations cannot
+				// overwrite each other or erase a pickup stamp.
+				if cur, ok := stored(dir, rec.ID); ok {
+					rec = cur
+				}
 				if reason := retiredReason(rec); reason != "" {
 					return retiredErr(rec)
 				}
@@ -544,7 +560,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 			// when the ambient session has none, so a human-launched tool is a
 			// distinguishable holder of both the claim and the stamp.
 			self := coord.Self()
-			claimed, err := Claim(cmd.Context(), dir, rec, self, func() error {
+			claimed, err := claimFrom(cmd.Context(), dir, transferDir(dir, args), rec, self, func() error {
 				if rec.Work.Clean {
 					return nil
 				}
