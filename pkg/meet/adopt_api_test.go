@@ -1,6 +1,7 @@
 package meet
 
 import (
+	"bufio"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -457,11 +458,26 @@ func TestDeclaredAgentNeedsItsLiveClaim(t *testing.T) {
 	registerFleet(t, "lead-bot")
 	clearAgentEnv(t)
 	t.Setenv("USER", "room-human")
-	cmd := exec.Command("sh", "-c", "sleep 60")
-	if err := cmd.Start(); err != nil {
-		t.Skipf("cannot start a live foreign process: %v", err)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestLiveClaimHolderProcess$")
+	cmd.Env = append(os.Environ(), "MEET_TEST_LIVE_CLAIM_HOLDER=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start live claim holder: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = cmd.Wait()
+	})
+	if scan := bufio.NewScanner(stdout); !scan.Scan() || scan.Text() != "ready" {
+		t.Fatalf("live claim holder did not become ready")
+	}
 	if err := room.Join(room.Card{
 		ID: room.AgentClaimID("lead-bot"), Nick: "lead-bot", Tool: "codex", Binding: "codex:test",
 		Mode: "interactive", PID: os.Getpid(), OwnerPID: cmd.Process.Pid,
@@ -483,6 +499,17 @@ func TestDeclaredAgentNeedsItsLiveClaim(t *testing.T) {
 	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
 		t.Fatalf("unregistered declared agent accepted: %v", err)
 	}
+}
+
+// TestLiveClaimHolderProcess is the portable child of the live-claim test.
+// It stays alive until its parent closes stdin, preserving the real owner-PID
+// liveness check without relying on a platform shell or sleep command.
+func TestLiveClaimHolderProcess(t *testing.T) {
+	if os.Getenv("MEET_TEST_LIVE_CLAIM_HOLDER") == "" {
+		t.Skip("child-process helper for TestDeclaredAgentNeedsItsLiveClaim")
+	}
+	_, _ = io.WriteString(os.Stdout, "ready\n")
+	_, _ = io.Copy(io.Discard, os.Stdin)
 }
 
 // preclaim seats name with a live claim bound to session, as a launched

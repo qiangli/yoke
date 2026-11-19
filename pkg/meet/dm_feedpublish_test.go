@@ -2,6 +2,7 @@ package meet
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -376,8 +377,11 @@ func TestDMAttachmentsReachAgentTurnAsPathsNotContents(t *testing.T) {
 
 	t.Run("stdin attachments", func(t *testing.T) {
 		calls2 := stubInvoke(t, "seen2")
-		stdin := `{"text":"post this too","attachments":["` + p1 + `"]}`
-		out2 := runDMFrontDoorCmd(t, stdin, "codex", "--channel", "telegram", "--sender", "alice")
+		payload, err := json.Marshal(map[string]any{"text": "post this too", "attachments": []string{p1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out2 := runDMFrontDoorCmd(t, string(payload), "codex", "--channel", "telegram", "--sender", "alice")
 		if strings.TrimSpace(out2) != "seen2" {
 			t.Fatalf("stdout = %q", out2)
 		}
