@@ -212,7 +212,6 @@ var SeededProfiles = map[string]LaunchProfile{
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
 	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"opencode": {Args: []string{"run"}, UnsafeArgs: []string{"--auto"}, UnsafeArgsAfter: true},
-	"aider":    {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
 }
 
 var NewCatalog = func() *fleet.Catalog { return fleet.New() }
@@ -1132,7 +1131,6 @@ var canonicalUnsafeFlag = map[string]string{
 	"claude":   "--dangerously-skip-permissions",
 	"agy":      "--dangerously-skip-permissions",
 	"opencode": "--auto",
-	"aider":    "--yes-always",
 	"muse":     "--yolo",
 }
 

@@ -159,7 +159,7 @@ func normalizeToolName(tool string) string {
 // catalog lists no tools (seeds off after the Mechanism→seed move, or nothing
 // mounted). The names themselves are data: the fleet tool registry, which an
 // operator reshapes with a same-named shared, org or local record.
-var weaveKnownFallback = []string{"claude-code", "opencode", "claude", "codex", "aider", "gemini", "agy"}
+var weaveKnownFallback = []string{"claude-code", "opencode", "claude", "codex", "agy", "muse", "zcode", "kimi", "dsh", "ycode"}
 
 // weaveKnownTool is one recognizable spelling and the canonical tool it keys.
 type weaveKnownTool struct {
