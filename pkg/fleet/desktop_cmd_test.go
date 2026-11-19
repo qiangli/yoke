@@ -349,3 +349,55 @@ func TestDesktopRequestAndOwnerRequests(t *testing.T) {
 		t.Fatalf("request body = %v", calls[0].body)
 	}
 }
+
+func TestJourneyParity(t *testing.T) {
+	var posts []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/desktop/journey" {
+			w.Write([]byte(`{"events":{"shaped":true,"undone":true},"invitations":[],"next":{"id":"attach-machine"}}`))
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		posts = append(posts, body)
+		w.Write([]byte(`{"next":null}`))
+	}))
+	defer server.Close()
+	run := func(cmd interface {
+		SetArgs([]string)
+		Execute() error
+	}, out *bytes.Buffer, args ...string) {
+		t.Helper()
+		cmd.SetArgs(append(args, "--master", server.URL, "--token", "t", "--json"))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	// bashy journey and bashy desktop journey are the same reads.
+	var a, b bytes.Buffer
+	j := NewJourneyCmd()
+	j.SetOut(&a)
+	run(j, &a, "next")
+	d := NewDesktopCmd()
+	d.SetOut(&b)
+	run(d, &b, "journey", "next")
+	if a.String() != b.String() || strings.TrimSpace(a.String()) != `{"next":{"id":"attach-machine"}}` {
+		t.Fatalf("next: %q vs %q", a.String(), b.String())
+	}
+	var st bytes.Buffer
+	j = NewJourneyCmd()
+	j.SetOut(&st)
+	run(j, &st, "status")
+	if !json.Valid(st.Bytes()) || !strings.Contains(st.String(), `"undone":true`) {
+		t.Fatal(st.String())
+	}
+	for verb, event := range map[string]string{"shown": "shown", "take": "taken", "dismiss": "dismissed"} {
+		j = NewJourneyCmd()
+		j.SetOut(&bytes.Buffer{})
+		run(j, nil, verb, "attach-machine")
+		last := posts[len(posts)-1]
+		if last["invitation"] != "attach-machine" || last["event"] != event {
+			t.Fatalf("%s: %v", verb, last)
+		}
+	}
+}

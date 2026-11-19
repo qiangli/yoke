@@ -198,7 +198,92 @@ func NewDesktopCmd() *cobra.Command {
 		}
 	}})
 
+	root.AddCommand(newJourneyCmd("journey", client))
 	root.AddCommand(newDesktopPolicyCmd())
+	return root
+}
+
+// NewJourneyCmd is `bashy journey`: the same journey state the desktop
+// shows, for an agent. It shares the desktop's account, credentials and
+// transport; `bashy desktop journey` is the same command.
+func NewJourneyCmd() *cobra.Command {
+	var master, token string
+	var acct accountFlag
+	client := func(cmd *cobra.Command) (*boundary.Client, error) {
+		u, t, e := cloudOverrides(cmd.Context(), &acct, master, token)
+		if e != nil {
+			return nil, e
+		}
+		return NewMemberClient(u, t)
+	}
+	root := newJourneyCmd("journey", client)
+	root.PersistentFlags().StringVar(&master, "master", "", "Cloudbox URL")
+	root.PersistentFlags().StringVar(&token, "token", "", "Bearer token (prefer the saved account credential)")
+	root.PersistentFlags().Bool("json", true, "machine-readable output")
+	acct.bindPersistent(root)
+	return root
+}
+
+// newJourneyCmd reads the person's journey (law 2: an invitation is offered
+// only after the rung before it was used) and records what they did with
+// one. status and next only read; shown, take and dismiss record one event.
+func newJourneyCmd(use string, client func(*cobra.Command) (*boundary.Client, error)) *cobra.Command {
+	root := &cobra.Command{Use: use, Short: "Read your journey: what you have used and the one invitation earned next", SilenceUsage: true, SilenceErrors: true}
+	read := func(cmd *cobra.Command) ([]byte, error) {
+		c, err := client(cmd)
+		if err != nil {
+			return nil, err
+		}
+		return c.Do(cmd.Context(), http.MethodGet, "/api/v1/desktop/journey", nil)
+	}
+	root.AddCommand(&cobra.Command{Use: "status", Short: "Show the competence events and every invitation's state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		raw, err := read(cmd)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+		return err
+	}})
+	root.AddCommand(&cobra.Command{Use: "next", Short: "Show the one invitation to offer now, or null (reading never marks it shown)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		raw, err := read(cmd)
+		if err != nil {
+			return err
+		}
+		var j struct {
+			Next json.RawMessage `json:"next"`
+		}
+		if err = json.Unmarshal(raw, &j); err != nil {
+			return err
+		}
+		if len(j.Next) == 0 {
+			j.Next = json.RawMessage("null")
+		}
+		out, err := json.Marshal(map[string]json.RawMessage{"next": j.Next})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(out))
+		return err
+	}})
+	for _, e := range []struct{ event, short string }{
+		{"shown", "Record that an earned invitation was shown to you (once; repeats change nothing)"},
+		{"take", "Record that you took an invitation up"},
+		{"dismiss", "Dismiss an invitation for good"},
+	} {
+		event := map[string]string{"shown": "shown", "take": "taken", "dismiss": "dismissed"}[e.event]
+		root.AddCommand(&cobra.Command{Use: e.event + " ID", Short: e.short, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, a []string) error {
+			c, err := client(cmd)
+			if err != nil {
+				return err
+			}
+			raw, err := c.Do(cmd.Context(), http.MethodPost, "/api/v1/desktop/journey", map[string]any{"invitation": a[0], "event": event})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+			return err
+		}})
+	}
 	return root
 }
 
