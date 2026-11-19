@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -199,7 +200,7 @@ func TestWorkflowRequiresIndependentVerification(t *testing.T) {
 }
 
 func TestWorkflowWrittenPageOmitsHumanLogin(t *testing.T) {
-	for _, ring := range []string{"repo", "host", "agent", "user", "dir"} {
+	for _, ring := range []string{"repo", "host", "user", "dir"} {
 		t.Run(ring, func(t *testing.T) {
 			for _, key := range []string{"WEAVE_AGENT", "BASHY_AGENT_ID", "BASHY_AGENT", "CLAUDECODE"} {
 				t.Setenv(key, "")
@@ -224,6 +225,83 @@ func TestWorkflowWrittenPageOmitsHumanLogin(t *testing.T) {
 				t.Fatalf("unexpected provenance: %+v %v", p, err)
 			}
 		})
+	}
+}
+
+func TestWorkflowWrittenPageOmitsAmbientEpisode(t *testing.T) {
+	for _, ring := range []string{"repo", "host", "user", "dir"} {
+		for _, key := range []string{"BASHY_EPISODE", "BASHY_SESSION", "WEAVE_ID"} {
+			t.Run(ring+"/"+key, func(t *testing.T) {
+				for _, env := range []string{"BASHY_EPISODE", "BASHY_SESSION", "WEAVE_ID"} {
+					t.Setenv(env, "")
+				}
+				t.Setenv(key, "synthetic-private-login@synthetic-private-host/session")
+				dir := t.TempDir()
+				w := workflowFixture()
+				result, err := ImportWorkflowReport(dir, ring, w, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				page, err := os.ReadFile(Open(dir).PagePath(result.Slug))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(page), "synthetic-private-") {
+					t.Fatal("written page leaked ambient episode")
+				}
+				p, err := openRing(dir, ring).Load(result.Slug)
+				if err != nil || p.Source.Episode != "" || p.Workflow.Reports[0].Episode != w.Reports[0].Episode {
+					t.Fatalf("unexpected source/report provenance: %+v %v", p, err)
+				}
+			})
+		}
+	}
+}
+
+func TestWorkflowAgentRingOwnerReadAndDedup(t *testing.T) {
+	t.Setenv("WEAVE_AGENT", "workflow-test-owner")
+	agentData := t.TempDir()
+	t.Setenv("YCODE_DATA_DIR", agentData)
+	dir := filepath.Join(agentData, "kb")
+	w := workflowFixture()
+	b, _ := json.Marshal(w)
+	var before []byte
+	for i := 0; i < 2; i++ {
+		out, _, err := runRing(t, string(b), "--ring", "agent", "workflow", "--apply")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result WorkflowProposal
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Applied || result.Status != StatusCandidate || result.Duplicate != (i == 1) {
+			t.Fatalf("unexpected import: %+v", result)
+		}
+		store := OpenAgentRing(dir, ToolID())
+		p, err := store.Load(result.Slug)
+		if err != nil || p.Source.Tool != ToolID() || p.Status != StatusCandidate || p.Evidence != "" {
+			t.Fatalf("owner cannot read candidate: %+v %v", p, err)
+		}
+		pages, err := store.List()
+		if err != nil || len(pages) != 1 {
+			t.Fatalf("owner list: %d %v", len(pages), err)
+		}
+		after, err := os.ReadFile(store.PagePath(result.Slug))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 && string(before) != string(after) {
+			t.Fatal("duplicate rewrote owner page")
+		}
+		before = after
+	}
+	other := OpenAgentRing(dir, "another-owner")
+	if _, err := other.Load(workflowKey(w)); !os.IsNotExist(err) {
+		t.Fatalf("other owner read candidate: %v", err)
+	}
+	if pages, err := other.List(); err != nil || len(pages) != 0 {
+		t.Fatalf("other owner list: %d %v", len(pages), err)
 	}
 }
 

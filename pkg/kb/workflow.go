@@ -244,13 +244,19 @@ func proposeWorkflow(dir, ring string, w WorkflowLearning, apply bool, verify Wo
 		}
 	}
 	if p == nil {
+		// Shareable pages must not inherit ambient login or session identifiers.
+		// The private agent ring needs its actual owner for scoped reads/dedup.
+		sourceTool := "workflow-proposer"
+		if s.ownerScoped {
+			sourceTool = s.owner
+		}
 		typ := TypeRunbook
 		if w.Kind == "incident" {
 			typ = TypeGotcha
 		}
 		p = &Page{Slug: slug, Form: FormNote, Type: typ, Status: StatusCandidate,
 			Title: w.Kind + ": " + w.Finding, Description: w.Applicability,
-			Source: &Source{Tool: "workflow-proposer", Episode: EpisodeID()},
+			Source: &Source{Tool: sourceTool},
 			Tags:   []string{"group-workflow", "todo:cdae01f261b1"}}
 	}
 	if !duplicate {

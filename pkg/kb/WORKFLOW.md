@@ -15,8 +15,11 @@ The resolver also checks previously stored reports when merging provenance.
 Successful verification writes only an ordinary KB candidate note. It does not
 validate knowledge, execute report text, send feedback, learn a skill, or activate
 a shaped version. JSON output includes slug, status, deduplication result,
-merged provenance and review guidance. Page attribution uses the generic role
-`workflow-proposer`; human OS logins and host identities are not stamped.
+merged provenance and review guidance. Shareable page attribution uses the generic
+role `workflow-proposer`; human OS logins and host identities are not stamped.
+Private agent-ring pages use the actual ring owner so owner-scoped reads and
+deduplication work. No page inherits an ambient session/episode identifier;
+explicit report episodes remain part of the supplied provenance.
 
 Example input (illustrative references, not a completed-workflow attestation):
 
