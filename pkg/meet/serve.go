@@ -205,6 +205,10 @@ func newServeHandler(ctx context.Context, opts MountOptions) http.Handler {
 	route("POST /api/rooms/{ref}/ask", handleAsync(ctx, "ask"))
 	route("POST /api/rooms/{ref}/converge", handleAsync(ctx, "converge"))
 	route("POST /api/rooms/{ref}/open", handleOpen)
+	route("GET /api/rooms/{ref}/actions", handleActionList)
+	route("POST /api/rooms/{ref}/actions/adopt", handleActionAdopt)
+	route("POST /api/rooms/{ref}/actions/reconcile", handleActionReconcile)
+	route("POST /api/rooms/{ref}/actions/outcome", handleActionOutcome)
 	route("POST /api/rooms/{ref}/close", handleClose)
 
 	// Everything else is the SPA, including its client-side routes.
@@ -309,7 +313,7 @@ func apiErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, err)
 	case errors.Is(err, ErrWrongMode):
 		writeErr(w, http.StatusConflict, err)
-	case errors.Is(err, ErrNotOrganizer):
+	case errors.Is(err, ErrNotOrganizer), errors.Is(err, ErrNoAuthority):
 		writeErr(w, http.StatusForbidden, err)
 	case errors.Is(err, ErrNoRoom):
 		writeErr(w, http.StatusNotFound, err)
@@ -586,6 +590,63 @@ func handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// The action routes call the same exported API the CLI does (adopt_api.go). The
+// confirming human is the authenticated caller, never a name taken from the body;
+// an agent identity is refused by the API.
+func handleActionList(w http.ResponseWriter, r *http.Request) {
+	views, err := RoomActions(r.PathValue("ref"), nil)
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"actions": views})
+}
+
+func handleActionAdopt(w http.ResponseWriter, r *http.Request) {
+	var req AdoptRequest
+	if err := decodeBody(r, &req); err != nil {
+		apiErr(w, err)
+		return
+	}
+	req.By = actorOf(r)
+	resp, err := AdoptActions(r.PathValue("ref"), req)
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func handleActionReconcile(w http.ResponseWriter, r *http.Request) {
+	var req ReconcileRequest
+	if err := decodeBody(r, &req); err != nil {
+		apiErr(w, err)
+		return
+	}
+	req.By = actorOf(r)
+	findings, err := ReconcileActions(r.PathValue("ref"), req)
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"affected": findings, "preview": !req.Confirm})
+}
+
+func handleActionOutcome(w http.ResponseWriter, r *http.Request) {
+	var req OutcomeRequest
+	if err := decodeBody(r, &req); err != nil {
+		apiErr(w, err)
+		return
+	}
+	req.By = actorOf(r)
+	story, posted, err := ReturnOutcome(r.PathValue("ref"), req)
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"story": story, "posted": posted})
 }
 
 func handleOpen(w http.ResponseWriter, r *http.Request) {

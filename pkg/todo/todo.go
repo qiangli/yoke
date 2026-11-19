@@ -171,6 +171,13 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 	return addPrepared(st, title, body, priority, due, recurring, assignee, nil)
 }
 
+// AddWith is Add with a hook that fills the item (id, links, extension fields)
+// before the single save, so a caller that links an item to another system never
+// leaves a half-linked record behind between a create and a second save.
+func AddWith(st *issue.Store, title, body, priority string, due *time.Time, recurring, assignee string, prepare func(*issue.Issue)) (*issue.Issue, error) {
+	return addPrepared(st, title, body, priority, due, recurring, assignee, prepare)
+}
+
 // addPrepared sets CLI metadata before the single save, so a failed save
 // never leaves behind an unlinked version of a sprint story.
 func addPrepared(st *issue.Store, title, body, priority string, due *time.Time, recurring, assignee string, prepare func(*issue.Issue)) (*issue.Issue, error) {

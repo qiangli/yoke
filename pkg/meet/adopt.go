@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/yoke/pkg/issue"
@@ -99,14 +102,30 @@ func agreedActions(room string, events []Event, syn *Synthesis) []agreedAction {
 		owner, task := splitOwner(text)
 		out = append(out, agreedAction{ID: id, Text: text, Owner: owner, Task: task, Source: source})
 	}
+	// A retraction withdraws an action: it must not stay a candidate, and a
+	// secretary summary that still lists the same text must not revive it.
+	retracted := map[string]bool{}
 	for _, e := range events {
-		if e.Kind == "action" {
+		if e.Kind == "retraction" && e.Retracts != "" {
+			retracted[e.Retracts] = true
+		}
+	}
+	withdrawn := map[string]bool{}
+	for _, e := range events {
+		if e.Kind == "action" && retracted[e.TS.Format(time.RFC3339Nano)] {
+			withdrawn[actionID(room, e.Text)] = true
+		}
+	}
+	for _, e := range events {
+		if e.Kind == "action" && !retracted[e.TS.Format(time.RFC3339Nano)] {
 			add(e.Text, sourceAgreed)
 		}
 	}
 	if syn != nil {
 		for _, a := range syn.Actions {
-			add(a, sourceProposed)
+			if !withdrawn[actionID(room, a)] {
+				add(a, sourceProposed)
+			}
 		}
 	}
 	return out
@@ -194,19 +213,72 @@ func storyBody(room string, a agreedAction, sp adoptSpec, deps []string, by stri
 	return b.String()
 }
 
+// storyIDFor is the story ID an action adopts into. It is derived, not random:
+// two adopters racing on the same action compute the same ID, so the second can
+// only find (or repair) the first's story, never file another beside it.
+func storyIDFor(room, action string) string {
+	sum := sha256.Sum256([]byte("meet-story\x00" + room + "\x00" + action))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// withStoreLock serializes the read-check-write sections that file or mark
+// stories. The lock is a kernel flock on a stable file keyed by the register's
+// path (kept out of the register itself, which is a committed directory), so it
+// holds across processes (a CLI and a serving browser route) as well as goroutines.
+func withStoreLock(st *issue.Store, fn func() error) error {
+	dir, err := filepath.Abs(st.Dir())
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256([]byte(dir))
+	host, _ := os.Hostname()
+	l, err := lockfile.AcquireWithin(filepath.Join(os.TempDir(), "yoke-meet-adopt-"+hex.EncodeToString(sum[:6])+".lock"), 30*time.Second, lockfile.Holder{
+		Name: host, PID: os.Getpid(), Intent: "adopt meet actions", Since: time.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("meet: waiting for the story register: %w", err)
+	}
+	defer func() { _ = l.Release() }()
+	return fn()
+}
+
 // adoptActions files one story per selected action. Already-adopted actions are
-// reported, never duplicated. With write=false nothing is saved (preview).
+// reported, never duplicated. With write=false nothing is saved (preview). The
+// whole check-and-file runs under the register lock, so concurrent repeats of
+// the same adoption converge on one story.
 func adoptActions(room string, st *issue.Store, selected []agreedAction, specs map[string]adoptSpec, by string, sprint int64, write bool) ([]adoptResult, error) {
-	existing, err := adoptedStories(st, room)
+	if !write {
+		return adoptActionsLocked(room, st, selected, specs, by, sprint, false)
+	}
+	var out []adoptResult
+	err := withStoreLock(st, func() (err error) {
+		out, err = adoptActionsLocked(room, st, selected, specs, by, sprint, true)
+		return err
+	})
+	return out, err
+}
+
+func adoptActionsLocked(room string, st *issue.Store, selected []agreedAction, specs map[string]adoptSpec, by string, sprint int64, write bool) ([]adoptResult, error) {
+	all, err := st.List()
 	if err != nil {
 		return nil, err
+	}
+	existing := map[string]*issue.Issue{} // linked stories by action ID
+	byID := map[string]*issue.Issue{}     // every story by its own ID (finds an unlinked leftover)
+	for _, it := range all {
+		byID[it.ID] = it
+		if extString(it, extRoom) == room && extString(it, extAction) != "" {
+			existing[extString(it, extAction)] = it
+		}
 	}
 	inBatch := map[string]bool{}
 	for _, a := range selected {
 		inBatch[a.ID] = true
 	}
-	// Validate everything before saving anything: a half-adopted batch is the
-	// duplicate-prone state this feature exists to avoid.
+	// Validate everything before saving anything. Same-batch dependencies are
+	// resolved to the derived story ID, so they need no prior creation and no
+	// ordering: only a genuine cycle is refused.
+	graph := map[string][]string{}
 	for _, a := range selected {
 		if _, done := existing[a.ID]; done {
 			continue
@@ -216,7 +288,14 @@ func adoptActions(room string, st *issue.Store, selected []agreedAction, specs m
 			return nil, fmt.Errorf("meet: action %s needs at least one --accept criterion before it can be adopted", a.ID)
 		}
 		for _, d := range sp.Depends {
-			if _, ok := existing[d]; ok || inBatch[d] {
+			if _, ok := existing[d]; ok {
+				continue
+			}
+			if inBatch[d] {
+				if d == a.ID {
+					return nil, fmt.Errorf("meet: action %s depends on itself", a.ID)
+				}
+				graph[a.ID] = append(graph[a.ID], d)
 				continue
 			}
 			if _, err := todo.ResolveRef(st, d); err != nil {
@@ -224,48 +303,43 @@ func adoptActions(room string, st *issue.Store, selected []agreedAction, specs m
 			}
 		}
 	}
+	if cyc := findCycle(graph); cyc != "" {
+		return nil, fmt.Errorf("meet: dependency cycle among actions in %s (through %s)", room, cyc)
+	}
 	var out []adoptResult
-	pending := append([]agreedAction(nil), selected...)
-	// Adopt dependencies first so a dependent story can name the story ID.
-	for progress := true; len(pending) > 0 && progress; {
-		progress = false
-		var next []agreedAction
-		for _, a := range pending {
-			if it, done := existing[a.ID]; done {
-				out = append(out, adoptResult{Action: a, Story: it.ID, Note: "already adopted"})
-				progress = true
-				continue
-			}
-			sp := specs[a.ID]
-			var deps []string
-			ready := true
-			for _, d := range sp.Depends {
-				if it, ok := existing[d]; ok {
-					deps = append(deps, it.ID)
-				} else if inBatch[d] {
-					ready = false
-				} else if it, err := todo.ResolveRef(st, d); err == nil {
+	for _, a := range selected {
+		if it, done := existing[a.ID]; done {
+			out = append(out, adoptResult{Action: a, Story: it.ID, Note: "already adopted"})
+			continue
+		}
+		sp := specs[a.ID]
+		var deps []string
+		for _, d := range sp.Depends {
+			switch {
+			case existing[d] != nil:
+				deps = append(deps, existing[d].ID)
+			case inBatch[d]:
+				deps = append(deps, storyIDFor(room, d))
+			default:
+				if it, err := todo.ResolveRef(st, d); err == nil {
 					deps = append(deps, it.ID)
 				}
 			}
-			if !ready {
-				next = append(next, a)
-				continue
-			}
-			progress = true
-			if sp.Owner == "" {
-				sp.Owner = a.Owner
-			}
-			r := adoptResult{Action: a, Created: true}
-			if write {
-				it, err := todo.Add(st, a.Task, storyBody(room, a, sp, deps, by), "", nil, "", "")
-				if err != nil {
-					return out, err
-				}
+		}
+		if sp.Owner == "" {
+			sp.Owner = a.Owner
+		}
+		sid := storyIDFor(room, a.ID)
+		r := adoptResult{Action: a, Created: true, Story: sid}
+		if write {
+			fill := func(it *issue.Issue) {
+				it.ID = sid
 				if sprint != 0 {
 					todo.LinkSprint(it, sprint)
 				}
 				it.Kind = issue.KindTask
+				it.Title = a.Task
+				it.Body = storyBody(room, a, sp, deps, by)
 				it.Labels = []string{labelAdopted}
 				it.Assignee = sp.Owner
 				it.Origin = "meet:" + room
@@ -277,20 +351,66 @@ func adoptActions(room string, st *issue.Store, selected []agreedAction, specs m
 					setExt(it, extDepends, deps)
 				}
 				setExt(it, extAccept, sp.Accept)
-				if _, err := st.Save(it); err != nil {
+			}
+			if left := byID[sid]; left != nil {
+				// A story with this derived ID but no link: a previous adoption
+				// was interrupted. Complete it rather than filing a second one.
+				fill(left)
+				if _, err := st.Save(left); err != nil {
+					return out, err
+				}
+				existing[a.ID] = left
+				r.Note = "completed an interrupted adoption"
+			} else {
+				it, err := todo.AddWith(st, a.Task, "", "", nil, "", "", fill)
+				if err != nil {
 					return out, err
 				}
 				existing[a.ID] = it
-				r.Story = it.ID
+				byID[sid] = it
 			}
-			out = append(out, r)
 		}
-		pending = next
-	}
-	if len(pending) > 0 {
-		return out, fmt.Errorf("meet: dependency cycle among actions in %s", room)
+		out = append(out, r)
 	}
 	return out, nil
+}
+
+// findCycle returns a node on a dependency cycle, or "".
+func findCycle(g map[string][]string) string {
+	const (
+		visiting = 1
+		done     = 2
+	)
+	state := map[string]int{}
+	var visit func(n string) string
+	visit = func(n string) string {
+		state[n] = visiting
+		for _, d := range g[n] {
+			if state[d] == visiting {
+				return d
+			}
+			if state[d] == 0 {
+				if c := visit(d); c != "" {
+					return c
+				}
+			}
+		}
+		state[n] = done
+		return ""
+	}
+	keys := make([]string, 0, len(g))
+	for k := range g {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if state[k] == 0 {
+			if c := visit(k); c != "" {
+				return c
+			}
+		}
+	}
+	return ""
 }
 
 // reconcileFinding names one adopted story whose room decision moved.
@@ -328,7 +448,18 @@ func similarity(a, b string) float64 {
 // room (amended, withdrawn, or re-decided), plus open stories that depend on
 // them. With write=true it marks each story and returns findings; the caller
 // posts the room request for those newly Requested.
-func reconcileAdopted(room string, st *issue.Store, current []agreedAction, write bool) ([]reconcileFinding, error) {
+func reconcileAdopted(room string, st *issue.Store, current []agreedAction, write bool) (out []reconcileFinding, err error) {
+	if !write {
+		return reconcileAdoptedLocked(room, st, current, false)
+	}
+	err = withStoreLock(st, func() (e error) {
+		out, e = reconcileAdoptedLocked(room, st, current, true)
+		return e
+	})
+	return out, err
+}
+
+func reconcileAdoptedLocked(room string, st *issue.Store, current []agreedAction, write bool) ([]reconcileFinding, error) {
 	adopted, err := adoptedStories(st, room)
 	if err != nil {
 		return nil, err
@@ -367,15 +498,22 @@ func reconcileAdopted(room string, st *issue.Store, current []agreedAction, writ
 		staleIdx[it.ID] = len(findings)
 		findings = append(findings, f)
 	}
-	for _, id := range ids {
-		it := adopted[id]
-		if todo.IsClosed(it.Status) || stale[it.ID] != "" {
-			continue
-		}
-		for _, d := range extStrings(it, extDepends) {
-			if _, ok := stale[d]; ok {
-				findings = append(findings, reconcileFinding{Story: it.ID, Action: id, Reason: "depends on story " + d + ", whose decision changed"})
-				break
+	// Work that depends on a changed decision is affected too, transitively.
+	for changed := true; changed; {
+		changed = false
+		for _, id := range ids {
+			it := adopted[id]
+			if todo.IsClosed(it.Status) || stale[it.ID] != "" {
+				continue
+			}
+			for _, d := range extStrings(it, extDepends) {
+				if _, ok := stale[d]; ok {
+					reason := "depends on story " + d + ", whose decision changed"
+					stale[it.ID] = reason
+					findings = append(findings, reconcileFinding{Story: it.ID, Action: id, Reason: reason})
+					changed = true
+					break
+				}
 			}
 		}
 	}
@@ -425,7 +563,15 @@ func hasLabel(it *issue.Issue, l string) bool {
 // recordOutcome returns a verified story result to its room, exactly once. A
 // story counts as verified only once it is closed done — sprint stories reach
 // that through `bashy sprint accept`, not through a worker's own claim.
-func recordOutcome(st *issue.Store, ref string, evidence []string, post func(room, text string) error) (*issue.Issue, bool, error) {
+func recordOutcome(st *issue.Store, ref string, evidence []string, post func(room, text string) error) (it *issue.Issue, posted bool, err error) {
+	err = withStoreLock(st, func() (e error) {
+		it, posted, e = recordOutcomeLocked(st, ref, evidence, post)
+		return e
+	})
+	return it, posted, err
+}
+
+func recordOutcomeLocked(st *issue.Store, ref string, evidence []string, post func(room, text string) error) (*issue.Issue, bool, error) {
 	it, err := todo.ResolveRef(st, ref)
 	if err != nil {
 		return nil, false, err
@@ -481,28 +627,29 @@ func newAdoptCmd() *cobra.Command {
 		Long: "Without --confirm this only lists the room's actions and their adoption state.\n" +
 			"Adopting is explicit: name each action with --action and give it at least one\n" +
 			"--accept ID=CRITERION; --owner ID=NAME and --depends ID=ACTION|STORY are optional.\n" +
-			"Secretary-proposed actions are never adopted unless named. Re-running is safe: the\n" +
-			"action ID is stable, so an adopted action never yields a second story.\n" +
+			"--confirm needs a human --by (default: the room's human); an agent or the secretary\n" +
+			"is refused. Secretary-proposed actions are never adopted unless named. Re-running is\n" +
+			"safe: the action ID is stable, so an adopted action never yields a second story.\n" +
 			"--reconcile reports (with --confirm, requests) reconciliation for stories whose action changed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			room, err := resolveMeeting(args[0])
+			state, err := roomOf(args[0])
 			if err != nil {
 				return err
 			}
-			state, err := loadState(room)
-			if err != nil {
-				return err
-			}
-			events, _ := readTranscript(room)
-			current := agreedActions(room, events, loadSynthesis(room))
 			store, _, err := todo.ResolveStore("", repo, user, baseDir)
 			if err != nil {
 				return err
 			}
+			if by == "" {
+				by = strings.TrimSpace(state.Human)
+				if by == "" {
+					by = humanName()
+				}
+			}
 			w := cmd.OutOrStdout()
 			if reconcile {
-				findings, err := reconcileAdopted(room, store, current, confirm)
+				findings, err := ReconcileActions(state.ID, ReconcileRequest{Confirm: confirm, By: by, Store: store})
 				if err != nil {
 					return err
 				}
@@ -515,92 +662,64 @@ func newAdoptCmd() *cobra.Command {
 						fmt.Fprintf(w, "; possible successor %s", f.Replacement)
 					}
 					fmt.Fprintln(w)
-					if confirm && f.Requested {
-						if _, err := record(state, "note", by, "", fmt.Sprintf("reconcile: story %s (action %s) — %s. Please confirm, amend or close it.", f.Story, f.Action, f.Reason)); err != nil {
-							return err
-						}
-					}
 				}
 				if !confirm && len(findings) > 0 {
 					fmt.Fprintln(w, "preview only; re-run with --confirm to mark the stories and ask the room")
 				}
 				return nil
 			}
-			adopted, err := adoptedStories(store, room)
-			if err != nil {
-				return err
+			req := AdoptRequest{Confirm: confirm, By: by, Sprint: sprint, Store: store}
+			if len(ids) > 0 {
+				ow, err := parseKV(owners, "--owner")
+				if err != nil {
+					return err
+				}
+				dp, err := parseKV(depends, "--depends")
+				if err != nil {
+					return err
+				}
+				ac, err := parseKV(accepts, "--accept")
+				if err != nil {
+					return err
+				}
+				for _, id := range ids {
+					sp := ActionSpec{Action: id, Depends: dp[id], Accept: ac[id]}
+					if len(ow[id]) > 0 {
+						sp.Owner = ow[id][0]
+					}
+					req.Actions = append(req.Actions, sp)
+				}
 			}
-			if len(ids) == 0 {
-				for _, a := range current {
+			resp, err := AdoptActions(state.ID, req)
+			if resp != nil {
+				for _, a := range resp.Candidates {
 					stateWord := "not adopted"
-					if it, ok := adopted[a.ID]; ok {
-						stateWord = "adopted as " + it.ID
+					if a.Adopted {
+						stateWord = "adopted as " + a.Story
 					}
 					fmt.Fprintf(w, "%s  [%s] %s — %s\n", a.ID, a.Source, a.Text, stateWord)
 				}
-				if len(current) == 0 {
-					fmt.Fprintln(w, "(no actions in this room)")
+				if len(ids) == 0 {
+					if len(resp.Candidates) == 0 {
+						fmt.Fprintln(w, "(no actions in this room)")
+					}
+					fmt.Fprintln(w, "preview only; name actions with --action ID and --accept ID=CRITERION, then --confirm to adopt")
 				}
-				fmt.Fprintln(w, "preview only; name actions with --action ID and --accept ID=CRITERION, then --confirm to adopt")
-				return nil
-			}
-			byID := map[string]agreedAction{}
-			for _, a := range current {
-				byID[a.ID] = a
-			}
-			var selected []agreedAction
-			for _, id := range ids {
-				a, ok := byID[id]
-				if !ok {
-					return fmt.Errorf("meet: no action %s in room %s", id, room)
-				}
-				selected = append(selected, a)
-			}
-			ow, err := parseKV(owners, "--owner")
-			if err != nil {
-				return err
-			}
-			dp, err := parseKV(depends, "--depends")
-			if err != nil {
-				return err
-			}
-			ac, err := parseKV(accepts, "--accept")
-			if err != nil {
-				return err
-			}
-			specs := map[string]adoptSpec{}
-			for _, a := range selected {
-				sp := adoptSpec{Depends: dp[a.ID], Accept: ac[a.ID]}
-				if len(ow[a.ID]) > 0 {
-					sp.Owner = ow[a.ID][0]
-				}
-				specs[a.ID] = sp
-			}
-			if sprint == 0 && todo.DefaultSprint != nil {
-				if sprint, err = todo.DefaultSprint(); err != nil {
-					return err
-				}
-			}
-			if sprint != 0 && todo.PrepareSprint != nil && confirm {
-				if err := todo.PrepareSprint(store, sprint); err != nil {
-					return err
-				}
-			}
-			res, err := adoptActions(room, store, selected, specs, by, sprint, confirm)
-			for _, r := range res {
-				switch {
-				case r.Note != "":
-					fmt.Fprintf(w, "%s: %s (story %s)\n", r.Action.ID, r.Note, r.Story)
-				case confirm:
-					fmt.Fprintf(w, "%s: adopted as story %s\n", r.Action.ID, r.Story)
-				default:
-					fmt.Fprintf(w, "%s: would adopt %q\n", r.Action.ID, r.Action.Task)
+				for _, r := range resp.Results {
+					switch {
+					case r.Note != "":
+						fmt.Fprintf(w, "%s: %s (story %s)\n", r.Action.ID, r.Note, r.Story)
+					case confirm:
+						fmt.Fprintf(w, "%s: adopted as story %s\n", r.Action.ID, r.Story)
+					default:
+						fmt.Fprintf(w, "%s: would adopt %q as story %s\n", r.Action.ID, r.Action.Task, r.Story)
+					}
 				}
 			}
 			if err != nil {
 				return err
 			}
-			if !confirm {
+			if !confirm && len(ids) > 0 {
 				fmt.Fprintln(w, "preview only; re-run with --confirm to adopt")
 			}
 			return nil
@@ -616,7 +735,7 @@ func newAdoptCmd() *cobra.Command {
 	f.BoolVar(&repo, "repo", false, "use the repo todo list")
 	f.BoolVar(&user, "user", false, "use the personal todo list")
 	f.StringVar(&baseDir, "base-dir", "", "todo list base directory")
-	f.StringVar(&by, "by", "operator", "who is adopting (recorded on the story and in the room)")
+	f.StringVar(&by, "by", "", "the confirming human (default: the room's human); agents are refused")
 	f.Int64Var(&sprint, "sprint", 0, "sprint number to file the stories under (default: the host default)")
 	return cmd
 }
@@ -634,21 +753,25 @@ func newOutcomeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			it, posted, err := recordOutcome(store, args[0], evidence, func(room, text string) error {
-				state, err := loadState(room)
-				if err != nil {
-					return err
-				}
-				_, err = record(state, "note", by, "", text)
+			it, err := todo.ResolveRef(store, args[0])
+			if err != nil {
 				return err
-			})
+			}
+			room := extString(it, extRoom)
+			if room == "" {
+				return fmt.Errorf("meet: story %s was not adopted from a room", it.ID)
+			}
+			if by == "" {
+				by = humanName()
+			}
+			story, posted, err := ReturnOutcome(room, OutcomeRequest{Story: it.ID, Evidence: evidence, By: by, Store: store})
 			if err != nil {
 				return err
 			}
 			if posted {
-				fmt.Fprintf(cmd.OutOrStdout(), "returned story %s to room %s\n", it.ID, extString(it, extRoom))
+				fmt.Fprintf(cmd.OutOrStdout(), "returned story %s to room %s\n", story, room)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "story %s was already returned to its room\n", it.ID)
+				fmt.Fprintf(cmd.OutOrStdout(), "story %s was already returned to its room\n", story)
 			}
 			return nil
 		},
@@ -658,6 +781,6 @@ func newOutcomeCmd() *cobra.Command {
 	f.BoolVar(&repo, "repo", false, "use the repo todo list")
 	f.BoolVar(&user, "user", false, "use the personal todo list")
 	f.StringVar(&baseDir, "base-dir", "", "todo list base directory")
-	f.StringVar(&by, "by", "operator", "who is reporting")
+	f.StringVar(&by, "by", "", "who is reporting (default: the current user)")
 	return cmd
 }
