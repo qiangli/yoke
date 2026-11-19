@@ -3,12 +3,12 @@ package meet
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/issue"
-	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -165,20 +165,54 @@ func sameHuman(a, b string) bool {
 // name anyone but the caller — the flag repeats who the caller already is.
 func callerPrincipal(by string) (string, error) {
 	by = strings.TrimSpace(strings.TrimPrefix(by, "@"))
-	if ref, ok := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self(); ok {
-		if ref.Kind != principal.KindAgent || strings.TrimSpace(ref.Name) == "" {
-			return "", fmt.Errorf("%w: caller is an unattributed %s session (%s); run as a launched agent or a human shell", ErrNoAuthority, ref.Kind, ref.Name)
+	requested := ""
+	declared := ""
+	for _, k := range []string{"BASHY_AGENT", "WEAVE_AGENT", "BASHY_AGENT_ID", "WEAVE_CONDUCTOR"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			declared = v
+			break
 		}
-		if by != "" && !sameAgent(by, ref.Name) {
-			return "", fmt.Errorf("%w: --by %s is not the calling agent (%s)", ErrNoAuthority, by, ref.Name)
+	}
+	if declared != "" {
+		// An agent environment never reads as the OS user: the declared name
+		// must be a registered agent and pass its live session-claim check.
+		if by != "" && !sameAgent(by, declared) {
+			return "", fmt.Errorf("%w: --by %s is not the calling agent (%s)", ErrNoAuthority, by, declared)
 		}
-		return ref.Name, nil
+		requested = declared
+		if _, registered := agentRegistered(declared); !registered {
+			return "", fmt.Errorf("%w: agent %q is not a registered agent", ErrNoAuthority, declared)
+		}
 	}
-	me := humanName()
-	if by != "" && !strings.EqualFold(by, me) {
-		return "", fmt.Errorf("%w: --by %s is not the calling user (%s)", ErrNoAuthority, by, me)
+	actor, err := bus.ResolveAuthoredActor(requested)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrNoAuthority, err)
 	}
-	return me, nil
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return "", fmt.Errorf("%w: caller identity unresolved", ErrNoAuthority)
+	}
+	if declared == "" && by != "" && !strings.EqualFold(by, actor) {
+		return "", fmt.Errorf("%w: --by %s is not the calling user (%s)", ErrNoAuthority, by, actor)
+	}
+	return actor, nil
+}
+
+// agentRegistered reports whether name is a registered fleet agent.
+func agentRegistered(name string) (string, bool) {
+	if bus.FleetResolveName != nil {
+		if n := strings.TrimSpace(bus.FleetResolveName(name)); n != "" {
+			name = n
+		}
+	}
+	if bus.FleetNames != nil {
+		for _, n := range bus.FleetNames() {
+			if strings.EqualFold(n, name) {
+				return n, true
+			}
+		}
+	}
+	return "", false
 }
 
 // roomMarked reports whether the room's transcript already carries a notice

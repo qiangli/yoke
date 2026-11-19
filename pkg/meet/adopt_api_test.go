@@ -10,14 +10,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/coopauth"
 	"github.com/qiangli/yoke/pkg/issue"
+	"github.com/qiangli/yoke/pkg/room"
 	"github.com/qiangli/yoke/pkg/todo"
 )
 
@@ -410,7 +413,7 @@ func TestReconcileCrashBetweenPostAndMarkStillTellsRoomOnce(t *testing.T) {
 // a test can stand in for a bare human shell even when run under a harness.
 func clearAgentEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"BASHY_PRINCIPAL", "BASHY_AGENT_ID", "BASHY_AGENT", "WEAVE_AGENT", "AGENT", "AI_AGENT",
+	for _, k := range []string{"BASHY_PRINCIPAL", "BASHY_INSTANCE", "BASHY_INSTANCE_UUID", "BASHY_AGENT_ID", "BASHY_AGENT", "WEAVE_AGENT", "AGENT", "AI_AGENT",
 		"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID", "GEMINI_CLI", "GOOSE_TERMINAL",
 		"OPENCODE_CLIENT", "CLINE_ACTIVE", "HERMES_AGENT", "KIMI_CODE", "OPENCLAW"} {
 		t.Setenv(k, "")
@@ -421,6 +424,7 @@ func clearAgentEnv(t *testing.T) {
 // its own principal, never the room's human, even though $USER names them and
 // --by is omitted or borrows their name.
 func TestAgentSessionUnderSharedAccountIsItsOwnPrincipal(t *testing.T) {
+	registerFleet(t, "worker", "lead-bot")
 	clearAgentEnv(t)
 	t.Setenv("USER", "room-human")
 	if p, err := callerPrincipal(""); err != nil || p != "room-human" {
@@ -437,9 +441,56 @@ func TestAgentSessionUnderSharedAccountIsItsOwnPrincipal(t *testing.T) {
 	clearAgentEnv(t)
 	t.Setenv("USER", "room-human")
 	t.Setenv("CLAUDECODE", "1")
+	bus.DetectHarness = func() (string, bool) { return "claude", true }
+	t.Cleanup(func() { bus.DetectHarness = nil })
 	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
 		t.Fatalf("unattributed harness accepted: %v", err)
 	}
+}
+
+// BASHY_AGENT is spoofable env: a different worker that declares an organizer's
+// name is refused while another session holds that agent's live claim, and an
+// unregistered declared name is never an agent principal.
+func TestDeclaredAgentNeedsItsLiveClaim(t *testing.T) {
+	newTestSession(t)
+	registerFleet(t, "lead-bot")
+	clearAgentEnv(t)
+	t.Setenv("USER", "room-human")
+	cmd := exec.Command("sh", "-c", "sleep 60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start a live foreign process: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID("lead-bot"), Nick: "lead-bot", Tool: "codex", Binding: "codex:test",
+		Mode: "interactive", PID: os.Getpid(), OwnerPID: cmd.Process.Pid,
+		SessionClaim: bus.HashSessionClaim("real-session"), Principal: "operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_AGENT", "lead-bot")
+	bus.CurrentSessionClaim = func(string) string { return "other-worker-session" }
+	t.Cleanup(func() { bus.CurrentSessionClaim = nil })
+	if p, err := callerPrincipal(""); err == nil {
+		t.Fatalf("competing session claimed lead-bot: %q", p)
+	}
+	bus.CurrentSessionClaim = func(string) string { return "real-session" }
+	if p, err := callerPrincipal(""); err != nil || p != "lead-bot" {
+		t.Fatalf("claimed organizer: %q %v", p, err)
+	}
+	t.Setenv("BASHY_AGENT", "ghost")
+	if _, err := callerPrincipal(""); !errors.Is(err, ErrNoAuthority) {
+		t.Fatalf("unregistered declared agent accepted: %v", err)
+	}
+}
+
+// registerFleet makes the named agents known to the identity guard for a test.
+func registerFleet(t *testing.T, names ...string) {
+	t.Helper()
+	pn, pr := bus.FleetNames, bus.FleetResolveName
+	bus.FleetNames = func() []string { return names }
+	bus.FleetResolveName = func(s string) string { return s }
+	t.Cleanup(func() { bus.FleetNames, bus.FleetResolveName = pn, pr })
 }
 
 // An agent organizer or sprint manager may confirm adoption under its own
@@ -487,6 +538,7 @@ func TestAdoptionByAuthorizedAgentOrganizer(t *testing.T) {
 		t.Fatalf("want 2 stories, got %d", len(all))
 	}
 	// End to end through the CLI principal: the launched organizer is itself.
+	registerFleet(t, "lead-bot", "worker")
 	clearAgentEnv(t)
 	t.Setenv("USER", "qiangli")
 	t.Setenv("BASHY_AGENT", "lead-bot")
