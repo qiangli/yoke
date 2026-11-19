@@ -1,6 +1,8 @@
 package meet
 
 import (
+	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,7 +177,11 @@ func RouteResponsibility(req ResponsibilityRequest) (ResponsibilityReceipt, erro
 	send := func(to, phase, body string) (ResponsibilityDelivery, error) {
 		body = fmt.Sprintf("[route:%s:%s] %s", req.OperationID, phase, body)
 		if req.Room != "" {
-			if found, ok, err := existingRoomRoute(st.ID, req.From, to, body); err != nil {
+			target, err := resolveSeatTarget(to)
+			if err != nil {
+				return ResponsibilityDelivery{}, err
+			}
+			if found, ok, err := existingRoomRoute(st.ID, req.From, target.Seat, body); err != nil {
 				return ResponsibilityDelivery{}, err
 			} else if ok {
 				return found, nil
@@ -191,13 +197,25 @@ func RouteResponsibility(req ResponsibilityRequest) (ResponsibilityReceipt, erro
 				return ResponsibilityDelivery{To: to, Channel: "meet", State: "unverified", Ref: fmt.Sprintf("room:%s#route:%s:%s@%s", st.ID, req.OperationID, phase, ev.TS.Format("20060102T150405.000000000Z0700")),
 					Warning: "message posted, but delivery status could not be read: " + err.Error()}, nil
 			}
+			seq := 0
+			for i := len(events) - 1; i >= 0; i-- {
+				if events[i].TS.Equal(ev.TS) && events[i].Speaker == ev.Speaker && events[i].To == ev.To && events[i].Text == ev.Text {
+					seq = i + 1
+					break
+				}
+			}
+			if seq == 0 {
+				return ResponsibilityDelivery{To: to, Channel: "meet", State: "unverified",
+					Ref:     fmt.Sprintf("room:%s#route:%s:%s@%s", st.ID, req.OperationID, phase, ev.TS.Format("20060102T150405.000000000Z0700")),
+					Warning: "posted event could not be located in transcript"}, nil
+			}
 			state := "queued"
 			reader := ev.To
 			if holder, ok := bus.RoleHolderFor(reader); ok {
 				reader = holder
 			}
 			if reader != "" && !isRoleAddress(reader) {
-				state = boardDeliveryState(st.ID, reader, int64(len(events)))
+				state = boardDeliveryState(st.ID, reader, int64(seq))
 			}
 			warning := ev.Warning
 			// The transcript is durable before the push. An existing live seat
@@ -210,8 +228,14 @@ func RouteResponsibility(req ResponsibilityRequest) (ResponsibilityReceipt, erro
 					warning = push.Reason
 				}
 			}
+			if state == "delivered" {
+				if err := AppendEvent(st.ID, Event{Round: st.Round, Speaker: req.From, Kind: "route-status", To: req.From,
+					Text: routeStatusMarker(req.OperationID, phase, seq), TS: nowFn()}); err != nil {
+					state, warning = "unverified", "live push succeeded but its status could not be recorded: "+err.Error()
+				}
+			}
 			return ResponsibilityDelivery{To: to, Channel: "meet", State: state,
-				Ref: fmt.Sprintf("room:%s#%d", st.ID, len(events)), Warning: warning}, nil
+				Ref: fmt.Sprintf("room:%s#%d", st.ID, seq), Warning: warning}, nil
 		}
 		if found, ok, err := existingBusRoute(req.From, to, body); err != nil {
 			return ResponsibilityDelivery{}, err
@@ -225,6 +249,14 @@ func RouteResponsibility(req ResponsibilityRequest) (ResponsibilityReceipt, erro
 		d := ResponsibilityDelivery{To: to, Channel: "bus", State: "unverified", Ref: fmt.Sprintf("mb:%d", res.Seq)}
 		if len(res.Deliveries) > 0 {
 			d.State, d.Warning = res.Deliveries[0].State, res.Deliveries[0].Warning
+		}
+		if d.State == "delivered" {
+			statusKey := sha256.Sum256([]byte(req.From + "\x00" + req.OperationID + "\x00" + phase))
+			_, statusErr := bus.PostMessageOnce(context.Background(), fmt.Sprintf("route-status:%x", statusKey),
+				bus.Post{From: req.From, To: req.From, Topic: "responsibility-status", Body: routeStatusMarker(req.OperationID, phase, int(res.Seq))})
+			if statusErr != nil {
+				d.State, d.Warning = "unverified", "live push succeeded but its status could not be recorded: "+statusErr.Error()
+			}
 		}
 		return d, nil
 	}
@@ -264,7 +296,15 @@ func RouteResponsibility(req ResponsibilityRequest) (ResponsibilityReceipt, erro
 var operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{8,80}$`)
 var roomSourcePattern = regexp.MustCompile(`^room:([^#]+)#([1-9][0-9]*)$`)
 
+func routeStatusMarker(operation, phase string, seq int) string {
+	return fmt.Sprintf("[route-status:%s:%s] delivered #%d", operation, phase, seq)
+}
+
 func registeredRouteAgent(actor string) bool {
+	if id, ok := bus.ExplicitInstanceID(actor); ok {
+		inst, err := bus.InstanceStoreFn().Get(id)
+		return err == nil && inst.Active() && strings.EqualFold(actor, inst.MailAddress())
+	}
 	_, ok := registeredAgentFn(actor)
 	return ok
 }
@@ -290,6 +330,13 @@ func existingRoomRoute(id, from, to, body string) (ResponsibilityDelivery, bool,
 		if reader != "" && !isRoleAddress(reader) {
 			state = boardDeliveryState(id, reader, int64(i+1))
 		}
+		operation, phase, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(marker, "[route:"), "]"), ":")
+		for _, status := range events {
+			if status.Kind == "route-status" && status.Speaker == from && status.Text == routeStatusMarker(operation, phase, i+1) {
+				state = "delivered"
+				break
+			}
+		}
 		return ResponsibilityDelivery{To: to, Channel: "meet", State: state, Ref: fmt.Sprintf("room:%s#%d", id, i+1)}, true, nil
 	}
 	return ResponsibilityDelivery{}, false, nil
@@ -312,7 +359,15 @@ func existingBusRoute(from, to, body string) (ResponsibilityDelivery, bool, erro
 		if post.From != from || post.To != rec.Addr || post.Body != body {
 			return ResponsibilityDelivery{}, false, fmt.Errorf("meet route: operation ID already belongs to different content")
 		}
-		return ResponsibilityDelivery{To: to, Channel: "bus", State: "queued", Ref: fmt.Sprintf("mb:%d", post.Seq)}, true, nil
+		state := "unverified"
+		operationPhase := strings.TrimSuffix(strings.TrimPrefix(marker, "[route:"), "]")
+		for _, status := range posts {
+			if status.Topic == "responsibility-status" && status.From == from && status.Body == "[route-status:"+operationPhase+"] delivered #"+strconv.FormatInt(post.Seq, 10) {
+				state = "delivered"
+				break
+			}
+		}
+		return ResponsibilityDelivery{To: to, Channel: "bus", State: state, Ref: fmt.Sprintf("mb:%d", post.Seq)}, true, nil
 	}
 	return ResponsibilityDelivery{}, false, nil
 }

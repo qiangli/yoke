@@ -563,9 +563,13 @@ func PostAs(ref, author, to, text string) (Event, error) {
 			target, toParty, warning = tgt.Seat, tgt.Party, tgt.Warning
 		}
 	}
+	role, kind := string(RoleHuman), "human"
+	if !strings.EqualFold(who, st.Human) && !st.humanAttendee(who) {
+		role, kind = string(RoleParticipant), "message"
+	}
 	ev := Event{
-		Round: st.Round, Speaker: who, Role: string(RoleHuman),
-		Kind: "human", To: target, Text: text, TS: nowFn(),
+		Round: st.Round, Speaker: who, Role: role,
+		Kind: kind, To: target, Text: text, TS: nowFn(),
 		FromParty: bus.SenderParty(who), ToParty: toParty, Warning: warning,
 	}
 	return recordFull(st, ev)
