@@ -17,7 +17,7 @@ var recognitionMarkers = []marker{
 	{"CODEX_SANDBOX", "codex"}, {"CODEX_THREAD_ID", "codex"},
 	{"GEMINI_CLI", "gemini"}, {"GOOSE_TERMINAL", "goose"},
 	{"OPENCODE_CLIENT", "opencode"}, {"CLINE_ACTIVE", "cline"},
-	{"HERMES_AGENT", "hermes"}, {"KIMI_CODE", "kimi-cli"},
+	{"HERMES_AGENT", "hermes"}, {"KIMI_CODE", "kimi"},
 	{"OPENCLAW", "openclaw"},
 }
 

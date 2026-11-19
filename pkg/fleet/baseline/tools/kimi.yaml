@@ -1,7 +1,7 @@
-name: kimi-cli
+name: kimi
 kind: cli
 display: Kimi Code
-aliases: [kimi-code]
+aliases: [kimi-code, kimi-cli]  # kimi-cli: the seed's name before Sprint 671
 cli:
   binary: kimi
   # MANAGED INSTALL (D12, 2026-10-09): Moonshot's own Kimi Code CLI release
