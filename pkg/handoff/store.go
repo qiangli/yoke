@@ -84,6 +84,9 @@ func Load(path string) (*Record, error) {
 	if r.SchemaVersion == "" {
 		return nil, fmt.Errorf("%s: missing schema_version (not a handoff record)", path)
 	}
+	if r.SchemaVersion == TransferSchemaVersion {
+		return nil, fmt.Errorf("%s: not a handoff record (transfer sidecar — pass the record)", path)
+	}
 	return &r, nil
 }
 
@@ -98,7 +101,10 @@ func List(dir string) ([]*Record, error) {
 	}
 	var out []*Record
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+		// Sidecars travel beside their records but are NOT records: the
+		// transfer schema lands here by design, and List must not mistake
+		// it for a handoff (it would read as a plausible-looking ghost).
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasSuffix(e.Name(), ".transfer.json") {
 			continue
 		}
 		r, err := Load(filepath.Join(dir, e.Name()))
@@ -159,6 +165,10 @@ func Prune(dir string) (int, error) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, r.ID+".json")); err == nil {
+			// The sidecar travels with its record and dies with it: a
+			// pruned record must not leave annotations behind for a future
+			// handoff that reuses nothing but an id prefix.
+			_ = os.Remove(transferSidecar(dir, r.ID))
 			n++
 		}
 	}

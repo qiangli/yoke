@@ -62,6 +62,18 @@ func ClaimRef(id string) coord.Ref { return coord.Ref{Kind: ClaimKind, Name: id}
 // nothing twice, and returns the record as stored. Another holder's stamp is a
 // refusal.
 func Claim(ctx context.Context, dir string, rec *Record, holder principal.Ref, apply func() error) (*Record, error) {
+	// A retired handoff is never taken: a cancelled one was explicitly killed
+	// by the human, a superseded one was replaced by a newer seat of the same
+	// role. Claiming either would fork the recovery — two live seats where the
+	// record says there is one.
+	if rec.CancelledAt != nil {
+		return nil, fmt.Errorf("%s was cancelled — it must not be picked up; "+
+			"`bashy resume --all` shows what replaced it", rec.ID)
+	}
+	if rec.SupersededAt != nil {
+		return nil, fmt.Errorf("%s was superseded by %s — take the newer seat instead",
+			rec.ID, rec.SupersededBy)
+	}
 	ref := ClaimRef(rec.ID)
 	g, err := coord.AcquireRef(ctx, coord.Request{
 		Ref:    ref,
@@ -78,7 +90,10 @@ func Claim(ctx context.Context, dir string, rec *Record, holder principal.Ref, a
 
 	// Under the claim the stamp on disk is the truth. rec may have been read
 	// before the claim was taken — long enough ago for a winner to have stamped
-	// it and released in between.
+	// it, or for the human to have retired it, in between.
+	if cur, ok := stored(dir, rec.ID); ok && retiredReason(cur) != "" {
+		return nil, retiredErr(cur)
+	}
 	if cur, ok := stored(dir, rec.ID); ok && cur.ResumedAt != nil {
 		if cur.ResumedBy != nil && coord.SameHolder(*cur.ResumedBy, holder) {
 			return cur, nil
@@ -111,6 +126,31 @@ func stored(dir, id string) (*Record, bool) {
 		return nil, false
 	}
 	return r, true
+}
+
+// retiredReason names why a record must never be taken, or "" when it is
+// still takeable. Checked both before the take (the caller's copy) and under
+// the claim (the stored copy, which may have been retired in between).
+func retiredReason(r *Record) string {
+	switch {
+	case r.CancelledAt != nil:
+		return "cancelled"
+	case r.SupersededAt != nil:
+		return "superseded"
+	default:
+		return ""
+	}
+}
+
+func retiredErr(r *Record) error {
+	switch retiredReason(r) {
+	case "cancelled":
+		return fmt.Errorf("%s was cancelled — it must not be picked up; "+
+			"`bashy resume --all` shows what replaced it", r.ID)
+	default:
+		return fmt.Errorf("%s was superseded by %s — take the newer seat instead",
+			r.ID, r.SupersededBy)
+	}
 }
 
 // claimantName names whoever stamped a record, including the honest answer when

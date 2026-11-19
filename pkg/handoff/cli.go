@@ -149,6 +149,14 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 			if err != nil {
 				return err
 			}
+			// The annotation sidecar starts life next to its record so the two
+			// travel as a pair (same directory, same scp/commit). It carries no
+			// annotations yet — identity, holder and status stay record-derived —
+			// but its presence from birth means a replacement never has to guess
+			// where the transfer for an exported handoff lives.
+			if _, serr := SaveTransfer(DefaultDir(), Summarize(rec)); serr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "handoff: warning: transfer sidecar not written: %v\n", serr)
+			}
 			recordEvent(rec, "created", refName(self), rec.Continuity)
 
 			// A role (seat) handoff is SINGULAR: retire any prior UNCLAIMED
@@ -224,14 +232,15 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 // machine, and it must work when the agent knows nothing.
 func NewResumeCmd() *cobra.Command {
 	var (
-		list    bool
-		asJSON  bool
-		show    bool
-		message string
-		prune   bool
-		all     bool
-		claim   bool
-		cancel  bool
+		list     bool
+		asJSON   bool
+		show     bool
+		message  string
+		prune    bool
+		all      bool
+		claim    bool
+		cancel   bool
+		transfer bool
 	)
 	cmd := &cobra.Command{
 		Use:   "resume [id|path]",
@@ -252,6 +261,7 @@ any one of them.
   bashy resume --all           # every handoff for this project, with status
   bashy resume --cancel <id>   # retire an unclaimed one (kept for the record)
   bashy resume --prune         # delete DONE handoffs (resumed/superseded/cancelled)
+  bashy resume --transfer [id] # recovery brief: candidate, evidence, decisions, next safe steps (read-only)
 
 Bare 'resume' NEVER claims — run it before and after a pickup to confirm an agent
 took the seat. Claiming requires --claim. A role (seat) handoff is singular: a
@@ -352,6 +362,24 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				}
 			}
 
+			// --transfer: the S5 recovery brief for the replacement —
+			// candidate identity, changed files, verification evidence,
+			// pending decisions and approvals, cancellations, next safe
+			// steps, the effect gate, and the ownership claims. Read-only:
+			// it composes the live record with its annotation sidecar and
+			// never stamps or applies. Identity and holder always come from
+			// the record, so a stale sidecar cannot misdirect the takeover.
+			if transfer {
+				tr := Compose(transferDir(dir, args), rec)
+				if asJSON {
+					b, _ := json.MarshalIndent(tr, "", "  ")
+					fmt.Fprintln(out, string(b))
+					return nil
+				}
+				fmt.Fprintln(out, Render(tr, rec))
+				return nil
+			}
+
 			if show || asJSON {
 				b, _ := json.MarshalIndent(rec, "", "  ")
 				fmt.Fprintln(out, string(b))
@@ -404,6 +432,28 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 			// successors racing for one parked seat therefore produce one winner
 			// and one refusal naming it, instead of two stamps over each other.
 			//
+			// The S5 retry gate runs BEFORE the take. Declared-but-uncertain
+			// external effects refuse the pickup: the replacement reconciles
+			// them first (re-check the outside world, mark applied or absent)
+			// and retries. An undeclared scope only warns — legacy handoffs
+			// carry no effect declaration, and warning (not refusing) keeps
+			// them takeable. A task id, run state or launch receipt never
+			// opens the gate; only observed outcomes do (see transfer.go).
+			// Retired records (cancelled, superseded) are refused inside Claim.
+			tr := Compose(transferDir(dir, args), rec)
+			if uncertain := tr.UncertainEffects(); len(uncertain) > 0 {
+				names := make([]string, 0, len(uncertain))
+				for _, e := range uncertain {
+					names = append(names, e.ID+":"+e.Op)
+				}
+				return fmt.Errorf("pickup refused: %d external effect(s) uncertain — "+
+					"reconcile before retry: %s", len(names), strings.Join(names, ", "))
+			}
+			if len(tr.Effects) == 0 && !tr.NoExternalEffects {
+				fmt.Fprintf(cmd.ErrOrStderr(), "handoff: warning: external-effect scope was never "+
+					"declared — proceeding, but reconcile any outside effects of %s before retrying them\n", rec.ID)
+			}
+			//
 			// coord.Self() rather than the bare resolver: it MINTS an episode
 			// when the ambient session has none, so a human-launched tool is a
 			// distinguishable holder of both the claim and the stamp.
@@ -434,6 +484,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 	cmd.Flags().BoolVar(&prune, "prune", false, "delete DONE handoffs (resumed, superseded, or cancelled), leaving live ones")
 	cmd.Flags().BoolVar(&show, "show", false, "print the record as JSON (read-only)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the record as JSON")
+	cmd.Flags().BoolVar(&transfer, "transfer", false, "print the S5 recovery transfer for the replacement: candidate identity, changed files, evidence, pending decisions, cancellations, next safe steps, effect gate, ownership (read-only; --json emits the transfer)")
 	return cmd
 }
 
@@ -501,6 +552,20 @@ func ownerOf(r *Record) string {
 		return refName(*r.ResumedBy)
 	}
 	return "—"
+}
+
+// transferDir resolves where the transfer sidecar for a picked record lives:
+// next to the record for one that arrived by path (scp/mesh attachment),
+// in the store otherwise. The sidecar travels WITH an exported handoff —
+// same directory, same scp — so a replacement reading a record from a path
+// finds its annotations beside it rather than in a store it cannot see.
+func transferDir(dir string, args []string) string {
+	if len(args) == 1 && (strings.ContainsRune(args[0], filepath.Separator) || strings.HasSuffix(args[0], ".json")) {
+		if abs, err := filepath.Abs(args[0]); err == nil {
+			return filepath.Dir(abs)
+		}
+	}
+	return dir
 }
 
 func pick(dir, root string, args []string) (*Record, error) {
