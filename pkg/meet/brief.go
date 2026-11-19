@@ -137,9 +137,78 @@ type BriefResult struct {
 // brief and an adoption name the same candidate; collapse the two when S1's
 // helper is importable from this package's tree.
 func briefActionID(room, text string) string {
-	norm := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	norm := normBriefText(text)
 	sum := sha256.Sum256([]byte(room + "\x00" + norm))
 	return "act-" + hex.EncodeToString(sum[:])[:10]
+}
+
+// normBriefText lowercases and collapses whitespace so two renderings of the
+// same words compare equal.
+func normBriefText(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// briefPrivateTexts collects the normalized texts of directed mail this reader
+// must not see through a second channel: addressed to somebody else and not
+// written by the reader either. The secretary reads the whole transcript, so a
+// synthesis item can quote that mail back; the brief must not launder it into
+// another reader's sections.
+func briefPrivateTexts(events []Event, reader string) []string {
+	var out []string
+	for _, e := range events {
+		if !addressedEvent(e) || directedEvent(e, reader) || authoredBy(e, reader) {
+			continue
+		}
+		if t := normBriefText(e.Text); len(t) >= 12 {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// briefWindows returns the contiguous n-word phrases of s. Quotation is a
+// shared distinctive phrase, not just a shared whole: a synthesis item that
+// repeats five running words of somebody else's mail quotes it even when the
+// mail's greeting or sign-off is left behind.
+func briefWindows(s string, n int) []string {
+	w := strings.Fields(s)
+	if len(w) < n {
+		return nil
+	}
+	out := make([]string, 0, len(w)-n+1)
+	for i := 0; i+n <= len(w); i++ {
+		out = append(out, strings.Join(w[i:i+n], " "))
+	}
+	return out
+}
+
+// briefLeaksPrivate reports whether a synthesis string reproduces private
+// directed content: verbatim either way, or sharing a five-word phrase. A
+// paraphrase beyond quotation is the secretary's own words and stays; a quoted
+// slice of somebody else's mail does not cross readers. Short fragments stay
+// out of the comparison so generic few-word phrases cannot suppress unrelated
+// synthesis.
+func briefLeaksPrivate(text string, private []string) bool {
+	t := normBriefText(text)
+	if len(t) < 12 {
+		return false
+	}
+	for _, p := range private {
+		if strings.Contains(t, p) || strings.Contains(p, t) {
+			return true
+		}
+		for _, win := range briefWindows(p, 5) {
+			if strings.Contains(t, win) {
+				return true
+			}
+		}
+		for _, win := range briefWindows(t, 5) {
+			if strings.Contains(p, win) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // briefSplitOwner reads the "owner: task" convention S1 adopts by. Only a
@@ -347,11 +416,17 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 	// The secretary's synthesis is a proposal under a human's brief, never a
 	// confirmation. Its decisions join proposals, its open questions join
 	// questions, and its risks and corrections join objections — each labeled
-	// so no reader mistakes extraction for authority.
+	// so no reader mistakes extraction for authority. The secretary reads the
+	// whole transcript, directed mail included, so an item that quotes mail
+	// addressed to somebody else is withheld from every other reader: the
+	// brief must not launder one participant's private mail into another's
+	// sections. Paraphrase beyond quotation is the secretary's own words and
+	// stays.
+	private := briefPrivateTexts(events, reader)
 	if syn := loadSynthesis(st.ID); syn != nil {
 		for _, d := range syn.Decisions {
 			text := strings.TrimSpace(d.Text)
-			if text == "" {
+			if text == "" || briefLeaksPrivate(text, private) {
 				continue
 			}
 			proposals = append(proposals, BriefItem{
@@ -362,7 +437,7 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 		}
 		for _, a := range syn.Actions {
 			text := strings.TrimSpace(a)
-			if text == "" || briefWithdrawnText(events, st.ID, text) {
+			if text == "" || briefWithdrawnText(events, st.ID, text) || briefLeaksPrivate(text, private) {
 				continue
 			}
 			it := BriefItem{
@@ -379,7 +454,7 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 			}
 		}
 		for _, o := range syn.OpenQuestions {
-			if strings.TrimSpace(o) == "" {
+			if strings.TrimSpace(o) == "" || briefLeaksPrivate(o, private) {
 				continue
 			}
 			questions = append(questions, BriefPoll{
@@ -392,7 +467,7 @@ func Brief(ref string, opt BriefOptions) (*BriefResult, error) {
 			})
 		}
 		for _, r := range append(append([]string{}, syn.Risks...), syn.Corrections...) {
-			if strings.TrimSpace(r) == "" {
+			if strings.TrimSpace(r) == "" || briefLeaksPrivate(r, private) {
 				continue
 			}
 			objections = append(objections, BriefItem{
@@ -631,7 +706,12 @@ func newBriefCmd() *cobra.Command {
 			"excluded. Human-marked decisions are authoritative; secretary synthesis\n" +
 			"is labeled a proposal and never confirms anything.\n\n" +
 			"The brief advances nothing by default: use --mark-seen to move the\n" +
-			"reader's cursor through the rendered snapshot, like `meet read`.",
+			"reader's cursor through the rendered snapshot, like `meet read`.\n\n" +
+			"--as names a seat on the local machine-owner path, the same trust as\n" +
+			"the read path's local naming. Over HTTP the reader is the verified\n" +
+			"caller: a vouched request for another participant's brief is refused,\n" +
+			"so one browser caller can neither read another's directed mail nor\n" +
+			"advance another's cursor.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

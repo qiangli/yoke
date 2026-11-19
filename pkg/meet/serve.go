@@ -411,16 +411,30 @@ func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleBrief answers a reader's catch-up brief over the same exported API the
-// CLI uses: one truth, two transports. The reader defaults to the verified
-// caller; an explicit ?as= names another participant, on the read path's terms
-// (reading is open, posting is not). It advances nothing unless ?mark_seen=1.
+// CLI uses: one truth, two transports. The reader is the verified caller — a
+// vouched request naming another participant in ?as= is refused (403), because
+// honoring it would serve the victim's directed mail to the caller and let
+// ?mark_seen=1 advance the victim's cursor. There is no delegation mechanism
+// on this route, so a mismatch is an error, never a quiet substitution. Only
+// the ungated loopback path may name a seat in ?as=, the same machine-owner
+// trust the CLI's --as rests on. The brief advances nothing unless ?mark_seen=1,
+// and then only the caller's own cursor.
 func handleBrief(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	as := strings.TrimSpace(q.Get("as"))
-	if as == "" {
-		as = actorOf(r)
+	reader := actorOf(r)
+	if id, ok := coopauth.IdentityOf(r); ok {
+		if as := strings.TrimSpace(q.Get("as")); as != "" &&
+			!strings.EqualFold(readerName(as), reader) &&
+			!strings.EqualFold(strings.TrimSpace(as), id.Username) &&
+			!strings.EqualFold(strings.TrimSpace(as), id.User) &&
+			!strings.EqualFold(strings.TrimSpace(as), id.Email) {
+			writeErr(w, http.StatusForbidden, errors.New("meet: a vouched caller may only brief itself (?as names another participant)"))
+			return
+		}
+	} else if as := strings.TrimSpace(q.Get("as")); as != "" {
+		reader = as
 	}
-	opt := BriefOptions{Reader: as, Limit: atoiOr(q.Get("limit"), BriefLimit)}
+	opt := BriefOptions{Reader: reader, Limit: atoiOr(q.Get("limit"), BriefLimit)}
 	if s := strings.TrimSpace(q.Get("since")); s != "" {
 		var v int64
 		if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v < 0 {

@@ -1,6 +1,9 @@
 package meet
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -273,6 +276,133 @@ func TestBriefRequiresAReader(t *testing.T) {
 	}
 	if _, err := Brief("no-such-room", BriefOptions{Reader: "codex"}); err == nil {
 		t.Fatal("a brief for a missing room must fail")
+	}
+}
+
+// The secretary reads the whole transcript, directed mail included, so a
+// synthesis item can quote mail addressed to somebody else back. The brief
+// must not launder that quotation into another reader's sections: the item is
+// withheld from every reader the mail was not for, while the addressee keeps
+// it and unrelated synthesis stays for everyone.
+func TestBriefSynthesisDoesNotLaunderDirectedMail(t *testing.T) {
+	const secret = "the vault combination is midnight-blue-seven"
+	st := briefRoom(t, []Event{
+		{Speaker: "qiangli", Kind: "decision", Text: "we ship friday"},
+		{Speaker: "qiangli", Kind: "message", To: "opencode", Text: "for you only: " + secret},
+	})
+	syn := &Synthesis{
+		By: "claude", At: fixedNow().Add(time.Hour), Mode: "infer",
+		Decisions:     []Decision{{Text: "we ship friday, since " + secret, Inferred: true}},
+		Actions:       []string{"opencode: rotate " + secret},
+		OpenQuestions: []string{"who else knows " + secret + "?"},
+		Risks:         []string{"exposure of " + secret, "gate flakiness may slip the date"},
+	}
+	if err := syn.save(st.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Brief(st.ID, BriefOptions{Reader: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "midnight-blue-seven") {
+		t.Fatalf("another reader's brief must not quote mail directed elsewhere:\n%s", raw)
+	}
+	// The human-marked decision is room state and stays; the secretary's own
+	// words, quoting nobody's mail, stay too.
+	if len(res.Decisions.Items) != 1 || res.Decisions.Items[0].Text != "we ship friday" {
+		t.Fatalf("public decision must survive synthesis filtering: %+v", res.Decisions)
+	}
+	kept := false
+	for _, it := range res.Objections.Items {
+		if strings.Contains(it.Text, "gate flakiness") {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("synthesis in the secretary's own words must stay: %+v", res.Objections)
+	}
+
+	// The addressee's brief is unfiltered: their own mail, and the synthesis
+	// quoting it, are theirs to see.
+	got, err := Brief(st.ID, BriefOptions{Reader: "opencode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oraw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(oraw), "midnight-blue-seven") {
+		t.Fatalf("the addressee must still see their own mail and its synthesis:\n%s", oraw)
+	}
+}
+
+// The web route binds the reader to the verified caller: a vouched request
+// naming another participant is refused before any content or cursor moves,
+// while the loopback machine-owner path keeps the CLI's --as local model.
+func TestBriefWebBindsReaderToVouchedCaller(t *testing.T) {
+	const secret = "codex lane holds the midnight vault token"
+	st := briefRoom(t, []Event{
+		{Speaker: "qiangli", Kind: "decision", Text: "public decision"},
+		{Speaker: "qiangli", Kind: "message", To: "codex", Text: secret},
+	})
+	srv := serveTest(t)
+	const attacker, victim = "attacker@example.com", "codex"
+	ref := "/api/rooms/" + url.PathEscape(st.ID) + "/brief"
+
+	before := SeenSeq(st.ID, victim)
+
+	for _, q := range []string{"?as=" + victim, "?as=" + victim + "&mark_seen=1"} {
+		resp, body := doVouchedJSON(t, srv, attacker, "GET", ref+q, nil)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-principal brief %s = %d, want 403 (body %s)", q, resp.StatusCode, body)
+		}
+		if strings.Contains(string(body), secret) {
+			t.Fatalf("a refused brief must carry no victim-directed mail: %s", body)
+		}
+	}
+	if got := SeenSeq(st.ID, victim); got != before {
+		t.Fatalf("a refused brief moved the victim cursor %d -> %d", before, got)
+	}
+
+	resp, body := doVouchedJSON(t, srv, attacker, "GET", ref, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a caller's own brief = %d, want 200 (body %s)", resp.StatusCode, body)
+	}
+	var own BriefResult
+	if err := json.Unmarshal(body, &own); err != nil {
+		t.Fatalf("decode own brief: %v (%s)", err, body)
+	}
+	if strings.EqualFold(own.Reader, victim) {
+		t.Fatalf("a vouched brief reader = %q, want the caller, not the victim", own.Reader)
+	}
+	if strings.Contains(string(body), secret) {
+		t.Fatalf("a caller's own brief must not carry victim-directed mail: %s", body)
+	}
+
+	// Naming yourself stays allowed, cursor and all.
+	resp, body = doVouchedJSON(t, srv, attacker, "GET", ref+"?as="+url.QueryEscape(own.Reader)+"&mark_seen=1", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a self-named brief = %d, want 200 (body %s)", resp.StatusCode, body)
+	}
+
+	// Loopback is the machine owner at their keyboard: ?as= names a seat,
+	// exactly like the CLI's --as, and the seat's mail is there.
+	resp, body = doJSON(t, srv, "GET", ref+"?as="+victim, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a loopback ?as= brief = %d, want 200 (body %s)", resp.StatusCode, body)
+	}
+	var local BriefResult
+	if err := json.Unmarshal(body, &local); err != nil {
+		t.Fatalf("decode loopback brief: %v (%s)", err, body)
+	}
+	if !strings.EqualFold(local.Reader, victim) || !strings.Contains(string(body), secret) {
+		t.Fatalf("a loopback ?as= brief must brief the named seat with its mail: reader %q", local.Reader)
 	}
 }
 
