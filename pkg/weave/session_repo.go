@@ -18,6 +18,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/principal"
+	"github.com/qiangli/yoke/pkg/secrets"
 )
 
 // The repo IS the session key.
@@ -189,6 +190,10 @@ var (
 	}{m: map[string]credEntry{}}
 )
 
+// boundSessionToken resolves the session token variable through the host's
+// secrets.map binding; a var so tests never reach a real vault.
+var boundSessionToken = secrets.BoundValue
+
 func resolveSessionCredentials(p *SessionPointer) (base, token string, err error) {
 	var urlOverride, tokenOverride string
 	if p != nil {
@@ -200,6 +205,20 @@ func resolveSessionCredentials(p *SessionPointer) (base, token string, err error
 		tokenOverride = os.Getenv(ref)
 	} else {
 		tokenOverride = os.Getenv("CLOUDBOX_TOKEN")
+	}
+	// An agent shell cannot render `secret env` (non-interactive reveal is
+	// refused), so the session variable is also resolved in-process from the
+	// host's secrets.map binding (`CLOUDBOX_TOKEN=@<vault name>`). Without it
+	// an identity-only paired host fell through to its host-scoped pairing
+	// token and every session call failed with insufficient scope.
+	if strings.TrimSpace(tokenOverride) == "" {
+		name := "CLOUDBOX_TOKEN"
+		if p != nil && strings.TrimSpace(p.TokenRef) != "" {
+			name = strings.TrimSpace(p.TokenRef)
+		}
+		if v, ok := boundSessionToken(name); ok {
+			tokenOverride = v
+		}
 	}
 	base, token = fleet.ResolveCloud(urlOverride, tokenOverride)
 	if token == "" {

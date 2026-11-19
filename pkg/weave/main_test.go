@@ -20,6 +20,8 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("USERPROFILE", home); err != nil {
 		panic(err)
 	}
+	// Never reach the developer's secrets.map or vault for a session token.
+	boundSessionToken = func(string) (string, bool) { return "", false }
 	// Store overrides take precedence over HOME. Inheriting the conductor's
 	// sprint store can expose its linked live queues even with a private HOME.
 	for _, entry := range os.Environ() {

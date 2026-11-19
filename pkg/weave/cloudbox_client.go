@@ -453,7 +453,10 @@ func mapCloudboxError(status string, body []byte) error {
 			}
 			_ = json.Unmarshal(body, &sc)
 			if sc.RequiredScope != "" {
-				return fmt.Errorf("%w: this host's cloudbox token lacks %s. A paired outpost token carries the session scopes once cloudbox runs a build with them (tasks:*/sprints:*, Sprint 217) and its boot-time scope catch-up has run; until then set $CLOUDBOX_TOKEN to a token minted with tasks:read,tasks:write,sprints:read,sprints:write", ErrInsufficientScope, sc.RequiredScope)
+				return fmt.Errorf("%w: the cloudbox token this host presented lacks %s (an identity-only pairing token carries only the host scope). "+
+					"Mint a session token with tasks:read,tasks:write,sprints:read,sprints:write (`bashy token create --name session-HOST --scope tasks:read,tasks:write,sprints:read,sprints:write --to-secret cloudbox-session-HOST`, "+
+					"or the cloudbox console's Settings > Access Tokens) and bind it in ~/.config/bashy/secrets.map as CLOUDBOX_TOKEN=@cloudbox-session-HOST; "+
+					"sessions read $CLOUDBOX_TOKEN from the environment, else from that binding", ErrInsufficientScope, sc.RequiredScope)
 			}
 		}
 		return fmt.Errorf("cloudbox request failed: %s: %s", status, strings.TrimSpace(string(body)))
