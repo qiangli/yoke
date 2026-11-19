@@ -354,11 +354,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				switch {
 				case declareEffect != "":
 					fx := side.DeclareEffect(declareEffect, effectDetail)
-					if _, err := SaveTransfer(sdir, side); err != nil {
-						return err
-					}
-					rec.Transfer = side.Decl()
-					if _, err := Save(dir, rec); err != nil {
+					if err := persistDecl(dir, sdir, rec, side); err != nil {
 						return err
 					}
 					fmt.Fprintf(out, "declared %s: %s — reconcile it (applied|absent) before the owning step is retried\n", fx.ID, fx.Op)
@@ -374,11 +370,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 					fmt.Fprintf(out, "reconciled %s as %s\n", reconcileID, st)
 				default: // --no-external-effects
 					side.NoExternalEffects = true
-					if _, err := SaveTransfer(sdir, side); err != nil {
-						return err
-					}
-					rec.Transfer = side.Decl()
-					if _, err := Save(dir, rec); err != nil {
+					if err := persistDecl(dir, sdir, rec, side); err != nil {
 						return err
 					}
 					fmt.Fprintf(out, "recorded: no external effects for %s — the retry gate is open on scope\n", rec.ID)
@@ -651,6 +643,29 @@ func ownerOf(r *Record) string {
 		return refName(*r.ResumedBy)
 	}
 	return "—"
+}
+
+// declRecordSave and declSidecarSave are the two halves of a declaration
+// write, split for fault injection in tests. Production code always calls
+// them through persistDecl, which orders them crash-safe (see below).
+var declRecordSave = func(dir string, rec *Record) (string, error) { return Save(dir, rec) }
+var declSidecarSave = func(dir string, t *Transfer) (string, error) { return SaveTransfer(dir, t) }
+
+// persistDecl writes the Record declaration FIRST, then its sidecar. A crash
+// or failure between the two writes must never leave a declared effect behind
+// in a sidecar the record does not name (silently dropped on a record-only
+// export, resuming as legacy): it leaves a declared record whose sidecar is
+// missing or mismatched, and ComposeChecked refuses that pair instead of
+// resuming without the uncertain-effect state.
+func persistDecl(recordDir, sidecarDir string, rec *Record, side *Transfer) error {
+	rec.Transfer = side.Decl()
+	if _, err := declRecordSave(recordDir, rec); err != nil {
+		return err
+	}
+	if _, err := declSidecarSave(sidecarDir, side); err != nil {
+		return err
+	}
+	return nil
 }
 
 // transferDir resolves where the transfer sidecar for a picked record lives:

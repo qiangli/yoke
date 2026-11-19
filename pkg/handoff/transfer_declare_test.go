@@ -5,6 +5,7 @@ package handoff
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,5 +409,106 @@ func TestCancelledBlocksPickupCLI(t *testing.T) {
 	}
 	if !strings.Contains(out, "explicitly cancelled") {
 		t.Fatalf("transfer must keep the cancellation visible:\n%s", out)
+	}
+}
+
+// The crash window between the two halves of a declaration write is safe
+// because the Record lands FIRST: a failure after the record write leaves a
+// declared record whose sidecar is stale (the birth sidecar, zero effects),
+// and every read path refuses that pair instead of resuming without the
+// uncertain effect. Copying only the record (the portable record-only export)
+// refuses too — it never degrades to a legacy warning.
+func TestDeclareCrashWindowRefusesDeclared(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "half-pushed work")
+	id := soleID(t, dir)
+
+	oldSidecar := declSidecarSave
+	declSidecarSave = func(string, *Transfer) (string, error) {
+		return "", errors.New("injected sidecar write failure")
+	}
+	_, declErr := runResume(t, "--declare-effect", "push staging image", id)
+	declSidecarSave = oldSidecar
+	if declErr == nil || !strings.Contains(declErr.Error(), "injected sidecar write failure") {
+		t.Fatalf("declare must surface the injected failure: %v", declErr)
+	}
+
+	rec, err := Load(filepath.Join(dir, id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Declared() || len(rec.Transfer.Effects) != 1 || rec.Transfer.Effects[0] != "fx-1" {
+		t.Fatalf("crash after the record write must leave the declaration on disk: %+v", rec.Transfer)
+	}
+	if _, err := ComposeChecked(dir, rec); err == nil {
+		t.Fatal("stale sidecar composed without error after the crash window")
+	} else if !strings.Contains(err.Error(), "effect") {
+		t.Fatalf("refusal must name the scope mismatch: %v", err)
+	}
+	if out, err := runResume(t, "--claim", id); err == nil {
+		t.Fatalf("claim succeeded from the crash window:\n%s", out)
+	} else if !strings.Contains(err.Error(), "effect") {
+		t.Fatalf("claim refusal must name the scope mismatch: %v", err)
+	}
+	if out, err := runResume(t, "--transfer", id); err == nil {
+		t.Fatalf("transfer rendered from the crash window:\n%s", out)
+	} else if !strings.Contains(err.Error(), "effect") {
+		t.Fatalf("transfer refusal must name the scope mismatch: %v", err)
+	}
+	if cur, _ := Load(filepath.Join(dir, id+".json")); cur.ResumedAt != nil {
+		t.Fatal("refused pickup stamped a claim")
+	}
+
+	// The record alone is not a whole export: the declared transfer refuses
+	// composition rather than resuming with dropped effects.
+	half := t.TempDir()
+	b, err := os.ReadFile(filepath.Join(dir, id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(half, id+".json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	halfRec, err := Load(filepath.Join(half, id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ComposeChecked(half, halfRec); err == nil {
+		t.Fatal("record without its declared sidecar composed without error")
+	} else if !strings.Contains(err.Error(), "sidecar") {
+		t.Fatalf("refusal must name the missing sidecar: %v", err)
+	}
+}
+
+// The same ordering holds for an explicit clean scope: a failure after the
+// record write leaves a declared no-external-effects record whose sidecar
+// disagrees, and the pickup refuses instead of opening the gate on half an
+// export.
+func TestNoEffectsCrashWindowRefuses(t *testing.T) {
+	dir, _ := cliEnv(t)
+	runHandoff(t, "-m", "local-only edit")
+	id := soleID(t, dir)
+
+	oldSidecar := declSidecarSave
+	declSidecarSave = func(string, *Transfer) (string, error) {
+		return "", errors.New("injected sidecar write failure")
+	}
+	_, declErr := runResume(t, "--no-external-effects", id)
+	declSidecarSave = oldSidecar
+	if declErr == nil || !strings.Contains(declErr.Error(), "injected sidecar write failure") {
+		t.Fatalf("no-external-effects must surface the injected failure: %v", declErr)
+	}
+
+	rec, err := Load(filepath.Join(dir, id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Declared() || !rec.Transfer.NoExternalEffects {
+		t.Fatalf("crash after the record write must leave the scope declaration on disk: %+v", rec.Transfer)
+	}
+	if out, err := runResume(t, "--claim", id); err == nil {
+		t.Fatalf("claim succeeded from the crash window:\n%s", out)
+	} else if !strings.Contains(err.Error(), "sidecar") && !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("claim refusal must name the half export: %v", err)
 	}
 }
