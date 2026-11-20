@@ -1,7 +1,7 @@
 ---
 id: 94a3c9f0edc6
 kind: feature
-title: 'bashy browser over remote cloudbox / p2p sphere: test web apps from headless servers'
+title: 'bashy browser: test web apps on a remote headless server from the local live browser (cloudbox / p2p sphere)'
 seq: 3141
 status: todo
 priority: p2
@@ -11,6 +11,12 @@ sprint_id: af559546-24b2-5355-8565-b4f41449486e
 sprint_title: 'Human-in-the-loop browser: ping-back and remote headless web-app testing'
 ---
 
-Operator 2026-11-20: an agent on a headless server (no desktop, no browser) must be able to test web apps through a browser running on another host, reached over cloudbox (satellite/relay) or the p2p sphere (peer-direct). Example: agent on a Linux test server drives Chrome on the operator's desktop or a sphere peer, loads the app under test, reads text/screenshots, clicks, and reports.
-Scope to design (shaping first, then code): (1) addressing a remote browser hub: bashy browser --host <peer|outpost> [--browser edge|chrome] reusing the live-mode hub protocol tunneled over the existing outpost mesh / sphere transport (no new public port); (2) the browser is a REAL Edge/Chrome with the bashy live-mode extension on the other host (operator clarification 2026-11-20: "use remote browser for testing via browser extension") — no headless browser is provisioned on the server; the tab is chosen by the human there (ping-back / --active) or opened by the agent; (3) the app under test may live on the headless server: expose it to the remote browser through the mesh (port-forward) rather than publishing it; (4) auth/consent: only owner/member hosts in the same circle; every remote session is logged and visible in the extension; (5) artifacts (screenshots, text) come back to the agent over the same channel.
-Acceptance: from a headless Linux test host, an agent opens a web app served on that host in a browser on another host (sphere peer or via cloudbox), reads its text and a screenshot, clicks a control, with no desktop and no public port on the test host; works with Edge and Chrome.
+Operator 2026-11-20. Topology: agent --> remote server --> browser, where the BROWSER IS ON THE SAME HOST AS THE AGENT (the operator's desktop, real Edge/Chrome with the bashy live-mode extension, password manager intact). The web app under test runs on a remote HEADLESS server (no desktop, no browser there).
+
+Gap: the local browser cannot reach the app on the headless server without publishing it. Close it over the existing fabric, not a public port:
+1. Reach: `bashy browser` (or a small companion verb) opens the remote app in the local browser through a tunnel over the outpost mesh / p2p sphere (peer-direct) or via cloudbox (relay) — e.g. a loopback port on the desktop forwarded to the server's port, or a mesh service URL. No new public port on the server.
+2. Drive: the agent on the desktop uses live mode exactly as today (--active / --id, text, screenshot, click) on that tab; the agent may be the desktop session itself, or an agent on the headless server addressing the desktop's hub over the same tunnel (reverse direction) — decide in shaping, smallest first.
+3. Consent and scope: only hosts owned by / attached to the same owner (circle rules); each tunnel is listed and closable; the extension shows which tabs an agent drives.
+4. Artifacts (text, screenshots) stay on the desktop or return to the requesting agent over the same channel.
+
+Acceptance: a web app served only on a headless Linux test host (loopback or private port, no public exposure) is opened in the operator's local Edge and Chrome via the sphere and via cloudbox; the agent reads its text, takes a screenshot and clicks a control through the live extension; closing the tunnel cuts access.
