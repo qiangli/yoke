@@ -2,6 +2,9 @@ package chat
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -79,10 +82,10 @@ func (p *SteerRelay) seen() bool {
 // StartSteerRelay watches raw PTY output for the first input prompt. A
 // launcher may also declare the exact session ready on the room timeline.
 func StartSteerRelay(c room.Card, replayedThrough int64, openingDelivered func() bool) *SteerRelay {
-	return startSteerRelay(c, replayedThrough, openingDelivered, managedInboxPoll)
+	return startSteerRelay(c, replayedThrough, openingDelivered, managedInboxPoll, defaultInteractiveDeliveryTiming.readyTimeout, os.Stderr)
 }
 
-func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func() bool, poll time.Duration) *SteerRelay {
+func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func() bool, poll, readyTimeout time.Duration, warnings io.Writer) *SteerRelay {
 	ctx, cancel := context.WithCancel(context.Background())
 	prompt := &SteerRelay{cancel: cancel, done: make(chan struct{})}
 	go func() {
@@ -94,11 +97,16 @@ func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func()
 		gate := bus.NewInboxPollGate(addr)
 		tick := time.NewTicker(poll)
 		defer tick.Stop()
+		deadline := time.Now().Add(readyTimeout)
 		ready := false
 		inputReady := func() bool {
 			if !ready && !prompt.seen() {
 				pos, err := status.Latest(ctx)
 				ready = err == nil && pos.Seq > 0
+				if !ready && !time.Now().Before(deadline) {
+					fmt.Fprintf(warnings, "chat: warning: %s did not signal readiness within %s; delivering queued steers anyway\n", c.ID, readyTimeout)
+					ready = true
+				}
 			} else {
 				ready = true
 			}
