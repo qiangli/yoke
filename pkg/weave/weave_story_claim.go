@@ -39,6 +39,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -378,7 +379,11 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		}
 		// The terminal wrapper may replay after a crash. The board lock makes
 		// matching evidence idempotent without a second outbox or lock order.
-		for _, c := range s.Thread {
+		for i := len(s.Thread) - 1; i >= 0; i-- {
+			c := s.Thread[i]
+			if sprintStoryDeliveryBoundary(c.Body, shortSprintStoryID(it.ID)) {
+				break
+			}
 			if c.Body == note && c.Author == who && c.submitsStory(it.ID) {
 				return "delivery already submitted", nil
 			}
@@ -389,7 +394,7 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 			// starts a new lifecycle and permits a new delivery.
 			for i := len(s.Thread) - 1; i >= 0; i-- {
 				c := s.Thread[i]
-				if strings.Contains(c.Body, " claimed story "+shortSprintStoryID(it.ID)) || strings.Contains(c.Body, " yielded story "+shortSprintStoryID(it.ID)) {
+				if sprintStoryDeliveryBoundary(c.Body, shortSprintStoryID(it.ID)) {
 					break
 				}
 				if c.Author == who && c.submitsStory(it.ID) {
@@ -449,8 +454,24 @@ func (c weaveComment) submitsStory(storyID string) bool {
 }
 
 func sprintSubmissionEvidence(s *weaveStory, storyID string) bool {
-	for _, c := range s.Thread {
+	short := shortSprintStoryID(storyID)
+	for i := len(s.Thread) - 1; i >= 0; i-- {
+		c := s.Thread[i]
+		if sprintStoryDeliveryBoundary(c.Body, short) {
+			return false
+		}
 		if c.submitsStory(storyID) {
+			return true
+		}
+	}
+	return false
+}
+
+// A rejected delivery cannot satisfy a later accept or suppress a resubmit
+// with identical evidence. Claim, yield and reject start a new review round.
+func sprintStoryDeliveryBoundary(body, short string) bool {
+	for _, marker := range []string{" claimed story ", " TOOK story ", " yielded story ", " rejected story "} {
+		if strings.Contains(body, marker+short) {
 			return true
 		}
 	}
@@ -522,6 +543,133 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 		sprintLadderAppend(cmd, event)
 	}
 	return nil
+}
+
+// reject records a review decision without failing the worker's delivery or
+// returning the story to the open queue. The story stays with its assignee.
+func newSprintRejectCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var repo, reason string
+	cmd := &cobra.Command{
+		Use:   "reject <sprint> <story>",
+		Short: "Return a submitted story to doing with review feedback",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := sprintArg(cmd, flags.mode(), "sprint reject", args[0])
+			if err != nil {
+				return err
+			}
+			return runSprintStoryReject(cmd, id, args[1], repo, reason, &flags)
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
+	cmd.Flags().StringVarP(&reason, "message", "m", "", "required review feedback")
+	flags.attach(cmd)
+	return cmd
+}
+
+func runSprintStoryReject(cmd *cobra.Command, id int64, ref, repo, reason string, flags *weaveOutputFlags) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("sprint reject requires -m REASON")
+	}
+	return runWeaveStoryMutate(cmd, id, "sprint reject", flags, func(s *weaveStory) (string, error) {
+		actor := weaveStoryConductorName(s, "")
+		if s.Lease == nil || !strings.EqualFold(strings.TrimSpace(s.Lease.Holder), actor) {
+			return "", fmt.Errorf("only sprint #%d's current manager may reject stories", id)
+		}
+		root, it, err := resolveSprintStoryFor(s, repo, ref)
+		if err != nil {
+			return "", err
+		}
+		if todopkg.IsClosed(it.Status) {
+			return "", fmt.Errorf("story %s is already closed", it.ID)
+		}
+		worker := strings.TrimSpace(it.Assignee)
+		if worker == "" {
+			return "", fmt.Errorf("story %s has no worker to return it to", it.ID)
+		}
+		if !sprintSubmissionEvidence(s, it.ID) {
+			return "", fmt.Errorf("story %s has no submitted delivery to reject", it.ID)
+		}
+		if err := preflightStoryClaimLedger(); err != nil {
+			return "", err
+		}
+		short := shortSprintStoryID(it.ID)
+		note := fmt.Sprintf("%s rejected story %s: %s", actor, short, reason)
+		// Store the same decision in the portable story and the host board.
+		it.Body = strings.TrimRight(it.Body, "\n") + "\n\n" + note + "\n"
+		it.Status = todopkg.StatusDoing
+		it.Closed, it.ClosedBy = nil, ""
+		if _, err := todopkg.RepoStore(root).Save(it); err != nil {
+			return "", fmt.Errorf("record rejection on story: %w", err)
+		}
+		weaveStoryAppend(s, actor, "decision", note)
+		// A linked run is host-local. Keep the board decision even if its
+		// queue disappeared, and report the missed projection to the caller.
+		var missed []string
+		for _, link := range s.Runs {
+			dir, err := weaveQueueDirForSprintRun(link)
+			if err != nil {
+				if link.Story == it.ID {
+					missed = append(missed, fmt.Sprintf("%s#%d: %v", link.Repo, link.ID, err))
+				}
+				continue
+			}
+			q, err := loadWeaveQueue(dir)
+			if err != nil {
+				if link.Story == it.ID {
+					missed = append(missed, fmt.Sprintf("%s#%d: %v", link.Repo, link.ID, err))
+				}
+				continue
+			}
+			run := findWeaveItem(q, link.ID)
+			if run == nil || (!link.Born.IsZero() && !link.Born.Equal(run.Created)) {
+				continue
+			}
+			matched := link.Story == it.ID && (run.Register == "" || run.Register == it.ID)
+			if link.Story == "" {
+				matched = run.Register == it.ID || (run.Register == "" && it.Weave == run.ID && filepath.Clean(q.Root) == filepath.Clean(root))
+			}
+			if !matched {
+				continue
+			}
+			err = withWeaveQueueLock(dir, func(q *weaveQueue) error {
+				item := findWeaveItem(q, link.ID)
+				if item == nil || (!link.Born.IsZero() && !link.Born.Equal(item.Created)) || item.Register != run.Register {
+					return fmt.Errorf("linked run changed")
+				}
+				weaveAppendComment(item, actor, "decision", note)
+				return nil
+			})
+			if err != nil {
+				missed = append(missed, fmt.Sprintf("%s#%d: %v", link.Repo, link.ID, err))
+			}
+		}
+		if err := recordStoryClaim(id, it.ID, worker, it.Title); err != nil {
+			missed = append(missed, "claim not restored: "+err.Error())
+		}
+		if err := notifySprintParticipant(s, actor, worker, note); err != nil {
+			missed = append(missed, "worker not notified: "+err.Error())
+		}
+		line := fmt.Sprintf("sprint #%d: rejected story %s — returned to doing for %s", id, short, worker)
+		if len(missed) != 0 {
+			line += "; " + strings.Join(missed, "; ")
+		}
+		return line, nil
+	})
+}
+
+func notifySprintParticipant(s *weaveStory, from, to, body string) error {
+	to = strings.TrimSpace(to)
+	if to == "" || strings.EqualFold(to, from) {
+		return nil
+	}
+	n := bus.Notification{Principal: from, Topic: sprintTopic(s.ID), To: to, Body: body, Priority: bus.DeliveryQueued}
+	if s.Contact != nil {
+		n.Room = s.Contact.Ref
+	}
+	return bus.Publish(n)
 }
 
 // sprintStoryClosureAudit keeps lifecycle completion about durable state, not
