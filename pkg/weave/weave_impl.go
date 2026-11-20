@@ -1475,6 +1475,21 @@ func weaveAllocatedLaunchOrphaned(it *weaveItem, now time.Time) bool {
 }
 
 func weaveRunVerify(workspace, queueDir, command string, it *weaveItem) (int, string) {
+	exit, raw := weaveRunVerifyRaw(workspace, queueDir, command, it)
+	return exit, weaveTrimVerifyOutput(raw, 2000)
+}
+
+// weaveVerifyTimeoutMarker is appended to verify output when the command was
+// killed by the deadline below. It is a SIGNAL, not decoration: a run cut short
+// measured only part of the suite, so the gate baseline refuses to excuse or
+// cache it (see weaveParseGateOutput).
+const weaveVerifyTimeoutMarker = "[weave: verify command timed out after 10m]"
+
+// weaveRunVerifyRaw is weaveRunVerify WITHOUT the output reducer, for the one
+// caller that has to parse the output before a human reads it: the gate
+// baseline attributes failures per package, and weaveTrimVerifyOutput hoists
+// failure lines out of their package blocks (see weaveParseGateOutput).
+func weaveRunVerifyRaw(workspace, queueDir, command string, it *weaveItem) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	// Hermetic shell: --noprofile --norc keeps the measurement
@@ -1500,9 +1515,9 @@ func weaveRunVerify(workspace, queueDir, command string, it *weaveItem) (int, st
 	}
 	s := string(out)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		s += "\n[weave: verify command timed out after 10m]"
+		s += "\n" + weaveVerifyTimeoutMarker
 	}
-	return exit, weaveTrimVerifyOutput(s, 2000)
+	return exit, s
 }
 
 // weaveTrimVerifyOutput shortens verify output to about max bytes WITHOUT
@@ -2131,18 +2146,25 @@ func weaveSuiteGateCommand(root string, it *weaveItem) string {
 	return strings.TrimSpace(string(b))
 }
 
-func weaveRunSuiteGate(root, command string) (int, string) {
+// weaveRunSuiteGateRaw runs the gate and returns its UNTRIMMED output. The
+// caller trims (see weaveGateOutputWithReport) once the baseline comparison
+// that needs the full, package-grouped text has been made.
+func weaveRunSuiteGateRaw(root, command string) (int, string) {
 	if command == "" {
 		return 0, ""
 	}
-	return weaveRunVerify(root, "", command, nil)
+	return weaveRunVerifyRaw(root, "", command, nil)
 }
 
 // weaveRunCandidateSuiteGate proves the candidate against one exact base SHA
 // without touching the shared live checkout. A private clone gives the gate
 // the same merged tree it historically saw after the live merge; the caller
 // later revalidates that SHA under pull.lock before committing.
-func weaveRunCandidateSuiteGate(root, workspace, branch, baseSHA, command string) (exit int, output string, conflict bool, err error) {
+//
+// A FAILING gate is then re-scored against the base commit's own failures
+// (weaveGateRescore), so the verdict is about what this candidate broke rather
+// than about what it inherited.
+func weaveRunCandidateSuiteGate(root, dir, workspace, branch, baseSHA, command string) (exit int, output string, conflict bool, err error) {
 	// THE CLONE GOES INSIDE A TEMP PARENT, under the repo's own directory name,
 	// so a sibling-path replace still resolves.
 	//
@@ -2192,7 +2214,13 @@ func weaveRunCandidateSuiteGate(root, workspace, branch, baseSHA, command string
 	// After the merge, because the candidate may move the pin. Best-effort: a
 	// gate that refuses to run is worse than one reporting what the compiler says.
 	_ = weaveHydrateSubmodules(root, tmp, io.Discard, io.Discard)
-	exit, output = weaveRunSuiteGate(tmp, command)
+	exit, raw := weaveRunSuiteGateRaw(tmp, command)
+	if exit == 0 {
+		return exit, weaveTrimVerifyOutput(raw, 2000), false, nil
+	}
+	// The clone is the baseline's checkout too — weaveGateRescore resets it to
+	// baseSHA, which is safe only because nothing below reads the merged tree.
+	exit, output = weaveGateRescore(dir, root, tmp, baseSHA, command, exit, raw)
 	return exit, output, false, nil
 }
 
@@ -5848,7 +5876,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			var suiteGateExit *int
 			var suiteGateOutput string
 			if suiteGate != "" {
-				sgExit, sgOutput, conflict, gateErr := weaveRunCandidateSuiteGate(root, it.Workspace, it.Branch, gateHead, suiteGate)
+				sgExit, sgOutput, conflict, gateErr := weaveRunCandidateSuiteGate(root, dir, it.Workspace, it.Branch, gateHead, suiteGate)
 				if gateErr != nil {
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: gateErr.Error()})
 					continue
