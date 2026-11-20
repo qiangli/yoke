@@ -13,6 +13,21 @@ sprint_id: af559546-24b2-5355-8565-b4f41449486e
 sprint_title: 'Human-in-the-loop browser: ping-back and remote headless web-app testing'
 ---
 
+## FINAL SPEC — step 1 (operator decisions 2026-11-20; supersedes everything below)
+
+1. Popup: just ADD a note textarea, ONE button labelled "Shape", and a one-line sent/error status to the existing popup. No restyling, no reordering, no other verbs, no multi-tab selection.
+2. Shape sends the CURRENT tab only: {browser (the hub's chrome|edge), tab id, url, title} + the optional note (multi-line, up to ~8 KB; tell the human if truncated).
+3. Transport = the SAME bashy chat/meet infrastructure, no new transport or store:
+   - if the addressed agent has a live chat session: deliver as a steer through the existing chat steer path (pkg/chat), like `bashy chat steer`;
+   - otherwise: post into the existing meet DM room between the human and that agent (pkg/meet), which notifies via the board like meet does today.
+   - The tab fields travel in the message; long notes use meet's existing long-body/attachment path (check before adding anything).
+   - Recipient: a "To" field in the popup (remembered per browser); empty = the most recently joined live interactive chat session, else the operator's own inbox (say so in the status line).
+4. No `bashy browser ping`/`pings` verb and no separate ping store; the agent reads it with `bashy inbox` / its chat session like any message.
+5. Extension icon: the Shape icon (Flow mark from cloudbox ui/src/features/desktop-settings/shape-button.tsx FlowMark: the FLOW path twice, second rotate(180 128 128), 256x256, no voice dot) as icons/shape.svg; regenerate icons/icon-{16,32,48,128}.png from it with a deterministic local rasterizer (record the command); manifest paths unchanged; note in the commit that store listing icons follow.
+6. Help: `bashy browser --help` describes the tab's Shape button; login help keeps pointing to the human's own browser + --active.
+7. Tests: Go unit tests for hub Shape → chat steer vs meet DM routing, recipient default, tab fields, note verbatim and the size cap; the extension's existing popup test pattern; targeted only (GOWORK=off go test ./pkg/browser/... ./cmds/browser; scripts/fmtcheck.sh). Existing popup tests keep passing.
+8. Commit trailers: Sprint: #680 / Story: #3140 / Story-ID: a79cefd4f95b. Do not push.
+
 Operator 2026-11-20: in the live-mode extension popup, a 'Send this tab to the agent' button plus an OPTIONAL text box for an additional message. Sends {tab id, url, title, message} to the agent's inbox (bashy mb), so a running session sees it like a steer and can act with --id (or --active). Needs: which agent (default: the live chat session / last addressed agent, selectable), the extension change, and a store re-submission (CWS/Edge). Pairs with --active.
 
 Why (operator, 2026-11-20): a browser the agent launches (`browser --headed login`, solo mode) is a fresh profile with no password manager, so the human cannot sign in there — passwords live in the password manager of their own Edge/Chrome. The flow is therefore human-first: the human launches their own browser (Edge or Chrome, live-mode extension installed), signs in and chooses the tab, then pings back with the button (+ optional message). The agent then acts on exactly that tab over the live hub (`--id` from the ping, or `--active`). Agent-launched login flows should point the human to this path instead of opening a browser they cannot use.
