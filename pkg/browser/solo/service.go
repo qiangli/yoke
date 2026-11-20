@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -67,36 +68,16 @@ func (c *Client) EnsureReady(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("solo: resolve browser: %w", err)
 	}
-	userData := c.cfg.UserDataDir
-	if userData == "" {
-		d, err := os.MkdirTemp("", "bashy-browser-solo-*")
-		if err != nil {
-			return fmt.Errorf("solo: temp user-data-dir: %w", err)
-		}
-		userData = d
-		c.tempUserData = d
-	} else if err := os.MkdirAll(userData, 0o755); err != nil {
-		return fmt.Errorf("solo: user-data-dir: %w", err)
+	home, _ := os.UserHomeDir()
+	userData, ephemeral, isTemp, err := resolveSoloProfile(c.cfg.UserDataDir, home, runtime.GOOS)
+	if err != nil {
+		return err
+	}
+	if isTemp {
+		c.tempUserData = userData
 	}
 
-	opts := chromedp.DefaultExecAllocatorOptions[:]
-	opts = append(opts,
-		chromedp.ExecPath(chrome),
-		chromedp.UserDataDir(userData),
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-	)
-	if c.cfg.Headed {
-		opts = append(opts, chromedp.Flag("headless", false))
-	} else {
-		// --headless=new, NOT chromedp.Headless (which emits the bare
-		// --headless == old headless). Chrome 132+ removed old headless and
-		// IGNORES the bare flag, so the browser boots HEADED and then aborts in
-		// _RegisterApplication (SIGABRT) when it can't reach the WindowServer
-		// from a non-GUI context (CI, a fleet worker, ssh) — firing a crash
-		// report each time. New headless never registers as a GUI app.
-		opts = append(opts, chromedp.Flag("headless", "new"))
-	}
+	opts := soloAllocatorOptions(c.cfg, chrome, userData, ephemeral)
 	allocCtx, allocStop := chromedp.NewExecAllocator(context.Background(), opts...)
 	cdpCtx, cdpStop := chromedp.NewContext(allocCtx)
 	if err := chromedp.Run(cdpCtx); err != nil {
@@ -168,6 +149,60 @@ func (c *Client) Close() error {
 		c.tempUserData = ""
 	}
 	return nil
+}
+
+func resolveSoloProfile(configured, home, goos string) (userData string, ephemeral bool, isTemp bool, err error) {
+	if configured == "" {
+		d, err := os.MkdirTemp("", "bashy-browser-solo-*")
+		if err != nil {
+			return "", false, false, fmt.Errorf("solo: temp user-data-dir: %w", err)
+		}
+		return d, true, true, nil
+	}
+	if err := probe.RejectRealBrowserProfile(configured, home, goos); err != nil {
+		return "", false, false, fmt.Errorf("solo: %w", err)
+	}
+	ephemeral = !probe.IsInitializedProfile(configured)
+	if err := os.MkdirAll(configured, 0o755); err != nil {
+		return "", false, false, fmt.Errorf("solo: user-data-dir: %w", err)
+	}
+	return configured, ephemeral, false, nil
+}
+
+func soloAllocatorOptions(cfg Config, chrome, userData string, ephemeral bool) []chromedp.ExecAllocatorOption {
+	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+	opts = append(opts,
+		chromedp.ExecPath(chrome),
+		chromedp.UserDataDir(userData),
+		chromedp.NoFirstRun,
+		chromedp.NoDefaultBrowserCheck,
+	)
+	if ephemeral {
+		opts = append(opts,
+			chromedp.Flag("use-mock-keychain", true),
+			chromedp.Flag("password-store", "basic"),
+		)
+	} else {
+		// An already-initialized persistent profile encrypted its cookies with
+		// the real OS keychain key; passing --use-mock-keychain would silently
+		// invalidate those sessions.
+		opts = append(opts,
+			chromedp.Flag("use-mock-keychain", false),
+			chromedp.Flag("password-store", false),
+		)
+	}
+	if cfg.Headed {
+		opts = append(opts, chromedp.Flag("headless", false))
+	} else {
+		// --headless=new, NOT chromedp.Headless (which emits the bare
+		// --headless == old headless). Chrome 132+ removed old headless and
+		// IGNORES the bare flag, so the browser boots HEADED and then aborts in
+		// _RegisterApplication (SIGABRT) when it can't reach the WindowServer
+		// from a non-GUI context (CI, a fleet worker, ssh) — firing a crash
+		// report each time. New headless never registers as a GUI app.
+		opts = append(opts, chromedp.Flag("headless", "new"))
+	}
+	return opts
 }
 
 func DefaultUserDataDir() string {

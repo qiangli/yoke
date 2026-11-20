@@ -27,10 +27,11 @@ func LaunchChrome(chromePath string, port int, userDataDir string) (pid int, res
 // BrowserProcess retains the diagnostics from a detached browser until the
 // session either becomes ready or reports why the child exited.
 type BrowserProcess struct {
-	PID    int
-	Path   string
-	done   <-chan error
-	stderr *lockedBuffer
+	PID         int
+	Path        string
+	UserDataDir string
+	done        <-chan error
+	stderr      *lockedBuffer
 }
 
 func (p *BrowserProcess) exited() (bool, error) {
@@ -99,35 +100,168 @@ func LaunchBrowser(chromePath string, port int, userDataDir string) (*BrowserPro
 	if _, err := os.Stat(resolved); err != nil {
 		return nil, fmt.Errorf("Chrome at %q: %w", resolved, err)
 	}
-	if userDataDir == "" {
-		userDataDir = DefaultUserDataDir(port)
+	home, _ := os.UserHomeDir()
+	resolvedProfile, ephemeral, createdTemp, err := resolveLaunchProfile(port, userDataDir, home, runtime.GOOS)
+	if err != nil {
+		return nil, err
 	}
-	if err := os.MkdirAll(userDataDir, 0o755); err != nil {
-		return nil, fmt.Errorf("user-data-dir: %w", err)
-	}
+	userDataDir = resolvedProfile
 	libraryPath, err := binmgr.PrepareChromeRuntime(context.Background(), resolved)
 	if err != nil {
+		if createdTemp {
+			_ = os.RemoveAll(userDataDir)
+		}
 		return nil, fmt.Errorf("prepare Chrome runtime: %w", err)
 	}
-	cmd := chromeCommand(resolved, port, userDataDir, runtime.GOOS, os.Geteuid(), libraryPath)
+	cmd := chromeCommand(resolved, port, userDataDir, runtime.GOOS, os.Geteuid(), libraryPath, ephemeral)
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = browserDetachedSysProcAttr()
 	if err := startBrowserDetached(cmd); err != nil {
+		if createdTemp {
+			_ = os.RemoveAll(userDataDir)
+		}
 		return nil, fmt.Errorf("launch chrome: %w", err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	return &BrowserProcess{PID: cmd.Process.Pid, Path: resolved, done: done, stderr: stderr}, nil
+	go func() {
+		waitErr := cmd.Wait()
+		if createdTemp {
+			_ = os.RemoveAll(userDataDir)
+		}
+		done <- waitErr
+	}()
+	return &BrowserProcess{PID: cmd.Process.Pid, Path: resolved, UserDataDir: userDataDir, done: done, stderr: stderr}, nil
 }
 
-func chromeCommand(resolved string, port int, userDataDir, goos string, euid int, libraryPath string) *exec.Cmd {
+// AutomationKeychainArgs disables OS credential-store prompts (macOS Keychain
+// "Chrome Safe Storage" and Linux Secret Service / KWallet) on ephemeral
+// automation profiles. Never pass these to an already-initialized persistent
+// profile whose cookies were encrypted with the real OS keychain key.
+func AutomationKeychainArgs() []string {
+	return []string{
+		"--use-mock-keychain",
+		"--password-store=basic",
+	}
+}
+
+// IsInitializedProfile reports whether dir already holds an initialized
+// Chromium user-data directory on disk ("Local State" or "Default"), meaning
+// its cookies/state may already be encrypted with the host keychain key.
+func IsInitializedProfile(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	for _, marker := range []string{"Local State", "Default"} {
+		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// RejectRealBrowserProfile refuses to launch automation against the operator's
+// real desktop Chrome, Chromium, Brave, or Edge user-data directory.
+func RejectRealBrowserProfile(dir, home, goos string) error {
+	clean := strings.TrimSpace(dir)
+	if clean == "" || strings.TrimSpace(home) == "" {
+		return nil
+	}
+	clean = filepath.Clean(clean)
+	home = filepath.Clean(home)
+
+	var roots []string
+	switch goos {
+	case "darwin":
+		appSupport := filepath.Join(home, "Library", "Application Support")
+		roots = []string{
+			filepath.Join(appSupport, "Google", "Chrome"),
+			filepath.Join(appSupport, "Google", "Chrome Canary"),
+			filepath.Join(appSupport, "Chromium"),
+			filepath.Join(appSupport, "BraveSoftware", "Brave-Browser"),
+			filepath.Join(appSupport, "Microsoft Edge"),
+		}
+	case "windows":
+		localAppData := filepath.Join(home, "AppData", "Local")
+		roots = []string{
+			filepath.Join(localAppData, "Google", "Chrome", "User Data"),
+			filepath.Join(localAppData, "Chromium", "User Data"),
+			filepath.Join(localAppData, "BraveSoftware", "Brave-Browser", "User Data"),
+			filepath.Join(localAppData, "Microsoft", "Edge", "User Data"),
+		}
+	default:
+		cfg := filepath.Join(home, ".config")
+		roots = []string{
+			filepath.Join(cfg, "google-chrome"),
+			filepath.Join(cfg, "google-chrome-beta"),
+			filepath.Join(cfg, "chromium"),
+			filepath.Join(cfg, "BraveSoftware", "Brave-Browser"),
+			filepath.Join(cfg, "microsoft-edge"),
+			filepath.Join(home, "snap", "chromium", "common", "chromium"),
+		}
+	}
+
+	caseFold := goos == "darwin" || goos == "windows"
+	for _, root := range roots {
+		if sameOrSubpath(clean, root, caseFold) {
+			return fmt.Errorf("refusing to use real browser profile %q for automation; omit --user-data-dir for a throwaway profile or pass a dedicated bashy profile path", dir)
+		}
+	}
+	return nil
+}
+
+func sameOrSubpath(candidate, root string, caseFold bool) bool {
+	sep := string(filepath.Separator)
+	if goosUsesBackslash(root, candidate) {
+		candidate = strings.ReplaceAll(candidate, "/", `\`)
+		root = strings.ReplaceAll(root, "/", `\`)
+		sep = `\`
+	}
+	candidate = strings.TrimRight(candidate, `/\`)
+	root = strings.TrimRight(root, `/\`)
+	if caseFold {
+		candidate = strings.ToLower(candidate)
+		root = strings.ToLower(root)
+	}
+	return candidate == root || strings.HasPrefix(candidate, root+sep)
+}
+
+func goosUsesBackslash(a, b string) bool {
+	return strings.Contains(a, `\`) || strings.Contains(b, `\`)
+}
+
+func resolveLaunchProfile(port int, explicitDir, home, goos string) (dir string, ephemeral bool, createdTemp bool, err error) {
+	if strings.TrimSpace(explicitDir) != "" {
+		if err := RejectRealBrowserProfile(explicitDir, home, goos); err != nil {
+			return "", false, false, err
+		}
+		ephemeral = !IsInitializedProfile(explicitDir)
+		if err := os.MkdirAll(explicitDir, 0o755); err != nil {
+			return "", false, false, fmt.Errorf("user-data-dir: %w", err)
+		}
+		return explicitDir, ephemeral, false, nil
+	}
+	defaultDir := DefaultUserDataDir(port)
+	if IsInitializedProfile(defaultDir) {
+		return defaultDir, false, false, nil
+	}
+	tmp, err := os.MkdirTemp("", fmt.Sprintf("bashy-browser-probe-%d-*", port))
+	if err != nil {
+		return "", false, false, fmt.Errorf("temp user-data-dir: %w", err)
+	}
+	return tmp, true, true, nil
+}
+
+func chromeCommand(resolved string, port int, userDataDir, goos string, euid int, libraryPath string, ephemeral bool) *exec.Cmd {
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		fmt.Sprintf("--user-data-dir=%s", userDataDir),
 		"--headless=new",
 		"--no-first-run",
 		"--no-default-browser-check",
+	}
+	if ephemeral {
+		args = append(args, AutomationKeychainArgs()...)
 	}
 	if goos == "linux" && euid == 0 {
 		args = append(args, "--no-sandbox")
