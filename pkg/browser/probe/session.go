@@ -65,12 +65,12 @@ func (m SessionManager) EnsureRunning(ctx context.Context, cfg SessionConfig) (L
 		return LaunchResult{}, err
 	}
 	userDataDir := cfg.UserDataDir
-	if userDataDir == "" {
-		userDataDir = DefaultUserDataDir(port)
-	}
 	process, err := m.Launch(path, port, userDataDir)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("probe: auto-launch: %w", err)
+	}
+	if process.UserDataDir != "" {
+		userDataDir = process.UserDataDir
 	}
 	result := LaunchResult{Started: true, PID: process.PID, BrowserPath: process.Path, Port: port, UserDataDir: userDataDir}
 	deadline := time.Now().Add(5 * time.Second)

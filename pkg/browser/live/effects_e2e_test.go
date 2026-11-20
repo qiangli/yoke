@@ -110,18 +110,7 @@ func startEffectsE2E(t *testing.T, fixtures map[string]headerFixture, path strin
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	opts := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun, chromedp.NoDefaultBrowserCheck,
-		chromedp.Flag("headless", "new"),
-		chromedp.WindowSize(1200, 900),
-		chromedp.UserDataDir(filepath.Join(t.TempDir(), "profile")),
-		chromedp.Flag("disable-extensions-except", dir),
-		chromedp.Flag("load-extension", dir),
-		chromedp.Flag("disable-features", "DisableLoadExtensionCommandLineSwitch"),
-	}
-	if exe := e2eChrome(t); exe != "" {
-		opts = append(opts, chromedp.ExecPath(exe))
-	}
+	opts := liveE2EAllocatorOptions(dir, filepath.Join(t.TempDir(), "profile"), e2eChrome(t))
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancelCtx := chromedp.NewContext(alloc)
 	t.Cleanup(func() { cancelCtx(); cancelAlloc() })

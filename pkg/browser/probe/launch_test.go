@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func TestResolverReportsProvisionFailure(t *testing.T) {
 
 func TestChromeCommandLinuxRootAndRuntime(t *testing.T) {
 	t.Setenv("LD_LIBRARY_PATH", "/host/libs")
-	cmd := chromeCommand("/managed/chrome", 9335, "/profile", "linux", 0, "/managed/runtime")
+	cmd := chromeCommand("/managed/chrome", 9335, "/profile", "linux", 0, "/managed/runtime", true)
 	if !slices.Contains(cmd.Args, "--no-sandbox") {
 		t.Fatalf("root Linux args missing --no-sandbox: %v", cmd.Args)
 	}
@@ -106,8 +107,89 @@ func TestChromeCommandLinuxRootAndRuntime(t *testing.T) {
 }
 
 func TestChromeCommandDoesNotDisableSandboxForNonRoot(t *testing.T) {
-	cmd := chromeCommand("/managed/chrome", 9335, "/profile", "linux", 1000, "")
+	cmd := chromeCommand("/managed/chrome", 9335, "/profile", "linux", 1000, "", true)
 	if slices.Contains(cmd.Args, "--no-sandbox") {
 		t.Fatalf("non-root Linux args contain --no-sandbox: %v", cmd.Args)
+	}
+}
+
+func TestChromeCommandKeychainIsolationEphemeralVsPersistent(t *testing.T) {
+	ephemeral := chromeCommand("/managed/chrome", 9335, "/tmp/ephemeral", "darwin", 501, "", true)
+	for _, want := range []string{"--use-mock-keychain", "--password-store=basic"} {
+		if !slices.Contains(ephemeral.Args, want) {
+			t.Fatalf("ephemeral probe args missing %q: %v", want, ephemeral.Args)
+		}
+	}
+
+	persistent := chromeCommand("/managed/chrome", 9222, "/cache/browser-probe-9222", "darwin", 501, "", false)
+	for _, unwanted := range []string{"--use-mock-keychain", "--password-store=basic"} {
+		if slices.Contains(persistent.Args, unwanted) {
+			t.Fatalf("initialized persistent probe profile must not pass %q (would invalidate keychain-encrypted cookies): %v", unwanted, persistent.Args)
+		}
+	}
+}
+
+func TestResolveLaunchProfileEphemeralPersistentAndRealProfileRefusal(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(fakeHome, ".cache"))
+
+	// 1. No existing DefaultUserDataDir on fresh port -> throwaway temp dir + ephemeral=true.
+	dir, ephemeral, createdTemp, err := resolveLaunchProfile(19335, "", fakeHome, "darwin")
+	if err != nil {
+		t.Fatalf("resolveLaunchProfile ephemeral: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if !ephemeral || !createdTemp || dir == DefaultUserDataDir(19335) {
+		t.Fatalf("got dir=%q ephemeral=%t createdTemp=%t, want throwaway temp dir", dir, ephemeral, createdTemp)
+	}
+
+	// 2. Initialized persistent DefaultUserDataDir (e.g. :9222 with Local State) -> preserved, ephemeral=false.
+	persistDefault := DefaultUserDataDir(19222)
+	if err := os.MkdirAll(persistDefault, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(persistDefault) })
+	if err := os.WriteFile(filepath.Join(persistDefault, "Local State"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir2, ephemeral2, createdTemp2, err := resolveLaunchProfile(19222, "", fakeHome, "darwin")
+	if err != nil {
+		t.Fatalf("resolveLaunchProfile persistent default: %v", err)
+	}
+	if dir2 != persistDefault || ephemeral2 || createdTemp2 {
+		t.Fatalf("got dir=%q ephemeral=%t createdTemp=%t, want %q false false", dir2, ephemeral2, createdTemp2, persistDefault)
+	}
+
+	// 3. Explicit uninitialized dir -> kept, ephemeral=true; once initialized ("Default" dir) -> ephemeral=false.
+	explicit := filepath.Join(t.TempDir(), "custom-probe")
+	dir3, ephemeral3, createdTemp3, err := resolveLaunchProfile(19336, explicit, fakeHome, "linux")
+	if err != nil || dir3 != explicit || !ephemeral3 || createdTemp3 {
+		t.Fatalf("fresh explicit: dir=%q ephemeral=%t temp=%t err=%v", dir3, ephemeral3, createdTemp3, err)
+	}
+	if err := os.MkdirAll(filepath.Join(explicit, "Default"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, ephemeral4, _, err := resolveLaunchProfile(19336, explicit, fakeHome, "linux")
+	if err != nil || ephemeral4 {
+		t.Fatalf("initialized explicit: ephemeral=%t err=%v, want false", ephemeral4, err)
+	}
+
+	// 4. Real OS browser profiles must be refused across macOS, Linux, and Windows.
+	for _, tc := range []struct {
+		goos string
+		path string
+	}{
+		{"darwin", filepath.Join(fakeHome, "Library", "Application Support", "Google", "Chrome")},
+		{"darwin", filepath.Join(fakeHome, "Library", "Application Support", "Google", "Chrome", "Default")},
+		{"darwin", filepath.Join(fakeHome, "Library", "Application Support", "BraveSoftware", "Brave-Browser")},
+		{"darwin", filepath.Join(fakeHome, "Library", "Application Support", "Microsoft Edge")},
+		{"linux", filepath.Join(fakeHome, ".config", "google-chrome")},
+		{"linux", filepath.Join(fakeHome, ".config", "chromium", "Default")},
+		{"windows", filepath.Join(fakeHome, "AppData", "Local", "Google", "Chrome", "User Data")},
+	} {
+		if err := RejectRealBrowserProfile(tc.path, fakeHome, tc.goos); err == nil {
+			t.Fatalf("RejectRealBrowserProfile(%q, goos=%s) succeeded, want refusal", tc.path, tc.goos)
+		}
 	}
 }
