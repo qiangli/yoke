@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Real-engine probe tests need a test-only sibling package — WHEN testing yoke usage-probe seeds end to end (YAML -> fleet -> llmbudget.Quota through the REAL Bash# runner): llmbudget's internal tests snippet.SetRunner(nil) in cleanup and pkg/dag imports llmbudget, so neither pkg/llmbudget nor pkg/fleet tests can import  (kb:real-engine-probe-tests-need-a-test-only-sibling-package)
+- [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
