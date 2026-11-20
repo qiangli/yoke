@@ -1216,6 +1216,7 @@ func NewChatCmd() *cobra.Command {
 	var toolSel string
 	var bandSel int
 	var interactive bool
+	var noTrust bool
 	var attachLive bool
 	var view string
 	var explain bool
@@ -1308,6 +1309,7 @@ func NewChatCmd() *cobra.Command {
 					Timeout:      opt.Timeout,
 					ReadOnly:     opt.ReadOnly,
 					Unattended:   opt.AllowUnsafe,
+					NoTrust:      noTrust,
 					AllowPremium: opt.AllowPremium,
 					Status:       cmd.ErrOrStderr(),
 					Attach:       attachLive,
@@ -1355,6 +1357,7 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().StringVar(&toolSel, "tool", "", "launch ANY operable agent using this tool (e.g. codex)")
 	cmd.Flags().IntVar(&bandSel, "band", 0, "launch ANY operable agent pegged at this capability band or above (1-5)")
 	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "force a live interactive session even with an instruction")
+	cmd.Flags().BoolVar(&noTrust, "no-trust", false, "leave workspace trust prompts to the terminal operator in an interactive session")
 	cmd.Flags().BoolVar(&attachLive, "attach", false, "if the agent is already live, watch and steer that session instead of being refused")
 	cmd.Flags().BoolVar(&opt.AllowUnsafe, "yolo", false,
 		"disable the agent's approval gate (keep --dangerously-skip-permissions) and accept the "+

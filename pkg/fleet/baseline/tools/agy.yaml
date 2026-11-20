@@ -123,7 +123,7 @@ cli:
     # seed; using it here dangled the flag when a human opened an empty session.
     steer_exec: agy --dangerously-skip-permissions --model {model}
     prompt_position: last
-    trust_preseed: none
+    trust_preseed: .gemini/antigravity-cli/settings.json
     # On macOS, agy 1.5 can reuse the user's browser sign-in from the
     # keychain even with an isolated HOME. Probe from the worker environment:
     # `agy models` prints tab-separated ID and name rows when signed in.

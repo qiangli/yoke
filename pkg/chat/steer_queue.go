@@ -94,10 +94,10 @@ func (p *SteerRelay) seen() bool {
 // StartSteerRelay watches raw PTY output for the first input prompt. A
 // launcher may also declare the exact session ready on the room timeline.
 func StartSteerRelay(c room.Card, replayedThrough int64, openingDelivered func() bool) *SteerRelay {
-	return startSteerRelay(c, replayedThrough, openingDelivered, managedInboxPoll, defaultInteractiveDeliveryTiming.readyTimeout, os.Stderr)
+	return startSteerRelay(c, replayedThrough, openingDelivered, managedInboxPoll, defaultInteractiveDeliveryTiming.readyTimeout, os.Stderr, nil)
 }
 
-func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func() bool, poll, readyTimeout time.Duration, warnings io.Writer) *SteerRelay {
+func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func() bool, poll, readyTimeout time.Duration, warnings io.Writer, dialogs *agentpty.DialogGuard) *SteerRelay {
 	ctx, cancel := context.WithCancel(context.Background())
 	prompt := &SteerRelay{cancel: cancel, done: make(chan struct{})}
 	go func() {
@@ -112,6 +112,9 @@ func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func()
 		deadline := time.Now().Add(readyTimeout)
 		ready := false
 		inputReady := func() bool {
+			if dialogs != nil && !dialogs.Clear() {
+				return false
+			}
 			if !ready && !prompt.seen() {
 				pos, err := status.Latest(ctx)
 				ready = err == nil && pos.Seq > 0
@@ -148,9 +151,15 @@ func startSteerRelay(c room.Card, replayedThrough int64, openingDelivered func()
 					continue
 				}
 				if !inputReady() {
+					err = agentpty.ErrDialogActive
 					break
 				}
-				if err = deliverSteer(c, post.Body); err != nil {
+				if dialogs == nil {
+					err = deliverSteer(c, post.Body)
+				} else {
+					err = deliverSteerWith(c, post.Body, dialogs.Send)
+				}
+				if err != nil {
 					break
 				}
 				if err = bus.MarkSeen(addr, post.Seq); err != nil {

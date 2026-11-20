@@ -53,7 +53,7 @@ func TestChatSteerQueuesUntilReadyOrTimeout(t *testing.T) {
 				timeout = 100 * time.Millisecond
 			}
 			start := time.Now()
-			relay := startSteerRelay(card, 0, nil, 5*time.Millisecond, timeout, &warnings)
+			relay := startSteerRelay(card, 0, nil, 5*time.Millisecond, timeout, &warnings, nil)
 			t.Cleanup(relay.Close)
 			if signal != "timeout" {
 				relay.Write([]byte("loading\r\nTrust this folder?\r\n› 1. Trust and continue"))

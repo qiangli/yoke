@@ -152,7 +152,8 @@ func ClassifyGate(tail string) GateVerdict {
 		return GateVerdict{Kind: GateNag, Signature: sig}
 	}
 	if sig, ok := findSignature(low, []string{
-		"do you trust", "trust the contents", "trust this directory",
+		"do you trust", "do you want to trust", "trust the contents", "trust this directory",
+		"quick safety check", "yes, i trust", "trust this workspace",
 		"trust this folder", "continue? 1", "1. yes", "1) yes",
 		"yes, continue", "yes, proceed",
 	}); ok && (strings.Contains(low, "trust") || strings.Contains(low, "continue?")) {

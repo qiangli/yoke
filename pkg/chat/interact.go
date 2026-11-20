@@ -42,6 +42,8 @@ type InteractOptions struct {
 	// Unattended (--yolo) keeps the agent's approval gate OFF for a session
 	// supervised remotely via steer — no one sits at the terminal to approve.
 	Unattended bool
+	// NoTrust leaves the vendor trust dialog to the terminal operator.
+	NoTrust bool
 	// AllowPremium explicitly bypasses LLM budget/subscription gates for urgent
 	// human-authorized work.
 	AllowPremium bool
@@ -230,9 +232,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		// four silently drop.
 		cmd.Env = agentChildEnv(withLaunch(ctx, l))
 	}
-	if p, ok := agentctl.ProfileFor(l.ToolName); ok && p.Preseed != "" {
-		_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
-	}
+	dialogs := interactiveTrust(cmd, l.ToolName, opt, status)
 
 	card.LogPath = logPath
 	_ = room.Join(card) // update: we already hold this id
@@ -258,7 +258,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// mail block typed into a TUI that is still starting, or into its trust
 	// dialog, is lost at best.
 	var (
-		ready           = &interactiveReady{}
+		ready           = &interactiveReady{dialogs: dialogs}
 		delivered       chan error
 		runDone         chan struct{}
 		promptText      = opt.Prompt
@@ -269,7 +269,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	} else {
 		logSink = ready
 	}
-	relay := startSteerRelay(card, 0, promptDelivered.Load, managedInboxPoll, defaultInteractiveDeliveryTiming.readyTimeout, status)
+	relay := startSteerRelay(card, 0, promptDelivered.Load, managedInboxPoll, defaultInteractiveDeliveryTiming.readyTimeout, status, dialogs)
 	logSink = io.MultiWriter(logSink, relay)
 	inboxReady := func() bool {
 		return promptDelivered.Load() && ready.settled(defaultInteractiveDeliveryTiming.settle)
@@ -282,7 +282,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		runDone = make(chan struct{})
 		go func() {
 			err := deliverInteractivePrompt(runCtx, card.Nick, sock, promptText, ready, runDone, status,
-				func(text string) error { return agentctl.Say(sock, text) })
+				func(text string) error { return dialogs.Send(agentpty.TextFrame(text)) })
 			if err != nil {
 				cancel() // do not leave a session running after silently losing its instruction
 			} else {
@@ -309,7 +309,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		go runInboxRelay(ctx, sessionDone, inboxReady,
 			func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
 			func(p bus.PreparedPreamble) error {
-				complete, err := mail.deliver(p.Text, func(text string) error { return agentctl.Say(sock, text) })
+				complete, err := mail.deliver(p.Text, func(text string) error { return dialogs.Send(agentpty.TextFrame(text)) })
 				if err != nil || !complete {
 					return err
 				}
@@ -325,10 +325,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		Capture:    false,
 		MaxRuntime: opt.Timeout,
 		OnResize:   publishGeometry(card),
-		OnGateRouted: func(v agentpty.GateVerdict, action string) {
-			ready.gateAnswered(v, action)
-			relay.GateAnswered(v, action)
-		},
+		Dialogs:    dialogs,
 	})
 	relay.Close()
 	if runDone != nil {
@@ -342,6 +339,23 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	}
 	recordLaunchUsageTokens(ctx, l, estimateTokens(opt.Prompt), usage.Tokens())
 	return exit, runErr
+}
+
+func interactiveTrust(cmd *exec.Cmd, tool string, opt InteractOptions, status io.Writer) *agentpty.DialogGuard {
+	if opt.NoTrust || !opt.Unattended || opt.ReadOnly || nativeHarnesses[tool] {
+		return agentpty.NewDialogGuard(nil)
+	}
+	if p, ok := agentctl.ProfileFor(tool); ok {
+		entry, err := agentctl.ApplyLaunchTrustPreseed(cmd.Dir, p.Preseed, cmd.Env)
+		if err != nil {
+			fmt.Fprintf(status, "chat: %s trust preseed failed for %q: %v\n", tool, cmd.Dir, err)
+		} else if entry != "" {
+			fmt.Fprintf(status, "chat: %s trust preseed: %s\n", tool, entry)
+		}
+	}
+	return agentpty.NewDialogGuard(func(label string) {
+		fmt.Fprintf(status, "chat: answered trust dialog for %q (%s selected; preseed did not clear it)\n", cmd.Dir, label)
+	})
 }
 
 type usageCountingWriter struct {
@@ -370,6 +384,7 @@ type interactiveReady struct {
 	drawn     bool
 	lastWrite time.Time
 	tail      string
+	dialogs   *agentpty.DialogGuard
 }
 
 // readyTailBytes bounds the output the gate check reads: a dialog is one frame.
@@ -380,9 +395,11 @@ func (r *interactiveReady) Write(p []byte) (int, error) {
 	if len(p) > 0 {
 		r.drawn = true
 		r.lastWrite = time.Now()
-		r.tail += string(p)
-		if len(r.tail) > readyTailBytes {
-			r.tail = r.tail[len(r.tail)-readyTailBytes:]
+		if r.dialogs == nil {
+			r.tail += string(p)
+			if len(r.tail) > readyTailBytes {
+				r.tail = r.tail[len(r.tail)-readyTailBytes:]
+			}
 		}
 	}
 	r.mu.Unlock()
@@ -395,7 +412,20 @@ func (r *interactiveReady) settled(forDuration time.Duration) bool {
 	if !r.drawn || time.Since(r.lastWrite) < forDuration {
 		return false
 	}
+	return r.clear()
+}
+
+func (r *interactiveReady) clear() bool {
+	if r.dialogs != nil {
+		return r.dialogs.Clear()
+	}
 	return agentpty.ClassifyGate(r.tail).Kind == agentpty.GateNone
+}
+
+func (r *interactiveReady) dialogActive() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.clear()
 }
 
 // gateAnswered forgets the output so far: the trust tap answered the dialog in
@@ -452,20 +482,34 @@ func deliverInteractivePromptWithTiming(ctx context.Context, nick, sock, prompt 
 	if err != nil && err != readyTimeout {
 		return err
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-runDone:
-		return fmt.Errorf("chat: %s exited before its instruction was delivered", nick)
-	default:
+	timedOut := err == readyTimeout
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-runDone:
+			return fmt.Errorf("chat: %s exited before its instruction was delivered", nick)
+		default:
+		}
+		if !ready.dialogActive() {
+			if timedOut {
+				fmt.Fprintf(status, "chat: warning: %s TUI did not settle within %s; delivering the instruction anyway\n", nick, timing.readyTimeout)
+				timedOut = false
+			}
+			err := send(prompt)
+			if !errors.Is(err, agentpty.ErrDialogActive) {
+				if err != nil {
+					return fmt.Errorf("chat: could not deliver the instruction to %s: %w", nick, err)
+				}
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case <-runDone:
+		case <-time.After(timing.poll):
+		}
 	}
-	if err == readyTimeout {
-		fmt.Fprintf(status, "chat: warning: %s TUI did not settle within %s; delivering the instruction anyway\n", nick, timing.readyTimeout)
-	}
-	if err := send(prompt); err != nil {
-		return fmt.Errorf("chat: could not deliver the instruction to %s: %w", nick, err)
-	}
-	return nil
 }
 
 // bindingBand is the capability band of a resolved agent name, or 0 when the name

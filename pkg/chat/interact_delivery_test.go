@@ -142,7 +142,7 @@ func TestInteractivePromptWaitsOutATrustDialog(t *testing.T) {
 		result <- deliverInteractivePromptWithTiming(context.Background(), "test", sock, "hello", ready,
 			make(chan struct{}), io.Discard, func(string) error { calls.Add(1); return nil }, testDeliveryTiming())
 	}()
-	time.Sleep(60 * time.Millisecond) // four settle windows with the dialog still up
+	time.Sleep(250 * time.Millisecond) // readiness timeout expires with the dialog still up
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("instruction typed into the trust dialog: %d calls", got)
 	}

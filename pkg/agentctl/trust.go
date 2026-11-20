@@ -1,11 +1,15 @@
 package agentctl
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // The first thing several agent CLIs do in a directory they have not seen before
@@ -35,7 +39,28 @@ func ApplyTrustPreseed(workspace, preseed string) error {
 	case "", "none":
 		return nil
 	case ".claude.json":
-		return preseedClaudeTrust(workspace)
+		workspace = strings.TrimSpace(workspace)
+		if workspace == "" {
+			return fmt.Errorf("agentctl: empty workspace")
+		}
+		dir, err := filepath.Abs(workspace)
+		if err != nil {
+			return err
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(home, preseed)
+		if err := mergeClaudeTrust(path, dir, true); err != nil {
+			return err
+		}
+		// claude keys the project by the symlink-resolved cwd (/tmp/x is
+		// looked up as /private/tmp/x on macOS), so trust that spelling too.
+		if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
+			return mergeClaudeTrust(path, real, true)
+		}
+		return nil
 	case "opencode.json":
 		return preseedOpencodeTrust(workspace)
 	case "codex.toml":
@@ -152,60 +177,167 @@ func excludeFromGit(workspace, name string) {
 	_, _ = f.WriteString("\n# written by bashy: agent trust preseed, not project config\n" + name + "\n")
 }
 
-// preseedClaudeTrust marks one workspace as already-trusted in ~/.claude.json.
-//
-// It MERGES into the existing document rather than writing a fresh one. That file
-// is the user's real claude config — their projects, their onboarding state — and
-// clobbering it to skip a prompt would be a spectacular trade.
-func preseedClaudeTrust(workspace string) error {
-	workspace = strings.TrimSpace(workspace)
-	if workspace == "" {
-		return fmt.Errorf("agentctl: empty workspace")
+// ApplyLaunchTrustPreseed applies a seed using the vendor's effective launch
+// environment. The returned entry describes the exact workspace grant.
+func ApplyLaunchTrustPreseed(workspace, preseed string, env []string) (string, error) {
+	switch preseed {
+	case ".claude.json", ".gemini/antigravity-cli/settings.json", "codex.toml", "opencode.json":
+	default:
+		return "", nil
 	}
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
-		return err
+		return "", err
 	}
-	home, err := os.UserHomeDir()
+	dir, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return err
+		return "", err
 	}
-	path := filepath.Join(home, ".claude.json")
-
-	var doc map[string]any
-	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {
-		if err := json.Unmarshal(b, &doc); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
+	homeKey := "HOME"
+	if os.PathSeparator == '\\' {
+		homeKey = "USERPROFILE"
+	}
+	home := launchEnv(env, homeKey)
+	if home == "" {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", err
 		}
-	} else {
-		doc = map[string]any{}
 	}
-	projects, ok := doc["projects"].(map[string]any)
-	if !ok {
-		projects = map[string]any{}
-		doc["projects"] = projects
+	configDir := func(key, fallback string) string {
+		if value := launchEnv(env, key); value != "" {
+			if !filepath.IsAbs(value) {
+				return filepath.Join(dir, value)
+			}
+			return value
+		}
+		return fallback
 	}
-	// claude keys the project by the symlink-resolved cwd (/tmp/x is looked
-	// up as /private/tmp/x on macOS), so mark both spellings trusted.
-	keys := []string{abs}
-	if real, err := filepath.EvalSymlinks(abs); err == nil && real != abs {
-		keys = append(keys, real)
+	switch preseed {
+	case ".claude.json":
+		path := filepath.Join(configDir("CLAUDE_CONFIG_DIR", home), preseed)
+		return fmt.Sprintf("%s projects[%q].hasTrustDialogAccepted=true", path, dir), mergeClaudeTrust(path, dir, false)
+	case ".gemini/antigravity-cli/settings.json":
+		path := filepath.Join(configDir("GEMINI_CLI_HOME", home), preseed)
+		return fmt.Sprintf("%s trustedWorkspaces += %q", path, dir), mergeTrustJSON(path, func(doc map[string]any) bool {
+			trusted, _ := doc["trustedWorkspaces"].([]any)
+			for _, entry := range trusted {
+				if entry == dir {
+					return false
+				}
+			}
+			doc["trustedWorkspaces"] = append(trusted, dir)
+			return true
+		})
+	case "codex.toml":
+		path := filepath.Join(configDir("CODEX_HOME", filepath.Join(home, ".codex")), "config.toml")
+		written, err := appendCodexTrust(path, dir)
+		if !written || err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s projects[%q].trust_level=trusted", path, dir), nil
+	default:
+		return fmt.Sprintf("%s permissions for %q", filepath.Join(dir, preseed), dir), preseedOpencodeTrust(dir)
 	}
-	for _, key := range keys {
-		project, ok := projects[key].(map[string]any)
-		if !ok {
+}
+
+func launchEnv(env []string, name string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if value, ok := strings.CutPrefix(env[i], name+"="); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func mergeClaudeTrust(path, dir string, onboarding bool) error {
+	return mergeTrustJSON(path, func(doc map[string]any) bool {
+		projects, _ := doc["projects"].(map[string]any)
+		if projects == nil {
+			projects = map[string]any{}
+			doc["projects"] = projects
+		}
+		project, _ := projects[dir].(map[string]any)
+		if project == nil {
 			project = map[string]any{}
-			projects[key] = project
+			projects[dir] = project
 		}
+		changed := project["hasTrustDialogAccepted"] != true
 		project["hasTrustDialogAccepted"] = true
-		project["hasCompletedProjectOnboarding"] = true
-	}
+		if onboarding && project["hasCompletedProjectOnboarding"] != true {
+			project["hasCompletedProjectOnboarding"] = true
+			changed = true
+		}
+		return changed
+	})
+}
 
-	b, err := json.MarshalIndent(doc, "", "  ")
+func mergeTrustJSON(path string, merge func(map[string]any) bool) error {
+	// Follow an existing config symlink so replacement preserves the link.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	} else if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	lock, err := lockfile.AcquireWithin(path+".bashy-trust.lock", 3*time.Second, lockfile.Holder{Intent: "preseed workspace trust"})
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o600)
+	defer lock.Release()
+	doc := map[string]any{}
+	mode := os.FileMode(0o600)
+	file, err := os.Open(path)
+	if err == nil {
+		info, statErr := file.Stat()
+		file.Close()
+		if statErr != nil {
+			return statErr
+		}
+		mode = info.Mode().Perm()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if len(strings.TrimSpace(string(data))) != 0 {
+			decoder := json.NewDecoder(bytes.NewReader(data))
+			decoder.UseNumber()
+			if err := decoder.Decode(&doc); err != nil {
+				return fmt.Errorf("parse %s: %w", path, err)
+			}
+			if doc == nil || !json.Valid(data) {
+				return fmt.Errorf("parse %s: expected a JSON object", path)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if !merge(doc) {
+		return nil
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".bashy-trust-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	err = tmp.Chmod(mode)
+	if err == nil {
+		_, err = tmp.Write(append(data, '\n'))
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // preseedCodexTrust marks a workspace trusted in codex's own config, the way
@@ -238,23 +370,32 @@ func preseedCodexTrust(workspace string) error {
 		}
 		dir = filepath.Join(home, ".codex")
 	}
-	path := filepath.Join(dir, "config.toml")
+	_, err = appendCodexTrust(filepath.Join(dir, "config.toml"), key)
+	return err
+}
+
+func appendCodexTrust(path, key string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	lock, err := lockfile.AcquireWithin(path+".bashy-trust.lock", 3*time.Second, lockfile.Holder{Intent: "preseed workspace trust"})
+	if err != nil {
+		return false, err
+	}
+	defer lock.Release()
 	header := "[projects." + tomlBasicString(key) + "]"
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	for _, line := range strings.Split(string(existing), "\n") {
 		if strings.TrimSpace(line) == header {
-			return nil
+			return false, nil
 		}
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer f.Close()
 	block := header + "\ntrust_level = \"trusted\"\n"
@@ -265,7 +406,7 @@ func preseedCodexTrust(workspace string) error {
 		}
 	}
 	_, err = f.WriteString(block)
-	return err
+	return err == nil, err
 }
 
 // codexTrustKey is the directory codex keys its trust on: the enclosing git
