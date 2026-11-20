@@ -3,13 +3,15 @@ id: 6ef97654375c
 kind: bug
 title: pkg/dbobj TestIndependentProcess_SkippedInShort fails on main (Linux WSL)
 seq: 3077
-status: assigned
+status: done
 priority: p3
 created: 2026-11-10T03:48:02.949697Z
 assignee: s575-codex-manager
 sprint: 658
 sprint_id: f426cf37-7c11-5d0c-beca-7e405177868d
 sprint_title: outpost MCP admin token leaked to daemon.log (fix with the refactor/rebuild)
+closed: 2026-11-20T03:46:38.172514Z
+closed_by: s575-codex-manager
 ---
 
 Pre-existing: fails on yoke 1eaaf672 and 6c414c3d in the Windows test host Ubuntu WSL distro (full go test, S602 close). Not repaired in S602. Evidence: dhnt-docs docs/sprint-602-evidence.md.
