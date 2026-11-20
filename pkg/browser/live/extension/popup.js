@@ -73,6 +73,73 @@ disconnectBtn.addEventListener("click", async () => {
 
 refreshStatus();
 
+// --- Shape: send the current tab, with a note, to an agent ----------
+//
+// The hub decides who receives it: the agent named in To, or with To
+// empty the latest live chat session, else the operator's own inbox. The
+// status line says which. The note and the hub's answer are plain text
+// end to end: read from .value, shown with textContent, never as markup.
+
+const shapeToEl = document.getElementById("shape-to");
+const shapeNoteEl = document.getElementById("shape-note");
+const shapeBtn = document.getElementById("shape-send");
+const shapeStatusEl = document.getElementById("shape-status");
+
+chrome.storage.local.get(["shapeTo"], ({ shapeTo }) => {
+  if (typeof shapeTo === "string") shapeToEl.value = shapeTo;
+});
+shapeToEl.addEventListener("change", () => {
+  chrome.storage.local.set({ shapeTo: shapeToEl.value.trim() });
+});
+
+function setShapeStatus(cls, text) {
+  shapeStatusEl.className = cls;
+  shapeStatusEl.textContent = text;
+}
+
+// currentTab is the tab the human is looking at. The popped-out panel is
+// a window of its own, so there it is the active tab of the last normal
+// browser window.
+async function currentTab() {
+  if (isWindowed) {
+    const win = await chrome.windows.getLastFocused({ populate: true, windowTypes: ["normal"] });
+    return ((win && win.tabs) || []).find((t) => t.active) || null;
+  }
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs.length > 0 ? tabs[0] : null;
+}
+
+shapeBtn.addEventListener("click", async () => {
+  shapeBtn.disabled = true;
+  setShapeStatus("", "sending...");
+  try {
+    const tab = await currentTab();
+    if (!tab || typeof tab.id !== "number") {
+      setShapeStatus("error", "no current tab to send");
+      return;
+    }
+    const to = shapeToEl.value.trim();
+    chrome.storage.local.set({ shapeTo: to });
+    const resp = await chrome.runtime.sendMessage({
+      type: "ycode-live:shape",
+      tab: { id: tab.id, url: tab.url || "", title: tab.title || "" },
+      note: shapeNoteEl.value,
+      to,
+    });
+    if (resp && resp.ok) {
+      setShapeStatus("sent", resp.status || "sent");
+      // A note the hub had to cut stays in the box, so the rest can follow.
+      if (!resp.truncated) shapeNoteEl.value = "";
+    } else {
+      setShapeStatus("error", (resp && resp.error) || "not sent");
+    }
+  } catch (e) {
+    setShapeStatus("error", "not sent: " + String(e.message || e));
+  } finally {
+    shapeBtn.disabled = false;
+  }
+});
+
 // --- debug log panel ------------------------------------------------
 
 function fmtTime(ts) {

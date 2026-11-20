@@ -193,20 +193,19 @@ func newChatSteerCmd() *cobra.Command {
 			case strings.TrimSpace(text) == "":
 				return fmt.Errorf("chat: steer needs text, or --enter to press Enter")
 			default:
-				if inbox := steerInbox(c); inbox != "" {
-					if err := bus.PostMessage(bus.Post{To: inbox, From: principalName(), Topic: c.ID, Body: text}); err != nil {
-						return err
-					}
-					if c.Mode == "weave" && c.CtlSock == "" {
-						fmt.Fprintf(cmd.ErrOrStderr(), "chat: steering queued for %s (headless worker, retained for resume)\n", c.ID)
-					} else {
-						fmt.Fprintf(cmd.ErrOrStderr(), "chat: steering queued for %s\n", c.ID)
-					}
-					return nil
-				}
-				if err := deliverSteer(c, text); err != nil {
+				rec, err := steerCard(c, "", text)
+				if err != nil {
 					return err
 				}
+				switch {
+				case rec.Headless:
+					fmt.Fprintf(cmd.ErrOrStderr(), "chat: steering queued for %s (headless worker, retained for resume)\n", c.ID)
+				case rec.Queued:
+					fmt.Fprintf(cmd.ErrOrStderr(), "chat: steering queued for %s\n", c.ID)
+				default:
+					fmt.Fprintf(cmd.ErrOrStderr(), "chat: steered %s\n", c.ID)
+				}
+				return nil
 			}
 			_ = room.Emit(room.Event{Type: room.EventSteer, Actor: principalName(), Target: c.ID, Body: text})
 			fmt.Fprintf(cmd.ErrOrStderr(), "chat: steered %s\n", c.ID)
@@ -215,6 +214,60 @@ func newChatSteerCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&enter, "enter", false, "press Enter in the session instead of sending a line")
 	return cmd
+}
+
+// SteerReceipt says where a steer went.
+type SteerReceipt struct {
+	ID string // the session steered
+	// Queued: the line waits on the session's steer inbox and is typed when
+	// the session is ready, rather than having been typed now.
+	Queued bool
+	// Headless: queued for a weave worker with no control socket, retained
+	// for its resume.
+	Headless bool
+}
+
+// Steer injects one line into the live session id names — the same path as
+// `bashy chat steer <id> <text>`, for a caller that is not that command (the
+// browser hub's Shape button). from is who the line is from; empty means this
+// process's principal. A steer is ONE typed line: the pty layer flattens
+// newlines, so a multi-line message has to travel some other way.
+func Steer(id, from, text string) (SteerReceipt, error) {
+	c, err := findMember(id)
+	if err != nil {
+		return SteerReceipt{}, err
+	}
+	return steerCard(c, from, text)
+}
+
+// SteerableCard reports whether Steer can reach a live session: it has a
+// steer inbox or a control socket. A card with neither is a session launched
+// outside bashy, which only reads its mail.
+func SteerableCard(c room.Card) bool {
+	return steerInbox(c) != "" || strings.TrimSpace(c.CtlSock) != ""
+}
+
+func steerCard(c room.Card, from, text string) (SteerReceipt, error) {
+	rec := SteerReceipt{ID: c.ID}
+	if strings.TrimSpace(text) == "" {
+		return rec, fmt.Errorf("chat: steer needs text, or --enter to press Enter")
+	}
+	if strings.TrimSpace(from) == "" {
+		from = principalName()
+	}
+	if inbox := steerInbox(c); inbox != "" {
+		if err := bus.PostMessage(bus.Post{To: inbox, From: from, Topic: c.ID, Body: text}); err != nil {
+			return rec, err
+		}
+		rec.Queued = true
+		rec.Headless = c.Mode == "weave" && c.CtlSock == ""
+		return rec, nil
+	}
+	if err := deliverSteer(c, text); err != nil {
+		return rec, err
+	}
+	_ = room.Emit(room.Event{Type: room.EventSteer, Actor: from, Target: c.ID, Body: text})
+	return rec, nil
 }
 
 // steerSend writes one frame to a session's control socket (a seam for tests).

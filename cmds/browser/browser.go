@@ -39,6 +39,12 @@ var cmd = &tool.Tool{
 		"Each has its OWN page: `browser <subcommand> --help` documents its operands,\n" +
 		"which modes implement it, and its output contract.\n" +
 		"(--json emits {success,title,url,content,error}; `bashy fetch URL` is the non-browser HTTP client.)\n" +
+		"\n" +
+		"Shape (live mode, human to agent): the extension popup has a note box and a Shape button.\n" +
+		"  Pressing it sends the CURRENT tab (browser, tab id, url, title) and the optional note to an agent:\n" +
+		"  a steer into its live `bashy chat` session, else mail in its meet DM room (read with `bashy inbox`).\n" +
+		"  The popup's To field names the agent; empty means the most recent live chat session, else the\n" +
+		"  operator's own inbox. The message carries the command that reaches the tab: --mode live --browser B --id TAB.\n" +
 		"Guide: coreutils/docs/browser.md",
 }
 
@@ -51,6 +57,8 @@ func init() {
 	// Copy-sheet entries fill by reference too (S529.9): the guard reads
 	// the local sheet store; it does not import pkg/browser/live.
 	guard.SetSheetSource(guard.SheetSource{Site: live.SheetSecretSite, Take: live.TakeSheetSecret})
+	// The popup's Shape button: the hub receives the press, shape.go routes it.
+	live.SetShapeHandler(deliverShape)
 }
 
 const noBrowserMessage = "no browser: bashy could not resolve, provision, or launch a Chromium-family browser"

@@ -66,6 +66,9 @@ type hub struct {
 	// the old copy cannot cause a reload loop.
 	reloadDir string
 	reloaded  map[string]bool
+
+	// shapeMu keeps Shape deliveries in the order pressed (see shape.go).
+	shapeMu sync.Mutex
 }
 
 func newHub(port int) *hub {
@@ -192,7 +195,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	logInfo("live: extension connected", "remote", r.RemoteAddr, "takeover", takeover)
 
-	go h.readLoop(conn)
+	go h.readLoop(conn, r.Header.Get("Origin"))
 	go h.keepAlive(conn)
 }
 
@@ -271,7 +274,9 @@ func guardFollowUp(method string) bool {
 	return method == fillMethod || method == focusMethod
 }
 
-func (h *hub) readLoop(conn *websocket.Conn) {
+// readLoop routes conn's frames; origin is its handshake's Origin header,
+// which decides whether a `shape` frame is believed.
+func (h *hub) readLoop(conn *websocket.Conn, origin string) {
 	defer func() {
 		h.mu.Lock()
 		if h.conn == conn {
@@ -298,8 +303,12 @@ func (h *hub) readLoop(conn *websocket.Conn) {
 			logWarn("live: bad response from extension", "raw", string(raw), "error", err)
 			continue
 		}
-		// Unsolicited frames (id == 0) carry a `method` field: today only
-		// `_hello` for the version handshake.
+		// Unsolicited frames (id == 0) carry a `method` field: `_hello` for
+		// the version handshake, and `shape` for the popup's Shape button.
+		if resp.ID == 0 && resp.Method == shapeMethod {
+			go h.handleShape(conn, origin, resp.Result)
+			continue
+		}
 		if resp.ID == 0 && resp.Method != "" {
 			h.handleUnsolicited(resp)
 			continue

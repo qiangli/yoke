@@ -175,6 +175,7 @@ function loadExtension(hooks) {
   if (hooks.globals) Object.assign(sandbox, hooks.globals);
   sandbox.globalThis = sandbox;
   sandbox.window = sandbox;
+  sandbox.self = sandbox; // a service worker's global; background.js reads self.navigator
   vm.createContext(sandbox);
   sandbox.importScripts = (name) => {
     vm.runInContext(fs.readFileSync(path.join(DIR, name), "utf8"), sandbox, { filename: name });

@@ -19,6 +19,14 @@
     #status.connecting { background: #fff3cd; color: #6b4f00; }
     .hint { color: #777; font-size: 11px; margin-top: 8px; line-height: 1.4; }
 
+    #shape { margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px; }
+    #shape label { margin-top: 0; }
+    #shape input[type=text], #shape textarea { width: 100%; box-sizing: border-box; padding: 4px; font: inherit; }
+    #shape textarea { margin: 6px 0; resize: vertical; }
+    #shape-status { margin-top: 6px; font-size: 11px; color: #555; min-height: 1.4em; }
+    #shape-status.sent { color: #135f13; }
+    #shape-status.error { color: #c0392b; }
+
     #debug { margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px; }
     #debug-header { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #555; }
     #debug-header .title { flex: 1; font-weight: 600; color: #333; }
@@ -49,6 +57,13 @@
     <button id="disconnect">Disconnect</button>
   </div>
   <div id="status" class="disconnected">disconnected</div>
+  <div id="shape">
+    <label for="shape-to">Send this tab to an agent</label>
+    <input id="shape-to" type="text" placeholder="To: agent name (empty = your latest chat session)" spellcheck="false" autocomplete="off" />
+    <textarea id="shape-note" rows="3" placeholder="Note (optional)"></textarea>
+    <button id="shape-send">Shape</button>
+    <div id="shape-status" role="status"></div>
+  </div>
   <div id="debug">
     <div id="debug-header">
       <span class="title">Recent tool calls</span>

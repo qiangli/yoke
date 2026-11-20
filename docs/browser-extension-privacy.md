@@ -1,6 +1,6 @@
 # bashy live — browser extension privacy policy
 
-Effective 2026-11-16. Applies to the **bashy live** extension for Chrome
+Effective 2026-11-20. Applies to the **bashy live** extension for Chrome
 and other Chromium browsers (source: `pkg/browser/live/extension/` in this
 repository, Apache-2.0).
 
@@ -11,6 +11,11 @@ on **your own computer** work on pages in the browser you install it in.
 Mostly that means filling in forms; it can also open pages, read a page's
 text, click, take screenshots and read cookies for a site. It acts only after you
 press **Connect** in its popup and only while bashy is running.
+
+The popup also has a **Shape** button. When you press it, the extension
+sends bashy the tab you are looking at (its address, its title and its tab
+number) and the note you typed, so that bashy can pass them to the agent
+you named. It sends this only when you press the button.
 
 ## Where data goes
 
@@ -29,9 +34,14 @@ press **Connect** in its popup and only while bashy is running.
 
 ## What it stores
 
-The extension keeps two settings in the browser's local extension storage:
-whether you pressed Connect, and the port and tab it connects to. Nothing
-else is stored, and nothing is synced.
+The extension keeps these settings in the browser's local extension
+storage: whether you pressed Connect, the port and tab it connects to, the
+popup's "console" checkbox, and the name you last typed in the Shape
+button's To field. It also keeps a random identifier for this installed
+copy, which it sends only to bashy on your computer so that bashy can tell
+two browser profiles apart. Nothing else is stored, and nothing is synced.
+A note you type for Shape is not stored by the extension: it is sent to
+bashy when you press the button.
 
 ## Sensitive fields
 

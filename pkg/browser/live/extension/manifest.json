@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "bashy live",
-  "version": "0.11.6",
+  "version": "0.12.0",
   "description": "bashy's companion for web pages: lets bashy on your computer read pages and fill in forms in this browser. Talks only to 127.0.0.1.",
   "minimum_chrome_version": "114",
   "icons": {
