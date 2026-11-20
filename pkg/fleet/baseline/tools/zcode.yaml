@@ -5,6 +5,11 @@ cli:
   binary: zcode
   launch:
     exec: zcode --mode yolo -p {prompt}
+    # Interactive TUI (zcode --help / CLI reference): no argument opens the
+    # TUI, -p/--prompt is the non-interactive one-shot, and there is no
+    # --model flag — the model is the personal provider config the setup
+    # below writes into {state_dir}. Keep --mode yolo, drop -p/{prompt}.
+    steer_exec: zcode --mode yolo
     unsafe: {values: {--mode: [yolo]}}
     prompt_position: last
     key_env: [ZCODE_API_KEY]

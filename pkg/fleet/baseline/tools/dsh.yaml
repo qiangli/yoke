@@ -14,6 +14,12 @@ cli:
   launch:
     exec: dsh --profile headless {prompt}
     acp_exec: dsh --profile acp
+    # Interactive TUI (dsh --help at 0.2.2-rc.1): `dsh tui` / `--profile tui`
+    # boots the terminal app; headless is the one-shot and acp is stdio
+    # protocol, neither is steerable. No model flag: the setup below writes
+    # agent-default-model into {state_dir}/cordis.patch.yml (DSH_HOME), so
+    # the TUI opens on its own default model.
+    steer_exec: dsh --profile tui
     prompt_position: last
     key_env:
       - OPENAI_API_KEY

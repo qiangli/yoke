@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,28 @@ func TestZcodeSetupWritesValidProviderConfig(t *testing.T) {
 	p := cfg.Providers[0]
 	if p.BaseURL != "https://api.example.test/v4" || p.Access.APIKey != "k-123" || len(p.Models) != 1 || p.Models[0] != "glm-5.3" {
 		t.Fatalf("provider config = %s", raw)
+	}
+}
+
+// The steerable launch opens zcode's interactive TUI on its own default
+// model: no -p/{prompt} one-shot and no {model} (zcode has no --model flag;
+// the setup's provider config in {state_dir} supplies the model).
+func TestZcodeSeedSteerExec(t *testing.T) {
+	tool, ok := New(WithRoot(t.TempDir()), WithoutCloudOverlay()).Tool("zcode")
+	if !ok {
+		t.Fatal("zcode seed missing")
+	}
+	if got := tool.CLI.Launch.SteerExec; got != "zcode --mode yolo" {
+		t.Errorf("steer_exec = %q, want zcode --mode yolo", got)
+	}
+	argv, ok := tool.SteerArgvPrefix("glm-5.3")
+	if !ok {
+		t.Fatal("zcode is not steerable")
+	}
+	if got := strings.Join(argv, " "); got != "--mode yolo" {
+		t.Errorf("steer argv = %q, want --mode yolo (bound model must not be injected)", got)
+	}
+	if tool.SteerTakesPrompt() {
+		t.Error("zcode steer must not take a prompt")
 	}
 }

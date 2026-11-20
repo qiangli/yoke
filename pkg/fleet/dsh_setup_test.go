@@ -32,6 +32,19 @@ func TestDshSeedDeclarationAndSetup(t *testing.T) {
 	if got := tool.CLI.Launch.ACPExec; got != "dsh --profile acp" {
 		t.Errorf("acp_exec = %q", got)
 	}
+	if got := tool.CLI.Launch.SteerExec; got != "dsh --profile tui" {
+		t.Errorf("steer_exec = %q, want dsh --profile tui", got)
+	}
+	// The TUI opens on its own default model (the setup's agent-default-model
+	// patch in {state_dir}); a bound model must not be injected into argv.
+	if argv, ok := tool.SteerArgvPrefix("deepseek-v4-pro"); !ok {
+		t.Error("dsh is not steerable")
+	} else if got := strings.Join(argv, " "); got != "--profile tui" {
+		t.Errorf("steer argv = %q, want --profile tui", got)
+	}
+	if tool.SteerTakesPrompt() {
+		t.Error("dsh steer must not take a prompt")
+	}
 	if !tool.ModelViaLaunch() || !tool.UsesStateDir() {
 		t.Errorf("ModelViaLaunch=%v UsesStateDir=%v, want both", tool.ModelViaLaunch(), tool.UsesStateDir())
 	}
