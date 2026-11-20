@@ -185,13 +185,21 @@ func preseedClaudeTrust(workspace string) error {
 		projects = map[string]any{}
 		doc["projects"] = projects
 	}
-	project, ok := projects[abs].(map[string]any)
-	if !ok {
-		project = map[string]any{}
-		projects[abs] = project
+	// claude keys the project by the symlink-resolved cwd (/tmp/x is looked
+	// up as /private/tmp/x on macOS), so mark both spellings trusted.
+	keys := []string{abs}
+	if real, err := filepath.EvalSymlinks(abs); err == nil && real != abs {
+		keys = append(keys, real)
 	}
-	project["hasTrustDialogAccepted"] = true
-	project["hasCompletedProjectOnboarding"] = true
+	for _, key := range keys {
+		project, ok := projects[key].(map[string]any)
+		if !ok {
+			project = map[string]any{}
+			projects[key] = project
+		}
+		project["hasTrustDialogAccepted"] = true
+		project["hasCompletedProjectOnboarding"] = true
+	}
 
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
