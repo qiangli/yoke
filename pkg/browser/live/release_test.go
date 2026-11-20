@@ -39,7 +39,7 @@ func TestPackExtensionZipIsReproducible(t *testing.T) {
 			t.Errorf("zip lacks %s at its root (Web Store needs manifest.json at top)", want)
 		}
 	}
-	for _, dev := range []string{"README.md", "page.go", "stitch_test.cjs"} {
+	for _, dev := range []string{"README.md", "page.go", "stitch_test.cjs", "shape_test.cjs", "icons/shape.svg"} {
 		if names[dev] {
 			t.Errorf("developer file %s shipped in the release zip", dev)
 		}

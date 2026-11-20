@@ -332,6 +332,9 @@ var subcommands = map[string]subcommand{
 			"ask them to open and sign in to the site in Edge or Chrome (live-mode",
 			"extension installed), focus the tab and tell you to look; then act on",
 			"it with --mode live --active (e.g. cookies-get NAME DOMAIN).",
+			"Instead of telling you, they can press Shape in the extension popup:",
+			"it sends you that tab and an optional note, and the message names the",
+			"tab id to pass as --id.",
 		},
 	},
 }

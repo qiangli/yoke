@@ -27,7 +27,7 @@ out.
 | Summary | bashy's companion for web pages: lets bashy on your computer read pages and fill in forms in this browser. Talks only to 127.0.0.1. *(manifest description, 131/132 chars)* |
 | Category | Developer Tools |
 | Language | English |
-| Icon | `pkg/browser/live/extension/icons/icon-128.png` (the bashy live mark, `docs/brand/bashy-live/` in the umbrella) |
+| Icon | `pkg/browser/live/extension/icons/icon-128.png` (since 0.12.0 the Shape mark, rendered from `icons/shape.svg`; see "0.12.0" below) |
 | Homepage | https://github.com/qiangli/bashy |
 | Support | https://github.com/qiangli/yoke/issues |
 
@@ -97,6 +97,26 @@ used for unrelated purposes and not used for credit decisions.
 
 **Privacy policy URL:**
 https://github.com/qiangli/yoke/blob/main/docs/browser-extension-privacy.md
+
+## 0.12.0: the Shape button (next upload)
+
+0.12.0 adds a **Shape** button to the popup: the user sends the current
+tab (browser, tab id, address, title) and an optional typed note to an
+agent, through bashy on 127.0.0.1. Nothing above was re-submitted yet;
+this is what changes when it is:
+
+- **Permissions: none added.** `storage` now also remembers the name in
+  the popup's To field; its justification becomes "Remember the user's
+  Connect choice, port and tab, and the recipient of the Shape button."
+- **Icon:** the package icons are the Shape mark. The store listing icon
+  and the screenshots still show the old mark and popup, and follow.
+- **Description / single purpose** (operator to word): the extension now
+  also carries a message the user writes, to bashy on the same computer.
+- **Data usage** (operator to confirm): a pressed Shape sends the tab's
+  URL and title and the user's typed note to bashy on the same computer,
+  and nowhere else.
+- **Privacy policy:** `docs/browser-extension-privacy.md` was updated for
+  the button and the stored To field (effective 2026-11-20).
 
 ## Distribution
 

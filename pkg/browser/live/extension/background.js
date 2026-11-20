@@ -98,9 +98,83 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       port: connectedPort,
       tabId: activeTabId,
     });
+  } else if (msg && msg.type === "ycode-live:shape") {
+    sendShape(msg).then(sendResponse);
   }
   return true;
 });
+
+// --- Shape: the human sends the current tab, with a note, to an agent ---
+//
+// The popup's Shape button is the one frame the extension originates: the
+// hub's calls are requests it answers, this is a press it reports. It goes
+// as {id:0, method:"shape", result:{…}} and the hub answers with a
+// `_shape_result` frame carrying the same nonce. A hub older than the
+// button ignores the frame, so no answer within SHAPE_TIMEOUT_MS is
+// reported as that. The note is the human's text: it is sent as a JSON
+// string and never interpreted here.
+const SHAPE_TIMEOUT_MS = 30000;
+const shapeWaiting = new Map(); // nonce -> finish(result)
+let shapeSeq = 0;
+
+function shapeBrowser() {
+  if (/\bEdg\//.test(UA)) return "edge";
+  if (self.navigator && navigator.brave) return "brave";
+  return "chrome";
+}
+
+function sendShape(msg) {
+  return new Promise((resolve) => {
+    const tab = msg.tab || {};
+    if (typeof tab.id !== "number") {
+      resolve({ ok: false, error: "no current tab to send" });
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      resolve({ ok: false, error: "not connected to the bashy hub: press Connect this tab first" });
+      return;
+    }
+    const nonce = Date.now().toString(36) + "-" + (++shapeSeq);
+    const timer = setTimeout(() => {
+      shapeWaiting.delete(nonce);
+      resolve({ ok: false, error: "the bashy hub did not answer: it may be older than the Shape button (update bashy)" });
+    }, SHAPE_TIMEOUT_MS);
+    shapeWaiting.set(nonce, (res) => {
+      clearTimeout(timer);
+      shapeWaiting.delete(nonce);
+      resolve(res);
+    });
+    try {
+      ws.send(JSON.stringify({
+        id: 0,
+        method: "shape",
+        result: {
+          nonce,
+          tab_id: tab.id,
+          url: String(tab.url || ""),
+          title: String(tab.title || ""),
+          note: String(msg.note || ""),
+          to: String(msg.to || ""),
+          browser: shapeBrowser(),
+        },
+      }));
+    } catch (e) {
+      shapeWaiting.get(nonce)({ ok: false, error: "could not reach the bashy hub: " + String(e.message || e) });
+    }
+  });
+}
+
+// onShapeResult settles the press a `_shape_result` frame answers.
+function onShapeResult(params) {
+  const finish = params && shapeWaiting.get(params.nonce);
+  if (!finish) return;
+  finish({
+    ok: params.ok === true,
+    status: String(params.status || ""),
+    error: String(params.error || ""),
+    truncated: params.truncated === true,
+  });
+}
 
 // --- remembered intent: zero-touch reconnect ---
 //
@@ -208,6 +282,9 @@ function openWS() {
   ws.onclose = (ev) => {
     ws = null;
     chrome.alarms.clear("ycode-live-keepalive");
+    for (const finish of [...shapeWaiting.values()]) {
+      finish({ ok: false, error: "the bashy hub disconnected before it answered" });
+    }
     if (ev && ev.code === CLOSE_HUB_PAUSED) {
       setBadge("paused");
     } else if (ev && (ev.code === CLOSE_HUB_BUSY || ev.code === CLOSE_TAKEN_OVER)) {
@@ -484,6 +561,10 @@ async function onMessage(ev) {
   }
   if (!req || typeof req.id !== "number") return;
   if (req.method === "_pong" || req.method === "_ping") return;
+  if (req.method === "_shape_result") {
+    onShapeResult(req.params);
+    return;
+  }
 
   const startedAt = Date.now();
   let result;

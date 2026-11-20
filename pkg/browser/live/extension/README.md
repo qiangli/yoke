@@ -48,10 +48,31 @@ install type in `_hello`, and the hub hot-reloads only unpacked
   older than 0.8.0 cannot self-reload — reload them once at
   `chrome://extensions`.)
 
+## The Shape button
+
+The popup's **Shape** button sends the tab you are looking at to an agent:
+the browser, the tab id, its address and title, and the note you typed
+(optional, multi-line; the hub cuts it at 8 KB and the status line says
+so). **To** names the agent and is remembered; left empty, the message
+goes to your most recent live `bashy chat` session, or to your own
+`bashy inbox` when there is none. The line under the button says where it
+went.
+
+Nothing new carries it. An agent with a live chat session is steered, as
+by `bashy chat steer`; any other registered agent finds it in its DM room
+with you (`bashy inbox`). The hub does the routing (`cmds/browser/shape.go`
+in the Go tree), and accepts the press only from an extension origin.
+
 ## Wire protocol
 
 Plain JSON over WebSocket; not MCP. See `protocol.go` in the parent Go
 package. The extension talks only to `ws://127.0.0.1:<port>/ws`.
+
+Shape is the one frame the extension originates rather than answers:
+`{"id":0,"method":"shape","result":{nonce,tab_id,url,title,note,to,browser}}`,
+answered by `{"id":0,"method":"_shape_result","params":{nonce,ok,status,error,…}}`
+(`shape.go`). A hub older than 0.12.0 ignores it and the popup reports
+that after 30 seconds.
 
 ## Files
 
@@ -65,7 +86,17 @@ package. The extension talks only to `ws://127.0.0.1:<port>/ws`.
   field's value. A protected path: see docs/browser.md "Sensitive-input guard".
 - `frames.js` — pure helpers that number elements tab-wide across
   frames and route an index back to its frame.
-- `popup.html` / `popup.js` — Connect / Disconnect UI.
+- `popup.html` / `popup.js` — Connect / Disconnect UI, the Shape button
+  and the call log.
+- `icons/shape.svg` — the icon's source: the Shape (Flow) mark, white on
+  #6D4AFF. `icons/icon-{16,32,48,128}.png` are rendered from it by a
+  small rasterizer in `icons_test.go`, which also fails when they drift:
+
+      go test ./pkg/browser/live -run TestExtensionIconsRenderShapeSVG -update-icons
+
+  The SVG is a developer file and is left out of the store zip.
+- `stitch_test.cjs` / `shape_test.cjs` — behavioral fixtures that load the
+  real scripts into a Node sandbox (`node --test <file>`; no browser).
 
 ## Security model
 
