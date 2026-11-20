@@ -556,7 +556,11 @@ func newSprintGradeCommands() []*cobra.Command {
 		var globs, allow []string
 		var jsonOut bool
 		var timeout time.Duration
-		cmd := &cobra.Command{Use: verb + " N --run REPO#ID", Short: "Grade outside the booth or merge a graded attempt", Args: cobra.ExactArgs(1)}
+		short := "Merge a graded run attempt into a real repository checkout"
+		if verb == "grade" {
+			short = "Grade a linked run's attempt outside the booth: run its gate, check protected tests against the base"
+		}
+		cmd := &cobra.Command{Use: verb + " N --run REPO#ID", Short: short, Args: cobra.ExactArgs(1)}
 		cmd.Flags().StringVar(&run, "run", "", "linked run REPO#ID")
 		cmd.Flags().BoolVar(&jsonOut, "json", false, "print the event as JSON")
 		cmd.Flags().DurationVar(&timeout, "timeout", 10*time.Minute, "gate and fetch timeout")

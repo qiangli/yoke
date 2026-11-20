@@ -363,10 +363,12 @@ func sprintAssignCommand(review bool) *cobra.Command {
 	var dry bool
 	var idleTimeout time.Duration
 	name := "assign"
+	short := "Schedule a fleet worker through the band ladder"
 	if review {
 		name = "review"
+		short = "Schedule a fleet reviewer for a story, band-selected against the attempt's author"
 	}
-	cmd := &cobra.Command{Use: name + " <sprint> <story>", Short: "Schedule a fleet worker through the band ladder", Args: cobra.ExactArgs(2)}
+	cmd := &cobra.Command{Use: name + " <sprint> <story>", Short: short, Args: cobra.ExactArgs(2)}
 	cmd.Flags().StringVar(&repo, "repo", "", "repository holding the story")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print selection without mutation or launch")
 	cmd.Flags().StringArrayVar(&excludeTools, "exclude-tool", nil, "exclude tool (repeatable; adds to BASHY_SPRINT_DISPATCH_EXCLUDE tool:TOOL,agent:NAME)")
