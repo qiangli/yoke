@@ -53,3 +53,5 @@ Step 1 = ONE tab per ping + optional note (multi-line, up to ~8 KB; full note st
 Popup (operator decision, 2026-11-20): ONE "Shape" button covers all cases — ping-back (look at this tab; here is the error/content) and shaping the content, for producers and consumers alike; the receiving agent interprets the note. No separate verbs, no multi-tab selection.
 
 Extension icon (operator decision, 2026-11-20): the Shape icon (Flow mark, cloudbox shape-button.tsx FlowMark) becomes the extension icon — one mark for the family; store listing icons follow.
+
+Popup layout (operator decision, 2026-11-20): keep the existing popup content (hub port, Connect this tab / Disconnect, console mirror, Pop out, Clear, log/trace); add the Shape section on top, styled like the consumer Shape panel (Flow mark, note box, one Shape button, feedback line).
