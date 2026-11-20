@@ -290,6 +290,7 @@ func TestPeerPrincipalEvictsOwnerResidentModels(t *testing.T) {
 		}
 		return len(h.eng.unloadedList())
 	}
+	base := len(h.b.audit.snapshot())
 	owner := local(testToken)
 	again := local(testToken)
 	if again != owner {
@@ -302,8 +303,20 @@ func TestPeerPrincipalEvictsOwnerResidentModels(t *testing.T) {
 	if back := local(testToken); back <= peer {
 		t.Fatal("owner ran on the peer's resident model without an eviction")
 	}
-	recs := h.b.audit.snapshot()
-	if got := recs[len(recs)-2].Principal; got != "peer:codexhost" {
+	// The broker appends a turn's audit record in finish(), after the engine
+	// has streamed the response, so the last request can return before its
+	// record exists. Wait for all four, then read the peer turn (the third)
+	// by position instead of from the end.
+	var recs []Record
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if recs = h.b.audit.snapshot(); len(recs) >= base+4 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if len(recs) < base+4 {
+		t.Fatalf("audit has %d records, want %d", len(recs), base+4)
+	}
+	if got := recs[base+2].Principal; got != "peer:codexhost" {
 		t.Fatalf("peer turn audited as %q", got)
 	}
 }
