@@ -60,7 +60,8 @@ var ErrNoSessionClaim = errors.New("room: a session claim requires Card.SessionC
 // process is gone — reading is the reconciliation here as everywhere else in
 // this package), or when the incumbent carries the SAME session digest. In
 // that last case the card is updated in place and Joined is preserved, so a
-// per-turn child command does not keep resetting the session's start time.
+// per-turn child command does not keep resetting the session's start time —
+// and no join event is recorded, as in Join: an update is not an arrival.
 //
 // Refused with *ErrLive when a live incumbent carries a different digest.
 func ClaimSession(c Card) error {
@@ -94,6 +95,7 @@ func ClaimSession(c Card) error {
 			prior, ok = readCard(candidate)
 		}
 	}
+	revision := false
 	if ok && sessionCardAlive(prior) {
 		// A live incumbent with a DIFFERENT digest is the competing session
 		// this function exists to refuse. A live incumbent with no digest at
@@ -107,6 +109,9 @@ func ClaimSession(c Card) error {
 			// legitimately held instead of looking for the other session.
 			return &ErrLive{ID: c.ID, PID: holderPID(prior)}
 		}
+		// The same live session revising its own card: an update, not an
+		// arrival, so no second join event (3347a701) — as in Join.
+		revision = true
 		if c.Joined == "" {
 			c.Joined = prior.Joined
 		}
@@ -130,6 +135,9 @@ func ClaimSession(c Card) error {
 	}
 	if legacy != "" && legacy != path {
 		_ = os.Remove(legacy)
+	}
+	if revision {
+		return nil
 	}
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
 }

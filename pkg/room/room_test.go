@@ -63,6 +63,83 @@ func TestJoinLeaveRoundTrip(t *testing.T) {
 	}
 }
 
+func joinEventCount(t *testing.T, target string) int {
+	t.Helper()
+	events, err := Timeline(0)
+	if err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+	n := 0
+	for _, e := range events {
+		if e.Type == EventJoin && e.Target == target {
+			n++
+		}
+	}
+	return n
+}
+
+// TestJoinRevisionEmitsNoSecondJoinEvent is the 3347a701 regression: a
+// member revising its own live card (publishGeometry republishing Rows/Cols
+// on every resize step) must not record another join event per revision —
+// peers rendered each as a fresh "joined". A rejoin after Leave is a new
+// arrival and still emits.
+func TestJoinRevisionEmitsNoSecondJoinEvent(t *testing.T) {
+	isolate(t)
+	c := Card{
+		ID: "resize-1", Binding: "tool:model", Nick: "Resize", Tool: "tool",
+		PID: os.Getpid(), Rows: 24, Cols: 80,
+	}
+	if err := Join(c); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	for _, size := range [][2]int{{30, 100}, {40, 120}, {50, 140}} {
+		c.Rows, c.Cols = size[0], size[1]
+		if err := Join(c); err != nil {
+			t.Fatalf("revise %+v: %v", size, err)
+		}
+	}
+	if n := joinEventCount(t, "resize-1"); n != 1 {
+		t.Fatalf("join events after revisions = %d, want 1", n)
+	}
+	members, err := Members()
+	if err != nil || len(members) != 1 || members[0].Rows != 50 || members[0].Cols != 140 {
+		t.Fatalf("revised card = %+v (%v), want Rows 50 Cols 140", members, err)
+	}
+
+	Leave("resize-1")
+	if err := Join(c); err != nil {
+		t.Fatalf("rejoin after leave: %v", err)
+	}
+	if n := joinEventCount(t, "resize-1"); n != 2 {
+		t.Fatalf("join events after leave+rejoin = %d, want 2", n)
+	}
+}
+
+// TestClaimSessionRevisionEmitsNoSecondJoinEvent is the same regression on
+// the session-claim path: a per-turn child re-claiming its own session's
+// card is an update, not a new arrival.
+func TestClaimSessionRevisionEmitsNoSecondJoinEvent(t *testing.T) {
+	isolate(t)
+	c := Card{
+		ID: "sess-1", Binding: "tool:model", Nick: "Sess", Tool: "tool",
+		PID: os.Getpid(), OwnerPID: os.Getpid(), SessionClaim: "digest-1",
+	}
+	if err := ClaimSession(c); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	c.Task = "revised mid-turn"
+	if err := ClaimSession(c); err != nil {
+		t.Fatalf("re-claim: %v", err)
+	}
+	if n := joinEventCount(t, "sess-1"); n != 1 {
+		t.Fatalf("join events after same-session revision = %d, want 1", n)
+	}
+	members, err := Members()
+	if err != nil || len(members) != 1 || members[0].Task != "revised mid-turn" {
+		t.Fatalf("revised card = %+v (%v)", members, err)
+	}
+}
+
 func TestRemoveMember(t *testing.T) {
 	isolate(t)
 	c := Card{
