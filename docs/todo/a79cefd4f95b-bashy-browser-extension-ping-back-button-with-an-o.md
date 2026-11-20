@@ -55,3 +55,5 @@ Popup (operator decision, 2026-11-20): ONE "Shape" button covers all cases — p
 Extension icon (operator decision, 2026-11-20): the Shape icon (Flow mark, cloudbox shape-button.tsx FlowMark) becomes the extension icon — one mark for the family; store listing icons follow.
 
 Popup layout (operator decision, 2026-11-20): keep the existing popup content (hub port, Connect this tab / Disconnect, console mirror, Pop out, Clear, log/trace); add the Shape section on top, styled like the consumer Shape panel (Flow mark, note box, one Shape button, feedback line).
+
+Popup (operator, final, 2026-11-20): just add a note textarea + one Shape button (+ one status line) to the existing popup; no restyling or reordering.
