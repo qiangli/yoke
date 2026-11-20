@@ -43,4 +43,9 @@ Tests: Go unit tests for hub message -> bus post (recipient default, browser fie
 
 Commit with the trailer `Story-ID: a79cefd4f95b`. Do not push; the conductor reviews and merges.
 
-Multi-tab (operator, 2026-11-20): a ping sends ALL tabs the human has selected (highlighted) in the window, each as its own entry {browser, tab id, url, title}, under one shared optional note; per-tab notes = separate pings. chrome.tabs.query({highlighted:true, currentWindow:true}) needs no new permission.
+
+Problem statement (operator, 2026-11-20) — what this story must solve:
+a) the human does not know which browser/tab the agent opened — tabs an agent drives must be visibly marked (the tab list already tracks `driven`; surface it in the browser, e.g. badge/title marker) — next step after step 1;
+b) the agent's browser has no saved passwords — solved by the human choosing the browser/tab and pinging it;
+c) associating an error or page content with the agent's request is awkward — the ping's note carries pasted error/content for that tab.
+Step 1 = ONE tab per ping + optional note (multi-line, up to ~8 KB; full note stored in a ping file, short board post with a reference since posts cap at 1024 bytes). Multi-tab selection: dropped as overkill.
