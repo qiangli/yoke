@@ -582,6 +582,150 @@ func findSprintGoal(s *weaveStory, id string) *sprintGoalItem {
 	return nil
 }
 
+func submoduleStoryRoots(repoRoot string) []string {
+	if strings.TrimSpace(repoRoot) == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(cand string) {
+		r, err := normalizeStoryRoot(cand)
+		if err != nil || seen[r] {
+			return
+		}
+		if st, err := os.Stat(filepath.Join(r, filepath.FromSlash(todopkg.RepoSub))); err != nil || !st.IsDir() {
+			return
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	parseGitmodules := func(parent string) {
+		raw, err := os.ReadFile(filepath.Join(parent, ".gitmodules"))
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if !ok || strings.TrimSpace(k) != "path" {
+				continue
+			}
+			rel := strings.TrimSpace(v)
+			if rel != "" {
+				add(filepath.Join(parent, filepath.FromSlash(rel)))
+			}
+		}
+	}
+	parseGitmodules(repoRoot)
+	// Also support running inside one submodule when the parent umbrella holds .gitmodules.
+	if parent := filepath.Dir(repoRoot); parent != repoRoot {
+		parseGitmodules(parent)
+	}
+	return out
+}
+
+func resolveGoalStoryRef(s *weaveStory, id int64, repo, ref string) (string, *issue.Issue, error) {
+	ref = strings.TrimSpace(ref)
+	if strings.TrimSpace(repo) != "" {
+		root, err := normalizeStoryRoot(repo)
+		if err != nil && !filepath.IsAbs(repo) {
+			if cwdRoot, cerr := normalizeStoryRoot(""); cerr == nil {
+				if alt, aerr := normalizeStoryRoot(filepath.Join(cwdRoot, repo)); aerr == nil {
+					root, err = alt, nil
+				} else if parent := filepath.Dir(cwdRoot); parent != cwdRoot {
+					if alt, perr := normalizeStoryRoot(filepath.Join(parent, repo)); perr == nil {
+						root, err = alt, nil
+					}
+				}
+			}
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		it, err := todopkg.ResolveRef(todopkg.RepoStore(root), ref)
+		if err != nil {
+			return "", nil, err
+		}
+		if s != nil {
+			if !storyBelongsToSprint(it, s) {
+				return "", nil, fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
+			}
+		} else if it.Sprint != id {
+			return "", nil, fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
+		}
+		return root, it, nil
+	}
+
+	var roots []string
+	seen := map[string]bool{}
+	pushRoot := func(r string) {
+		if r != "" && !seen[r] {
+			seen[r] = true
+			roots = append(roots, r)
+		}
+	}
+	cwdRoot, cwdErr := normalizeStoryRoot("")
+	if cwdErr == nil {
+		pushRoot(cwdRoot)
+	}
+	if s != nil {
+		for _, r := range s.StoryRoots {
+			if nr, err := normalizeStoryRoot(r); err == nil {
+				pushRoot(nr)
+			}
+		}
+	}
+	if cwdErr == nil {
+		for _, sub := range submoduleStoryRoots(cwdRoot) {
+			pushRoot(sub)
+		}
+	}
+	if len(roots) == 0 {
+		return "", nil, cwdErr
+	}
+
+	type hit struct {
+		root string
+		item *issue.Issue
+	}
+	var inSprint, wrongSprint []hit
+	var firstErr error
+	for _, root := range roots {
+		it, err := todopkg.ResolveRef(todopkg.RepoStore(root), ref)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		belongs := it.Sprint == id
+		if s != nil {
+			belongs = storyBelongsToSprint(it, s)
+		}
+		if belongs {
+			inSprint = append(inSprint, hit{root: root, item: it})
+		} else {
+			wrongSprint = append(wrongSprint, hit{root: root, item: it})
+		}
+	}
+	if len(inSprint) == 1 {
+		return inSprint[0].root, inSprint[0].item, nil
+	}
+	if len(inSprint) > 1 {
+		names := make([]string, 0, len(inSprint))
+		for _, h := range inSprint {
+			names = append(names, fmt.Sprintf("%s (%s)", filepath.Base(h.root), h.item.ID))
+		}
+		return "", nil, fmt.Errorf("story %q matches %d repos in sprint #%d (%s); pass --repo <root>", ref, len(inSprint), id, strings.Join(names, ", "))
+	}
+	if len(wrongSprint) > 0 {
+		return "", nil, fmt.Errorf("story %s belongs to sprint #%d, not #%d", wrongSprint[0].item.ID, wrongSprint[0].item.Sprint, id)
+	}
+	if firstErr != nil {
+		return "", nil, firstErr
+	}
+	return "", nil, fmt.Errorf("story %q not found in sprint #%d", ref, id)
+}
+
 func newSprintGoalAddCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var goalID, text, story, repo string
@@ -601,37 +745,24 @@ func newSprintGoalAddCmd() *cobra.Command {
 		// closes the coverage gap — so the common case of "a p0 just arrived,
 		// put it in the plan" was exactly the case most likely to be left half
 		// done, leaving the plan silently not describing the sprint again.
-		var linkRoot string
-		var linkItem *issue.Issue
-		if strings.TrimSpace(story) != "" {
-			root, err := normalizeStoryRoot(repo)
-			if err != nil {
-				return err
-			}
-			it, err := todopkg.ResolveRef(todopkg.RepoStore(root), story)
-			if err != nil {
-				return err
-			}
-			if it.Sprint != id {
-				return fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
-			}
-			linkRoot, linkItem = root, it
-		}
 		return runWeaveStoryMutate(cmd, id, "sprint goal add", &flags, func(s *weaveStory) (string, error) {
 			if findSprintGoal(s, goalID) != nil {
 				return "", fmt.Errorf("goal item %q already exists", goalID)
+			}
+			var linkRoot string
+			var linkItem *issue.Issue
+			if strings.TrimSpace(story) != "" {
+				r, it, err := resolveGoalStoryRef(s, id, repo, story)
+				if err != nil {
+					return "", err
+				}
+				linkRoot, linkItem = r, it
 			}
 			item := sprintGoalItem{ID: goalID, Text: text, GateRequired: gate}
 			msg := fmt.Sprintf("sprint #%d added goal %s", id, goalID)
 			if linkRoot != "" {
 				item.Stories = append(item.Stories, sprintStoryRef{Repo: linkRoot, ID: linkItem.ID})
-				found := false
-				for _, old := range s.StoryRoots {
-					found = found || old == linkRoot
-				}
-				if !found {
-					s.StoryRoots = append(s.StoryRoots, linkRoot)
-				}
+				trackGoalStoryRoot(s, linkRoot)
 				msg += " linked to story " + linkItem.ID
 			}
 			s.Goal = append(s.Goal, item)
@@ -646,7 +777,7 @@ func newSprintGoalAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&goalID, "id", "", "stable checklist id")
 	cmd.Flags().StringVar(&text, "text", "", "required outcome")
 	cmd.Flags().StringVar(&story, "story", "", "todo id or unique prefix to cover with this goal, in one step")
-	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story (default: this checkout)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story (default: current checkout, tracked roots, and submodules)")
 	cmd.Flags().BoolVar(&gate, "gate-required", false, "require recorded evidence after stories close")
 	flags.attach(cmd)
 	return cmd
@@ -661,22 +792,15 @@ func newSprintGoalLinkCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		root, err := normalizeStoryRoot(repo)
-		if err != nil {
-			return err
-		}
-		it, err := todopkg.ResolveRef(todopkg.RepoStore(root), story)
-		if err != nil {
-			return err
-		}
-		if it.Sprint != id {
-			return fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
-		}
 		return runWeaveStoryMutate(cmd, id, "sprint goal link", &flags, func(s *weaveStory) (string, error) {
+			root, it, err := resolveGoalStoryRef(s, id, repo, story)
+			if err != nil {
+				return "", err
+			}
 			return linkSprintGoalStory(s, args[1], root, it)
 		})
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "story repo root (default current)")
+	cmd.Flags().StringVar(&repo, "repo", "", "story repo root (default: current checkout, tracked roots, and submodules)")
 	cmd.Flags().StringVar(&story, "story", "", "todo id or unique prefix")
 	_ = cmd.MarkFlagRequired("story")
 	flags.attach(cmd)
@@ -815,18 +939,11 @@ func newSprintFocusCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		root, err := normalizeStoryRoot(repo)
-		if err != nil {
-			return err
-		}
-		it, err := todopkg.ResolveRef(todopkg.RepoStore(root), args[1])
-		if err != nil {
-			return err
-		}
-		if it.Sprint != id {
-			return fmt.Errorf("story %s belongs to sprint #%d, not #%d", it.ID, it.Sprint, id)
-		}
 		return runWeaveStoryMutate(cmd, id, "sprint focus", &flags, func(s *weaveStory) (string, error) {
+			root, it, err := resolveGoalStoryRef(s, id, repo, args[1])
+			if err != nil {
+				return "", err
+			}
 			owner := weaveStoryConductorName(s, "")
 			next, err := nextSprintStory(s)
 			if err != nil {
@@ -835,6 +952,7 @@ func newSprintFocusCmd() *cobra.Command {
 			if next != nil && todopkg.PriorityRank(it.Priority) > todopkg.PriorityRank(next.Priority) && strings.TrimSpace(override) == "" {
 				return "", fmt.Errorf("priority-first policy: %s is %s while runnable %s is %s; pass --override <reason> to record an exception", it.ID, it.Priority, next.Ref.ID, next.Priority)
 			}
+			trackGoalStoryRoot(s, root)
 			ref := sprintStoryRef{Repo: root, ID: it.ID}
 			s.Execution = sprintExecution{PriorityFirst: true, CurrentFocus: &ref, Override: strings.TrimSpace(override)}
 			body := fmt.Sprintf("focused story %s (%s)", it.ID, it.Priority)
@@ -846,7 +964,7 @@ func newSprintFocusCmd() *cobra.Command {
 				sprintSeatDeliveryAdvisory(owner)), nil
 		})
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "story repo root (default current)")
+	cmd.Flags().StringVar(&repo, "repo", "", "story repo root (default: current checkout, tracked roots, and submodules)")
 	cmd.Flags().StringVar(&override, "override", "", "required reason when bypassing a runnable higher-priority story")
 	flags.attach(cmd)
 	return cmd

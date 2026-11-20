@@ -198,7 +198,7 @@ func canArchivePost(p Post, readers []boardReaderState, now time.Time, window ti
 	if to == "" {
 		return true
 	}
-	if !AddressedToRole(to) {
+	if !audiences.addressedToRole(to) {
 		// Condition 3, the ordinary case: a post to one named agent is an
 		// obligation on exactly that agent. Its cursor must have passed the
 		// post NO MATTER HOW STALE IT IS — that is the whole reason this
@@ -215,7 +215,7 @@ func canArchivePost(p Post, readers []boardReaderState, now time.Time, window ti
 	// board — the seat may change hands, but somebody must have seen the
 	// message first.
 	for _, r := range readers {
-		if p.Directed(r.name) && r.cursor < p.Seq {
+		if p.directed(r.name, audiences) && r.cursor < p.Seq {
 			return false
 		}
 	}
@@ -223,7 +223,7 @@ func canArchivePost(p Post, readers []boardReaderState, now time.Time, window ti
 	// and "nobody has a cursor behind it" is not "somebody read it": retain it
 	// for the next holder.
 	if RoleReaderAuthorizer != nil {
-		if _, held := RoleHolderFor(to); !held {
+		if _, held := audiences.roleHolderFor(to); !held {
 			return false
 		}
 	}

@@ -9,6 +9,17 @@ import (
 )
 
 type headroomProbeContextKey struct{}
+type cachedSourcesOnlyContextKey struct{}
+
+// WithCachedSourcesOnly returns a context instructing CollectReport to satisfy
+// source observations from existing on-disk caches without spawning live probe
+// subprocesses when a cache entry is missing or expired.
+func WithCachedSourcesOnly(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, cachedSourcesOnlyContextKey{}, true)
+}
 
 // SubscriptionHeadroom reports the measured remaining fraction of the vendor
 // subscription window that owns binding. It is deliberately separate from
