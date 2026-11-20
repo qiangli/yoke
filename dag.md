@@ -1,13 +1,15 @@
 ---
 name: yoke
-description: Build/test/lint targets for yoke as a bashy dag pipeline (agent-first, no Makefile)
+description: Build/test/lint targets for yoke as a bashy dag pipeline (agent-first; the Makefile is generated from this file and only forwards here)
 type: dag
 ---
 
 # yoke — DAG task file
 
-yoke has no Makefile — it builds with plain `go` commands. This DAG file is
-the agent-first equivalent, runnable with the `bashy dag` task runner:
+yoke builds with plain `go` commands. The Makefile in this directory is
+GENERATED from this file (`bashy dag --makefile`) and only forwards to the
+targets below — do not edit it. This DAG file is the agent-first task list,
+runnable with the `bashy dag` task runner:
 
 ```bash
 bashy dag --list            # available targets
@@ -224,6 +226,16 @@ excluded as vendored upstream.
 
 ```bash
 scripts/fmtcheck.sh
+```
+
+### makefile-check
+Verify the generated Makefile matches this file. The Makefile is a
+forward-only projection of the targets here (`bashy dag --makefile`); when a
+target is added, renamed or redescribed, regenerate it instead of editing it.
+This target fails and says so when the committed copy is stale.
+
+```bash
+bashy dag --makefile --check
 ```
 
 ### vet

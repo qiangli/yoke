@@ -26,7 +26,8 @@ func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
 		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF, statusF, htmlF, graphF                  bool
-		fileArg, showRunF, serveF, skillF                                                             string
+		makefileF                                                                                     bool
+		fileArg, showRunF, serveF, skillF, outputF                                                    string
 		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
 		jobs, keepRuns                                                                                int
 	)
@@ -63,7 +64,9 @@ Agent Skill's routing surface), type: dag (an OKF page type), and the
 dag-only keys (default, vars, include) either top-level or nested under
 metadata:. dag --check warns when the header is not strict YAML or lacks
 them; dag --skill DIR writes DIR/<name>/SKILL.md, a thin Agent Skill that
-routes any agentic tool to these targets through bashy dag.`,
+routes any agentic tool to these targets through bashy dag, and
+dag --makefile [-o FILE] writes a generated POSIX Makefile that forwards
+every target here (--makefile --check fails when it is stale).`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		// Targets are OPERANDS of the root command, and RunE validates them
@@ -171,6 +174,15 @@ routes any agentic tool to these targets through bashy dag.`,
 				return emitErr(errOut, mode, err)
 			}
 
+			if makefileF {
+				// With --makefile, --check is the generated file's staleness
+				// check, not runCheck's validation of the dag file itself.
+				outPath := outputF
+				if outPath == "" {
+					outPath = "Makefile"
+				}
+				return runMakefile(out, errOut, mode, doc, outPath, checkF)
+			}
 			if checkF {
 				return runCheck(out, errOut, mode, doc, g)
 			}
@@ -343,6 +355,8 @@ routes any agentic tool to these targets through bashy dag.`,
 	cmd.Flags().BoolVar(&dryRunF, "dry-run", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
 	cmd.Flags().StringVar(&skillF, "skill", "", "Write a thin Agent Skill for this file to DIR/<name>/SKILL.md (routes other agents to bashy dag); runs nothing")
+	cmd.Flags().BoolVar(&makefileF, "makefile", false, "Write a generated POSIX Makefile forwarding every target to bashy dag (with --check: fail if the file is stale); runs nothing")
+	cmd.Flags().StringVarP(&outputF, "output", "o", "", "Output file for --makefile (default: Makefile in the working directory)")
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
 	cmd.Flags().BoolVar(&timingsF, "timings", false, "Report recorded per-target durations, total (T) and longest (L); runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
