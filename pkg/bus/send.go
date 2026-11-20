@@ -131,7 +131,7 @@ func Send(req SendRequest) (SendResult, error) {
 		}
 		seq, err := PostMessageSeq(Post{
 			From: req.From, Audience: &aud, Mode: mode, Topic: req.Topic, Body: body,
-			FromParty: SenderParty(req.From),
+			FromParty: SenderParty(req.From), FromSeats: SenderSeats(req.From),
 		})
 		if err != nil {
 			return SendResult{}, err
@@ -182,9 +182,13 @@ func Send(req SendRequest) (SendResult, error) {
 		if err := ValidateCoordinationBody(body); err != nil {
 			return SendResult{}, &BodyError{Err: err}
 		}
+		var seat string
+		if rec.Kind == TargetRole {
+			seat = rec.Label
+		}
 		seq, err := PostMessageSeq(Post{
-			From: req.From, To: rec.Addr, Topic: req.Topic, Body: body,
-			FromParty: SenderParty(req.From), ToParty: rec.Party,
+			From: req.From, To: rec.Addr, Seat: seat, Topic: req.Topic, Body: body,
+			FromParty: SenderParty(req.From), FromSeats: SenderSeats(req.From), ToParty: rec.Party,
 		})
 		if err != nil {
 			return SendResult{}, err
@@ -196,7 +200,10 @@ func Send(req SendRequest) (SendResult, error) {
 	if err := ValidateCoordinationBody(body); err != nil {
 		return SendResult{}, &BodyError{Err: err}
 	}
-	seq, err := PostMessageSeq(Post{From: req.From, Topic: req.Topic, Body: body, FromParty: SenderParty(req.From)})
+	seq, err := PostMessageSeq(Post{
+		From: req.From, Topic: req.Topic, Body: body,
+		FromParty: SenderParty(req.From), FromSeats: SenderSeats(req.From),
+	})
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -219,9 +226,18 @@ func Send(req SendRequest) (SendResult, error) {
 // unverified and says so: acceptance is not delivery.
 func deliverDirect(rec Recipient, seq int64, notice string) Delivery {
 	steerTo, cursorOf, perReader := rec.Addr, rec.Addr, rec.Kind != TargetRole
-	if rec.Kind == TargetInstance {
+	switch rec.Kind {
+	case TargetInstance:
 		id, _ := fleet.ParseInstanceAddress(rec.Addr)
 		steerTo, cursorOf = "instance:"+id, id
+	case TargetRole:
+		if id, ok := ExplicitInstanceID(rec.RoleHolderInstance); ok {
+			steerTo, cursorOf, perReader = "instance:"+id, id, true
+		} else if id, ok := ExplicitInstanceID(rec.RoleHolder); ok {
+			steerTo, cursorOf, perReader = "instance:"+id, id, true
+		} else if rec.RoleHolder != "" {
+			steerTo, cursorOf, perReader = rec.RoleHolder, rec.RoleHolder, true
+		}
 	}
 	d := SteerLive(steerTo, notice)
 	d.State = deliveryState(cursorOf, seq, d.Steered, perReader)

@@ -11,6 +11,7 @@ package weave
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qiangli/yoke/pkg/bus"
@@ -82,17 +83,32 @@ func rolesFromQueue(q *weaveQueue, now time.Time) []bus.HostRole {
 		// A bare `now.Sub(at) > TTL` also admits the two states it cannot
 		// name — a heartbeat ahead of us is negative and so never expires,
 		// which would hand this sprint a permanent address.
-		if s.seat().Live(now) != role.LivenessLive {
+		liveness := s.seat().Live(now)
+		doing := strings.EqualFold(strings.TrimSpace(s.Column), "doing")
+		switch {
+		case liveness == role.LivenessLive:
+		case doing && liveness == role.LivenessLapsed:
+			// An active ("doing") sprint whose 30m heartbeat elapsed while
+			// waiting on a long worker run still has an accountable lease holder;
+			// dropping its role address caused `mb send conductor:<sprint>` to
+			// fail as "not an existing conductor role address". Keep the seat
+			// addressable with a stale-heartbeat warning instead.
+		default:
 			continue
 		}
-		out = append(out, bus.HostRole{
-			Label:  "conductor:" + strconv.FormatInt(s.ID, 10),
+		label := "conductor:" + strconv.FormatInt(s.ID, 10)
+		hr := bus.HostRole{
+			Label:  label,
 			Topic:  sprintTopic(s.ID),
 			Holder: s.Lease.Holder,
 			// The authorizer matches a UUID-stamped reader on this, and a
 			// legacy-named reader on Holder.
 			HolderInstance: s.Lease.Instance,
-		})
+		}
+		if liveness == role.LivenessLapsed {
+			hr.Warning = "seat " + label + " lease heartbeat is stale — queued on seat for " + s.Lease.Holder
+		}
+		out = append(out, hr)
 	}
 	return out
 }
