@@ -344,6 +344,8 @@ up, and pretending otherwise is how two agents end up on one story.`,
 	return cmd
 }
 
+const kindSubmit = "submit"
+
 func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence string, flags *weaveOutputFlags) error {
 	who := strings.TrimSpace(as)
 	if who == "" {
@@ -370,13 +372,14 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 			return "", err
 		}
 		note := fmt.Sprintf("%s submitted story %s for merge/closure", who, shortSprintStoryID(it.ID))
-		if message := strings.TrimSpace(evidence); message != "" {
-			note += ": " + message
+		evidenceRef := strings.TrimSpace(evidence)
+		if evidenceRef != "" {
+			note += ": " + evidenceRef
 		}
 		// The terminal wrapper may replay after a crash. The board lock makes
 		// matching evidence idempotent without a second outbox or lock order.
 		for _, c := range s.Thread {
-			if c.Body == note && c.Author == who {
+			if c.Body == note && c.Author == who && c.submitsStory(it.ID) {
 				return "delivery already submitted", nil
 			}
 		}
@@ -389,12 +392,14 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 				if strings.Contains(c.Body, " claimed story "+shortSprintStoryID(it.ID)) || strings.Contains(c.Body, " yielded story "+shortSprintStoryID(it.ID)) {
 					break
 				}
-				if c.Author == who && strings.Contains(c.Body, " submitted story "+shortSprintStoryID(it.ID)+" for ") {
+				if c.Author == who && c.submitsStory(it.ID) {
 					return "worker already submitted this claim", nil
 				}
 			}
 		}
-		weaveStoryAppend(s, who, "decision", note)
+		weaveStoryAppendEntry(s, weaveComment{
+			Author: who, Kind: kindSubmit, Body: note, StoryID: it.ID, EvidenceRef: evidenceRef,
+		})
 		delivery := ""
 		if err := releaseStoryClaim(id, it.ID, who); err != nil {
 			delivery = fmt.Sprintf("; claim ledger NOT released (%v)", err)
@@ -406,7 +411,6 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		if owner == "" {
 			owner = "the manager"
 		}
-		_ = time.Now
 		return fmt.Sprintf("sprint #%d: %s submitted %s — %s can merge or close it%s",
 			id, who, shortSprintStoryID(it.ID), owner, delivery), nil
 	})
@@ -436,10 +440,17 @@ func newSprintAcceptCmd() *cobra.Command {
 	return cmd
 }
 
+func (c weaveComment) submitsStory(storyID string) bool {
+	if c.Kind == kindSubmit {
+		return c.StoryID == storyID
+	}
+	// Older submissions only recorded the short story ID in the body.
+	return strings.Contains(c.Body, " submitted story "+shortSprintStoryID(storyID)+" for ")
+}
+
 func sprintSubmissionEvidence(s *weaveStory, storyID string) bool {
-	needle := " submitted story " + shortSprintStoryID(storyID) + " for "
 	for _, c := range s.Thread {
-		if strings.Contains(c.Body, needle) {
+		if c.submitsStory(storyID) {
 			return true
 		}
 	}
