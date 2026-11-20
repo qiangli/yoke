@@ -12,7 +12,9 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -268,6 +270,12 @@ func (a *shapedApp) handler() http.Handler {
 			return
 		}
 		defer cleanup()
+		if principal == osPrincipal(currentOSUser()) && principal != "" {
+			if local, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+				publicURL := (&url.URL{Scheme: "http", Host: local.String(), Path: "/" + a.mount}).String()
+				r = r.WithContext(context.WithValue(r.Context(), appRuntimeURLKey{}, publicURL))
+			}
+		}
 		a.serveTree(w, r, c, mountRel(r), principal, dataDir)
 	})
 }
