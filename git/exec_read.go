@@ -1128,6 +1128,7 @@ func nativeCommit(ctx context.Context, dir string, args []string) (*ExecResult, 
 	amend := false
 	quiet := false
 	all := false
+	allowEmpty := false
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -1154,8 +1155,10 @@ func nativeCommit(ctx context.Context, dir string, args []string) (*ExecResult, 
 			all = true
 		case arg == "--amend":
 			amend = true
-		case arg == "--allow-empty" || arg == "--no-verify":
-			// Accepted flags, no-op
+		case arg == "--allow-empty":
+			allowEmpty = true
+		case arg == "--no-verify":
+			// Accepted: go-git never runs hooks, so skipping them is exact.
 		case strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && len(arg) > 1:
 			// Clustered short flags, e.g. -qm, -am, -qam, -qa, etc.
 			matched := true
@@ -1216,7 +1219,7 @@ func nativeCommit(ctx context.Context, dir string, args []string) (*ExecResult, 
 		return nil, ErrUnsupported
 	}
 
-	opts := &gogit.CommitOptions{Amend: amend, All: all}
+	opts := &gogit.CommitOptions{Amend: amend, All: all, AllowEmptyCommits: allowEmpty}
 	if mode := coreAutoCRLF(repo); all && (mode == "true" || mode == "input" || !coreFileMode(repo)) {
 		st, err := worktreeStatus(wt)
 		if err != nil {
