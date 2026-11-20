@@ -12,6 +12,7 @@ import (
 	"math"
 	"regexp"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -217,7 +218,14 @@ type redactingWriter struct {
 	closed  bool
 	err     error
 	offset  int
+	idle    *time.Timer
 }
+
+// liveIdleFlush is how long a LiveWriter holds a tail with no further output
+// before emitting it. A tail is held only so a secret split across writes can
+// still be masked; a child that printed a short line and went quiet must not
+// have that line withheld indefinitely.
+const liveIdleFlush = 50 * time.Millisecond
 
 func (w *redactingWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
@@ -252,7 +260,32 @@ func (w *redactingWriter) Write(p []byte) (int, error) {
 	w.report(findings)
 	w.pending = append(w.pending[:0], combined[consumed:]...)
 	w.offset += consumed
+	if w.live != nil && len(w.pending) > 0 {
+		if w.idle == nil {
+			w.idle = time.AfterFunc(liveIdleFlush, w.flushIdle)
+		} else {
+			w.idle.Reset(liveIdleFlush)
+		}
+	}
 	return len(p), nil
+}
+
+// flushIdle emits the held tail after a quiet period.
+func (w *redactingWriter) flushIdle() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || w.err != nil || len(w.pending) == 0 {
+		return
+	}
+	w.cfg = w.live.snapshot()
+	out, consumed, findings := w.cfg.transformPrefix(w.pending, len(w.pending))
+	if err := writeAll(w.dst, out); err != nil {
+		w.err = err
+		return
+	}
+	w.report(findings)
+	w.pending = w.pending[:0]
+	w.offset += consumed
 }
 
 func (w *redactingWriter) Close() error {
@@ -263,6 +296,9 @@ func (w *redactingWriter) Close() error {
 		return w.err
 	}
 	w.closed = true
+	if w.idle != nil {
+		w.idle.Stop()
+	}
 	if w.err != nil {
 		return w.err
 	}
