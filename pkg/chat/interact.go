@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/agentctl"
+	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/qiangli/yoke/pkg/room"
 )
@@ -212,9 +214,9 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	defer cancel()
 	// Same resolution as agentCommand: a supervised daemon's PATH is not the
 	// operator's, and a live session must not be reachable only from a terminal.
-	tool := l.Tool
-	if p := ResolveToolBinary(tool); p != "" {
-		tool = p
+	tool, err := interactiveBinary(runCtx, l)
+	if err != nil {
+		return 1, err
 	}
 	cmd := exec.CommandContext(runCtx, tool, argv...)
 	cmd.Dir = cwd
@@ -338,6 +340,9 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		fmt.Fprintf(status, "chat: session ended (%s)\n", killed)
 	}
 	recordLaunchUsageTokens(ctx, l, estimateTokens(opt.Prompt), usage.Tokens())
+	if runErr != nil && cmd.Process == nil {
+		runErr = spawnError(l, tool, runErr)
+	}
 	return exit, runErr
 }
 
@@ -356,6 +361,38 @@ func interactiveTrust(cmd *exec.Cmd, tool string, opt InteractOptions, status io
 	return agentpty.NewDialogGuard(func(label string) {
 		fmt.Fprintf(status, "chat: answered trust dialog for %q (%s selected; preseed did not clear it)\n", cmd.Dir, label)
 	})
+}
+
+// interactiveBinary is the executable a live session spawns. A managed tool's
+// Launch.Tool is only the COMPUTED cache path of its pin (resolveManaged never
+// downloads), so a session must install the pin first, exactly as execRunner
+// and agentCommand do; spawning the path as-is died with ENOENT on any host
+// that had not yet run a one-shot of the tool. No PATH fallback: a failed
+// install is the launch's failure, named with its override.
+func interactiveBinary(ctx context.Context, l Launch) (string, error) {
+	tool := l.Tool
+	if l.ManagedTool != nil {
+		p, err := agentlaunch.EnsureManaged(ctx, toAgentLaunch(l))
+		if err != nil {
+			return "", err
+		}
+		tool = p
+	}
+	if p := ResolveToolBinary(tool); p != "" {
+		tool = p
+	}
+	return tool, nil
+}
+
+// spawnError names what a session that never started tried to run: the
+// resolved path and the OS error, plus the override a managed tool offers.
+func spawnError(l Launch, path string, err error) error {
+	msg := fmt.Sprintf("chat: could not start %s at %s", l.ToolName, path)
+	if l.ManagedTool != nil {
+		msg += fmt.Sprintf(" (managed pin %s; set %s to launch another binary explicitly)",
+			l.ManagedTool.Version, fleet.ToolBinaryOverrideEnv(l.ToolName))
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 type usageCountingWriter struct {

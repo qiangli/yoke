@@ -1,8 +1,12 @@
 package chat
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/binmgr"
 )
 
 // TestPickAgentConflict — --agent with --band/--tool is a contradiction, not a
@@ -66,5 +70,39 @@ func TestPickAgentEmpty(t *testing.T) {
 func TestPickAgentBandRange(t *testing.T) {
 	if _, err := PickAgent(Selector{Band: 99}); err == nil {
 		t.Fatal("expected out-of-range band error, got nil")
+	}
+}
+
+func TestInteractiveBinaryManagedInstallFailureIsExplicit(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	l := Launch{ToolName: "agy", Tool: "/nonexistent/agy",
+		ManagedTool: &binmgr.Tool{Name: "agy", Version: "1.5.13", Assets: map[string]binmgr.Asset{}}}
+	_, err := interactiveBinary(context.Background(), l)
+	if err == nil || !strings.Contains(err.Error(), "BASHY_TOOL_BINARY_AGY") || !strings.Contains(err.Error(), "1.5.13") {
+		t.Fatalf("want explicit managed-install failure naming pin and override, got %v", err)
+	}
+}
+
+func TestInteractiveBinaryUnmanagedKeepsPath(t *testing.T) {
+	p, err := interactiveBinary(context.Background(), Launch{Tool: "/some/abs/tool"})
+	if err != nil || p != "/some/abs/tool" {
+		t.Fatalf("got %q, %v", p, err)
+	}
+}
+
+func TestSpawnErrorNamesPathAndOverride(t *testing.T) {
+	l := Launch{ToolName: "agy", ManagedTool: &binmgr.Tool{Version: "1.5.13"}}
+	cause := errors.New("fork/exec: no such file or directory")
+	err := spawnError(l, "/cache/agy/1.5.13/agy", cause)
+	for _, want := range []string{"/cache/agy/1.5.13/agy", "1.5.13", "BASHY_TOOL_BINARY_AGY", "no such file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in %v", want, err)
+		}
+	}
+	if !errors.Is(err, cause) {
+		t.Error("cause not wrapped")
+	}
+	if got := spawnError(Launch{ToolName: "x"}, "/p/x", cause).Error(); strings.Contains(got, "BASHY_TOOL_BINARY") {
+		t.Errorf("unmanaged error should not offer an override: %s", got)
 	}
 }
