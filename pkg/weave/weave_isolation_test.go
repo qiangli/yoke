@@ -241,7 +241,10 @@ func TestWeaveIsolationEndToEnd(t *testing.T) {
 	}
 
 	// THE GATE. The branch has a real commit and would otherwise merge.
-	pullOut, _ := runWeave(t, "pull", "1", "--json")
+	pullOut, pullCode := runWeave(t, "pull", "1", "--json")
+	if pullCode == 0 {
+		t.Fatalf("refused pull must exit non-zero:\n%s", pullOut)
+	}
 	if !strings.Contains(pullOut, "isolation-violated") {
 		t.Fatalf("pull must refuse the escaped run:\n%s", pullOut)
 	}
