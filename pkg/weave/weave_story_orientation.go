@@ -21,5 +21,9 @@ func sprintOrientationError(s *weaveStory) error {
 }
 
 func sprintOrientationLine(s *weaveStory) string {
-	return fmt.Sprintf("primary goal: %s\nmaster plan: %s", strings.TrimSpace(s.PrimaryGoal), strings.TrimSpace(s.SpecRef))
+	line := fmt.Sprintf("primary goal: %s\nmaster plan: %s", strings.TrimSpace(s.PrimaryGoal), strings.TrimSpace(s.SpecRef))
+	if s != nil && len(s.Directives) > 0 {
+		line += "\n" + formatSprintDirectivesSection(s.ID, s.Directives)
+	}
+	return line
 }

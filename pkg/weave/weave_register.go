@@ -101,6 +101,7 @@ func runWeaveAddFromTodo(cmd *cobra.Command, ref string, points int, flags *weav
 	if len(it.Refs) > 0 {
 		body += fmt.Sprintf("\n\nThis issue also touches: %v\n", it.Refs)
 	}
+	body = applySprintDirectivesForWeaveAdd(root, body, it)
 
 	var qi *weaveItem
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -190,6 +191,7 @@ func runWeaveAddFromIssue(cmd *cobra.Command, ref string, flags *weaveOutputFlag
 	if len(it.Refs) > 0 {
 		body += fmt.Sprintf("\n\nThis issue also touches: %v\n", it.Refs)
 	}
+	body = applySprintDirectivesForWeaveAdd(root, body, it)
 
 	var qi *weaveItem
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {

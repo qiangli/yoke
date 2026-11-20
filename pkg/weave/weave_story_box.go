@@ -437,9 +437,13 @@ func newSprintInstructCmd() *cobra.Command {
 					contact = s.Contact.String()
 				}
 				if flags.mode() == weavecli.OutputJSON {
-					return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint instruct", map[string]any{
+					res := map[string]any{
 						"sprint": id, "owner": owner, "contact": contact, "delivery": strings.TrimPrefix(note, "; "),
-					}))
+					}
+					if len(s.Directives) > 0 {
+						res["directives"] = activeSprintDirectives(s)
+					}
+					return ec(emitOK(cmd.OutOrStdout(), flags.mode(), "sprint instruct", res))
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "sprint instruct: sprint #%d; owner %s; meet %s%s\n", id, owner, contact, note)
 				return nil
