@@ -131,3 +131,18 @@ func TestStartedLineNamesTheWatchedInbox(t *testing.T) {
 		t.Fatalf("inbox off: %q", got)
 	}
 }
+
+// A process with no USER/LOGNAME (the official build image, a service) still
+// signs its steers: a queued steer is a board post and needs a sender.
+func TestPrincipalNameFallsBackToTheOSAccount(t *testing.T) {
+	for _, k := range []string{"BASHY_PRINCIPAL", "USER", "LOGNAME", "USERNAME"} {
+		t.Setenv(k, "")
+	}
+	if got := principalName(); got == "" {
+		t.Fatal("principalName is empty without USER; a steer would have no sender")
+	}
+	t.Setenv("USER", "alice")
+	if got := principalName(); got != "alice" {
+		t.Fatalf("USER must still win: got %q", got)
+	}
+}

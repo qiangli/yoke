@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,10 +25,24 @@ import (
 // principalName is the human/agent this session is attributed to on its room card.
 // Optional (best-effort from the environment) — the card omits it when unknown.
 func principalName() string {
-	for _, k := range []string{"BASHY_PRINCIPAL", "USER", "LOGNAME"} {
+	for _, k := range []string{"BASHY_PRINCIPAL", "USER", "LOGNAME", "USERNAME"} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 			return v
 		}
+	}
+	return osAccountName()
+}
+
+// osAccountName names the OS account when the environment does not: a
+// container, cron job or service often sets no USER, and a queued steer is a
+// board post, which needs a sender. A uid with no passwd entry is named by
+// number rather than left empty.
+func osAccountName() string {
+	if u, err := user.Current(); err == nil && strings.TrimSpace(u.Username) != "" {
+		return strings.TrimSpace(u.Username)
+	}
+	if uid := os.Getuid(); uid >= 0 {
+		return fmt.Sprintf("uid-%d", uid)
 	}
 	return ""
 }
