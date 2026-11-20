@@ -535,10 +535,11 @@ this is an order rather than a checklist:
                     claim a shared host BEFORE assigning work to it.
   4 MONITOR         progress, not liveness — a worker can be alive and stuck.
                     Nothing across two ticks is a decision, not a wait.
-  5 INTEGRATE       run the gate YOURSELF, read the verdict from bashy and not
-                    from a worker's prose; review, merge, clean up what this
-                    sprint owns. Cheap gate per story; the expensive gate
-                    once per iteration, on a frozen candidate.
+  5 INTEGRATE       workers run gates; verify the verdict from bashy evidence,
+                    never a worker's prose; you run only the frozen-candidate
+                    final gate. Review, merge, clean up what this sprint
+                    owns. Cheap gate per story; the expensive gate once per
+                    iteration, on that candidate.
   6 CHECKPOINT      your context does not survive; the brief is what reaches
                     the next manager, who may be a different tool.
   7 REPEAT          until the sprint's acceptance gate passes — then stop and
