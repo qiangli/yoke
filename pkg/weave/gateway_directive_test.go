@@ -416,7 +416,7 @@ func TestGatewayApproveDigestSettles(t *testing.T) {
 	gatewayApprovalWait = 5 * time.Second
 	c := &gatewayTestClient{
 		directiveMockSessionClient: &directiveMockSessionClient{},
-		tasks:                     []TaskSummary{{ID: "task", Owner: "approver"}},
+		tasks:                      []TaskSummary{{ID: "task", Owner: "approver"}},
 	}
 	g := newGatewayConductor(c, t.TempDir())
 	runs := 0
@@ -446,7 +446,7 @@ func TestGatewayStaleDigestRefused(t *testing.T) {
 	gatewayApprovalWait = 5 * time.Second
 	c := &gatewayTestClient{
 		directiveMockSessionClient: &directiveMockSessionClient{},
-		tasks:                     []TaskSummary{{ID: "task", Owner: "approver"}},
+		tasks:                      []TaskSummary{{ID: "task", Owner: "approver"}},
 	}
 	g := newGatewayConductor(c, t.TempDir())
 	executed := false
@@ -501,7 +501,7 @@ func TestGatewayWrongHostRefused(t *testing.T) {
 	gatewayApprovalWait = 5 * time.Second
 	c := &gatewayTestClient{
 		directiveMockSessionClient: &directiveMockSessionClient{},
-		tasks:                     []TaskSummary{{ID: "task", Owner: "approver"}},
+		tasks:                      []TaskSummary{{ID: "task", Owner: "approver"}},
 	}
 	g := newGatewayConductor(c, t.TempDir())
 	g.execute = func(context.Context, gatewayDirective) (string, int, bool) {

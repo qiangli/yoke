@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"github.com/qiangli/bash/pathconv"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qiangli/yoke/pkg/assetring"
 )

@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/bash/pathconv"
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/quotaobs"
-	"github.com/qiangli/bash/pathconv"
 )
 
 // AnalyzerBackend is the paid model boundary. A fake backend can be supplied

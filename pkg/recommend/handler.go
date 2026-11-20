@@ -9,12 +9,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/qiangli/bash/interp"
 	"github.com/qiangli/coreutils/pkg/nudge"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/yoke/pkg/autoretry"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/skills"
-	"github.com/qiangli/bash/interp"
 )
 
 // GuidancePolicy describes the active, process-local hint rules.

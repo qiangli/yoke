@@ -28,9 +28,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/bash/pathconv"
 	"github.com/qiangli/yoke/external/notrack"
 	"github.com/qiangli/yoke/pkg/binmgr"
-	"github.com/qiangli/bash/pathconv"
 )
 
 // embeddedSums pins the OFFICIAL sha256 digests of the DefaultVersion archives,

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qiangli/yoke/pkg/atlas"
-	"github.com/qiangli/yoke/pkg/policy/advice"
 	"github.com/qiangli/bash/interp"
 	"github.com/qiangli/bash/syntax"
+	"github.com/qiangli/yoke/pkg/atlas"
+	"github.com/qiangli/yoke/pkg/policy/advice"
 )
 
 // TestBaselineUsageProbeEffectsCoverCommands (story 765d90d1d34f) is the

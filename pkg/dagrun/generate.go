@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"github.com/qiangli/bash/syntax"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qiangli/yoke/pkg/dag"
 )

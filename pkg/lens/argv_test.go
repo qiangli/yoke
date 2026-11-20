@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/bash/syntax"
+	"github.com/qiangli/coreutils/tool"
 )
 
 // hostile is the argv every dialect must carry back unchanged (the plan's
