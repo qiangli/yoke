@@ -1,9 +1,12 @@
 package chat
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,12 +28,16 @@ func TestInteractivePromptWaitsForTUIReadiness(t *testing.T) {
 	}
 	ready := &interactiveReady{}
 	var calls atomic.Int32
+	var status bytes.Buffer
 	done := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {
-		result <- deliverInteractivePromptWithTiming(context.Background(), "test", sock, "  hello  ", ready, done,
+		result <- deliverInteractivePromptWithTiming(context.Background(), "test", sock, "  hello  ", ready, done, &status,
 			func(text string) error {
 				calls.Add(1)
+				if !ready.settled(testDeliveryTiming().settle) {
+					t.Error("instruction sent before TUI settled")
+				}
 				if text != "  hello  " {
 					t.Errorf("instruction changed during delivery: %q", text)
 				}
@@ -45,8 +52,40 @@ func TestInteractivePromptWaitsForTUIReadiness(t *testing.T) {
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
+	if status.Len() != 0 {
+		t.Fatalf("expected delivery after settling without a warning, status = %q", status.String())
+	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("send calls = %d, want exactly 1", got)
+	}
+}
+
+func TestInteractivePromptDeliversAfterReadyTimeout(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "ctl")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	timing := testDeliveryTiming()
+	timing.readyTimeout = 20 * time.Millisecond
+	timing.settle = time.Hour // The drawn prompt cannot settle during the wait.
+	ready := &interactiveReady{}
+	_, _ = ready.Write([]byte("> "))
+	var status bytes.Buffer
+	var sent []string
+	start := time.Now()
+	err := deliverInteractivePromptWithTiming(context.Background(), "agy", sock, "hello", ready,
+		make(chan struct{}), &status, func(text string) error {
+			if time.Since(start) < timing.readyTimeout {
+				t.Fatal("sent instruction before readiness timeout")
+			}
+			sent = append(sent, text)
+			return nil
+		}, timing)
+	if err != nil || len(sent) != 1 || sent[0] != "hello" {
+		t.Fatalf("sent %q, err = %v", sent, err)
+	}
+	if !strings.Contains(status.String(), "warning: agy TUI did not settle") {
+		t.Fatalf("missing readiness warning in %q", status.String())
 	}
 }
 
@@ -58,7 +97,7 @@ func TestInteractivePromptCancellationBeforeReadiness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var calls atomic.Int32
-	err := deliverInteractivePromptWithTiming(ctx, "test", sock, "hello", &interactiveReady{}, make(chan struct{}),
+	err := deliverInteractivePromptWithTiming(ctx, "test", sock, "hello", &interactiveReady{}, make(chan struct{}), io.Discard,
 		func(text string) error { calls.Add(1); return nil }, testDeliveryTiming())
 	if err == nil {
 		t.Fatal("expected cancellation error")
@@ -77,7 +116,7 @@ func TestInteractivePromptNeverDuplicatesSend(t *testing.T) {
 	_, _ = ready.Write([]byte("ready"))
 	time.Sleep(20 * time.Millisecond)
 	var calls atomic.Int32
-	err := deliverInteractivePromptWithTiming(context.Background(), "test", sock, "hello", ready, make(chan struct{}),
+	err := deliverInteractivePromptWithTiming(context.Background(), "test", sock, "hello", ready, make(chan struct{}), io.Discard,
 		func(text string) error { calls.Add(1); return nil }, testDeliveryTiming())
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +140,7 @@ func TestInteractivePromptWaitsOutATrustDialog(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- deliverInteractivePromptWithTiming(context.Background(), "test", sock, "hello", ready,
-			make(chan struct{}), func(string) error { calls.Add(1); return nil }, testDeliveryTiming())
+			make(chan struct{}), io.Discard, func(string) error { calls.Add(1); return nil }, testDeliveryTiming())
 	}()
 	time.Sleep(60 * time.Millisecond) // four settle windows with the dialog still up
 	if got := calls.Load(); got != 0 {
