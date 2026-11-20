@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/procguard"
 	"github.com/qiangli/bash/expand"
 	"github.com/qiangli/bash/interp"
 	"github.com/qiangli/bash/syntax"
+	"github.com/qiangli/yoke/pkg/procguard"
 )
 
 type capacityChildInput struct {

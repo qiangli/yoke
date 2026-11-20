@@ -13,10 +13,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qiangli/coreutils/pkg/weavecli"
-	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/bash/interp"
 	"github.com/qiangli/bash/syntax"
+	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 func resetGuidance(t *testing.T) {

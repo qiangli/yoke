@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/bash/pathconv"
+	"github.com/qiangli/coreutils/tool"
 )
 
 var wslpathCmd = &tool.Tool{

@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"github.com/qiangli/bash/pathconv"
+	"gopkg.in/yaml.v3"
 
 	"github.com/qiangli/yoke/pkg/assetring"
 	"github.com/qiangli/yoke/pkg/atlas"

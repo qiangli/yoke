@@ -37,12 +37,12 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/qiangli/bash/pathconv"
+	"github.com/qiangli/bash/syntax"
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/snippet"
 	"gopkg.in/yaml.v3"
-	"github.com/qiangli/bash/pathconv"
-	"github.com/qiangli/bash/syntax"
 )
 
 // The argv formats, in the order their rows are declared.

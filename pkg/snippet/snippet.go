@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/bash/syntax"
 	"github.com/qiangli/yoke/pkg/atlas"
 	"gopkg.in/yaml.v3"
-	"github.com/qiangli/bash/syntax"
 )
 
 const (
