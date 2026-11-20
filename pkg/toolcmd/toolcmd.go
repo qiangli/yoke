@@ -227,14 +227,7 @@ func classifyRefusal(err error) (kind, hint string) {
 // RenderSlash substitutes {args} in the slash line, or appends args after a
 // space when the line has no {args} token.
 func RenderSlash(slash, args string) string {
-	args = strings.TrimSpace(args)
-	if strings.Contains(slash, "{args}") {
-		return strings.TrimSpace(strings.ReplaceAll(slash, "{args}", args))
-	}
-	if args == "" {
-		return strings.TrimSpace(slash)
-	}
-	return strings.TrimSpace(slash) + " " + args
+	return fleet.RenderSlash(slash, args)
 }
 
 // CommandTimeout resolves the effective timeout: opts, then YAML, then default.

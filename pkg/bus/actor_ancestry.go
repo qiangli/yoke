@@ -2,8 +2,12 @@ package bus
 
 import "os"
 
-// processHasAncestor reports whether anchor is this process or one of its
+// ProcessHasAncestor reports whether anchor is this process or one of its
 // parents. The bound and cycle check fail closed on corrupt process metadata.
+func ProcessHasAncestor(anchor int) bool {
+	return processHasAncestor(anchor)
+}
+
 func processHasAncestor(anchor int) bool {
 	if anchor <= 0 {
 		return false

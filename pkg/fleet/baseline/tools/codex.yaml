@@ -243,6 +243,33 @@ commands:
     capability: code-review
     output: turn
     exec: codex exec review --json --skip-git-repo-check {args}
+  # MEASURED 2026-11-20 (codex 0.171.0, Sprint #681 L1): interactive TUI slash
+  # popup menu and help text (codex_tui::slash_command::SlashCommand) in the
+  # pinned 0.171.0 binary:
+  #   clear   -> /clear          ("clear the terminal and start a new chat")
+  #   compact -> /compact        ("summarize conversation to prevent hitting the context limit")
+  #   exit    -> /exit           ("exit Codex"; /quit alias also present)
+  #   rename  -> /rename {args}  ("rename the current thread")
+  #   resume  -> /resume {args}  ("resume a saved chat")
+  #   status  -> /status         ("show current session configuration and token usage")
+  - name: clear
+    slash: /clear
+    mode: tui
+  - name: compact
+    slash: /compact
+    mode: tui
+  - name: exit
+    slash: /exit
+    mode: tui
+  - name: rename
+    slash: /rename {args}
+    mode: tui
+  - name: resume
+    slash: /resume {args}
+    mode: tui
+  - name: status
+    slash: /status
+    mode: tui
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

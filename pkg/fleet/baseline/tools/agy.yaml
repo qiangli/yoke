@@ -220,6 +220,32 @@ commands:
   # Per operator rule ("If agy cannot reach Gmail/Drive headlessly, record command,
   # exit and output instead of seeding"), agy:email.read and agy:drive.read are not
   # seeded in the baseline. If desired, shell-delegated variants belong in the user overlay.
+  # MEASURED 2026-11-20 (agy 1.5.13, Sprint #681 L1): interactive `/help` slash
+  # menu and help text verified in the pinned 1.5.13 binary
+  # (third_party/jetski/cli/commands/*.go) and official CLI reference
+  # (antigravity.google/docs/cli/reference.md, antigravity.google/docs/commands/compact.md):
+  #   clear   -> /clear          ("Start a new conversation"; alias: /new; clear.go)
+  #   compact -> /compact {args} ("Summarize conversation context"; bare pauses, with text continues)
+  #   exit    -> /exit           ("Exit the CLI"; alias: /quit; exit.go)
+  #   rename  -> /rename {args}  ("/rename <name>" — rename current conversation; rename.go)
+  #   resume  -> /resume {args}  ("Switch to a previous conversation"; aliases: /switch, /conversation; load.go)
+  #   status  -> UNDECLARED: agy 1.5.13 `/help` slash menu has /context,
+  #              /usage (/quota), /credits and /statusline, and no /status command.
+  - name: clear
+    slash: /clear
+    mode: tui
+  - name: compact
+    slash: /compact {args}
+    mode: tui
+  - name: exit
+    slash: /exit
+    mode: tui
+  - name: rename
+    slash: /rename {args}
+    mode: tui
+  - name: resume
+    slash: /resume {args}
+    mode: tui
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

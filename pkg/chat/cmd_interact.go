@@ -3,6 +3,7 @@ package chat
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/qiangli/yoke/pkg/agentpty"
 	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/bus"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -38,8 +40,69 @@ func findMember(id string) (room.Card, error) {
 	return room.Card{}, fmt.Errorf("chat: nothing live matches %q (or it is ambiguous) — `bashy chat sessions`", id)
 }
 
+const sessionsSchemaVersion = "bashy-chat-sessions-v1"
+
+// SessionsEnvelope is the structured `bashy chat sessions --json` output.
+type SessionsEnvelope struct {
+	SchemaVersion string           `json:"schema_version"`
+	Sessions      []SessionSummary `json:"sessions"`
+}
+
+// SessionSummary describes one live host-room member and the TUI session
+// commands declared for its tool.
+type SessionSummary struct {
+	ID       string   `json:"id"`
+	Binding  string   `json:"binding,omitempty"`
+	Tool     string   `json:"tool,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	Nick     string   `json:"nick,omitempty"`
+	Band     int      `json:"band,omitempty"`
+	Mode     string   `json:"mode,omitempty"`
+	Task     string   `json:"task,omitempty"`
+	PID      int      `json:"pid"`
+	Reach    string   `json:"reach"`
+	Cwd      string   `json:"cwd,omitempty"`
+	Joined   string   `json:"joined,omitempty"`
+	Commands []string `json:"commands"`
+}
+
+func summarizeSessions(cat *fleet.Catalog, members []room.Card) SessionsEnvelope {
+	rows := make([]SessionSummary, 0, len(members))
+	for _, c := range members {
+		tool, ok := resolveCardTool(cat, c)
+		cmds := []string{}
+		toolName := cardToolName(c)
+		if ok {
+			toolName = tool.Name
+			if names := tool.DeclaredCommandNames(fleet.ToolCommandTUI); len(names) > 0 {
+				cmds = names
+			}
+		}
+		rows = append(rows, SessionSummary{
+			ID:       c.ID,
+			Binding:  c.Binding,
+			Tool:     toolName,
+			Model:    c.Model,
+			Nick:     c.Nick,
+			Band:     c.Band,
+			Mode:     c.Mode,
+			Task:     c.Task,
+			PID:      c.PID,
+			Reach:    reachLabel(c),
+			Cwd:      c.Cwd,
+			Joined:   c.Joined,
+			Commands: cmds,
+		})
+	}
+	return SessionsEnvelope{
+		SchemaVersion: sessionsSchemaVersion,
+		Sessions:      rows,
+	}
+}
+
 // newChatSessionsCmd lists the host room's members — the live-agent board.
 func newChatSessionsCmd() *cobra.Command {
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:     "sessions",
 		Aliases: []string{"ls"},
@@ -51,6 +114,11 @@ func newChatSessionsCmd() *cobra.Command {
 				return err
 			}
 			w := cmd.OutOrStdout()
+			if asJSON {
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				return enc.Encode(summarizeSessions(newCatalog(), members))
+			}
 			if len(members) == 0 {
 				fmt.Fprintln(w, "nothing live — start an agent with `bashy chat --agent NICK` or `--band N`")
 				return nil
@@ -89,6 +157,7 @@ func newChatSessionsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON with each live session's declared commands")
 	return cmd
 }
 
