@@ -60,14 +60,20 @@ func pinClaimCatalog(t *testing.T) {
 }
 
 // claimLedger isolates the coord registry and the budget gate, makes this
-// process episode "ep-me", and returns the OTHER episode's holder.
+// process episode "ep-me", and returns the OTHER episode's holder. The
+// holder is this process's own Self at ep-other (not a fabricated ref), so
+// flipping BASHY_EPISODE back reproduces the holder exactly: sameHolder
+// requires episode AND name AND host, and only the episode is the test's
+// to vary.
 func claimLedger(t *testing.T) principal.Ref {
 	t.Helper()
 	t.Setenv("BASHY_COORD_DIR", t.TempDir())
+	t.Setenv("BASHY_EPISODE", "ep-other")
+	other := coord.Self()
 	t.Setenv("BASHY_EPISODE", "ep-me")
 	restore := llmbudget.SetDefault(llmbudget.New(llmbudget.Config{StatePath: filepath.Join(t.TempDir(), "meter.json")}))
 	t.Cleanup(restore)
-	return principal.Ref{Name: "other", Episode: "ep-other", Host: "h"}
+	return other
 }
 
 func mustClaim(t *testing.T, holder principal.Ref, ref string) {

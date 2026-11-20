@@ -23,5 +23,10 @@ import (
 // mis-masking a post's legitimate text is a correctness bug the value-based
 // rule avoids.
 func RedactCrossHostBody(body string) string {
-	return string(secrets.EnvValueRedactor(os.Environ()).Redact([]byte(body)))
+	r := secrets.EnvValueRedactor(os.Environ())
+	// EnvValueRedactor also masks credential SHAPES for log/agent-output
+	// records; a post body is member-authored text, so pin this surface to
+	// values-only or legitimate credential-shaped words get rewritten.
+	_ = r.SetShapeMode(secrets.ShapeReportOnly)
+	return string(r.Redact([]byte(body)))
 }
