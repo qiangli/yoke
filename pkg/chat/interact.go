@@ -168,7 +168,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Native:    native,
-		Caps:      []string{room.CapInboxDelivery, SteerInboxPrefix + "chat-steer-" + bus.NewPostID()},
+		Caps:      []string{room.CapInboxDelivery, newSteerInboxCap()},
 		Joined:    time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := room.Join(card); err != nil {

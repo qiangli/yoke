@@ -96,3 +96,29 @@ func TestChatSteerQueuesUntilReadyOrTimeout(t *testing.T) {
 		})
 	}
 }
+
+// A fresh chat steer inbox starts at the board head: the relay's first read
+// takes the tail path instead of a full-board scan, and a steer posted after
+// the inbox exists is still delivered.
+func TestNewSteerInboxStartsAtBoardHead(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	t.Setenv("BASHY_MB_DIR", t.TempDir())
+	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
+	t.Setenv("BASHY_PRINCIPAL", "conductor")
+	for i := 0; i < 3; i++ {
+		if err := bus.PostMessage(bus.Post{To: "someone-else", From: "conductor", Body: "old"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addr := steerInbox(room.Card{Caps: []string{newSteerInboxCap()}})
+	if seq, ok := bus.CursorSeq(addr); !ok || seq < 3 {
+		t.Fatalf("cursor = %d, %v; want at the board head", seq, ok)
+	}
+	if err := bus.PostMessage(bus.Post{To: addr, From: "conductor", Body: "steer"}); err != nil {
+		t.Fatal(err)
+	}
+	posts, _, _, err := bus.Unseen(addr, 1)
+	if err != nil || len(posts) != 1 || posts[0].Body != "steer" {
+		t.Fatalf("unseen = %+v, %v; want the one steer", posts, err)
+	}
+}

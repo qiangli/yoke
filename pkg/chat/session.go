@@ -383,7 +383,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Events:    tail != nil,
-		Caps:      []string{room.CapInboxDelivery, SteerInboxPrefix + "chat-steer-" + bus.NewPostID()},
+		Caps:      []string{room.CapInboxDelivery, newSteerInboxCap()},
 		Joined:    time.Now().UTC().Format(time.RFC3339),
 	}
 	if tail != nil {

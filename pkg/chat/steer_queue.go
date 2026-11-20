@@ -18,6 +18,18 @@ import (
 // SteerInboxPrefix advertises the run's durable board address on its room card.
 const SteerInboxPrefix = "steer-inbox:"
 
+// newSteerInboxCap names a fresh steer inbox for one chat session and opens
+// its board cursor at the current head before the card is published. Nothing
+// can address the inbox earlier, so no steer is skipped; without the cursor the
+// relay's first read is a full-board audience scan (tens of seconds on a
+// long-lived host board), which delayed the first queued steer by minutes.
+// A failed initialization only costs that slow first read.
+func newSteerInboxCap() string {
+	addr := "chat-steer-" + bus.NewPostID()
+	_ = bus.InitializeReaderAtHead(addr)
+	return SteerInboxPrefix + addr
+}
+
 func steerInbox(c room.Card) string {
 	for _, cap := range c.Caps {
 		if addr, ok := strings.CutPrefix(cap, SteerInboxPrefix); ok {
