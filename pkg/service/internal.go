@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +22,51 @@ type Capability interface {
 	Configure(ctx context.Context, cfg Config) error
 	Deactivate(ctx context.Context) error
 	Health(ctx context.Context) error
+}
+
+// UnavailableReporter is optionally implemented by a Capability whose
+// backend can be absent on a healthy host (no podman socket, no local
+// proxy, an unpaired host). Activate still returns nil in that state —
+// absence is not breakage, and failing it would walk the unit through
+// restart policy on every backend-less host — but the unit must not
+// report Active either: the provider rests it Inactive with this
+// reason, visible in Status and to the monitor, and a later Activate
+// recovers it once Unavailable reports "". Without this channel the
+// reason died inside the capability and the unit showed active/health
+// ok while serving nothing (story 9deb591a).
+type UnavailableReporter interface {
+	Unavailable() string
+}
+
+// unavailablePrefix marks a Status.Reason that means "resting because
+// the backend is absent", as opposed to failed or stopped. Monitors
+// match on it through IsUnavailableReason, never on capability text.
+const unavailablePrefix = "unavailable: "
+
+// UnavailableReason normalizes a capability's unavailable text into
+// the Reason form IsUnavailableReason recognizes.
+func UnavailableReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || strings.HasPrefix(reason, unavailablePrefix) {
+		return reason
+	}
+	return unavailablePrefix + reason
+}
+
+// IsUnavailableReason reports whether a Status.Reason marks the
+// resting-unavailable state.
+func IsUnavailableReason(reason string) bool {
+	return strings.HasPrefix(reason, unavailablePrefix)
+}
+
+// capabilityUnavailable is the normalized unavailable reason for c,
+// "" when c does not report unavailability or its backend is present.
+func capabilityUnavailable(c Capability) string {
+	u, ok := c.(UnavailableReporter)
+	if !ok {
+		return ""
+	}
+	return UnavailableReason(u.Unavailable())
 }
 
 // Config is the declaration as an internal capability sees it.
@@ -122,6 +169,26 @@ func (p *Internal) transition(unit string, to State, reason string, rt Runtime) 
 	}
 }
 
+// restUnavailable parks unit Inactive with an unavailable reason. A
+// unit already resting just takes the freshest reason — no
+// transitions, so a re-probe on every owner sync emits nothing until
+// the backend appears or goes away.
+func (p *Internal) restUnavailable(unit, reason string, rt Runtime) {
+	p.mu.Lock()
+	u, ok := p.units[unit]
+	if ok && u.status.State == Inactive {
+		if u.status.Reason != reason {
+			u.status.Reason, u.status.Since = reason, p.now()
+		}
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+	if ok {
+		p.transition(unit, Inactive, reason, rt)
+	}
+}
+
 // Activate implements Provider.
 func (p *Internal) Activate(ctx context.Context, unit fleet.Service, rt Runtime) error {
 	c, err := p.capability(unit)
@@ -129,11 +196,13 @@ func (p *Internal) Activate(ctx context.Context, unit fleet.Service, rt Runtime)
 		return err
 	}
 	p.mu.Lock()
+	wasInactive := true
 	if existing, ok := p.units[unit.Name]; ok {
 		if existing.status.State != Inactive && existing.capID != unit.Capability {
 			p.mu.Unlock()
 			return ErrRestartRequired
 		}
+		wasInactive = existing.status.State == Inactive
 		existing.capID, existing.settled = unit.Capability, false
 		existing.status.Enabled = unit.Enabled
 	} else {
@@ -141,10 +210,21 @@ func (p *Internal) Activate(ctx context.Context, unit fleet.Service, rt Runtime)
 			status: Status{Unit: unit.Name, Provider: p.Name(), Enabled: unit.Enabled, State: Inactive}}
 	}
 	p.mu.Unlock()
-	p.transition(unit.Name, Starting, "", rt)
+	// A unit resting Inactive re-probes quietly: no Starting churn
+	// unless this Activate actually brings it up.
+	if !wasInactive {
+		p.transition(unit.Name, Starting, "", rt)
+	}
 	if err := c.Activate(ctx, ConfigOf(unit, rt)); err != nil {
 		p.transition(unit.Name, Failed, err.Error(), rt)
 		return err
+	}
+	if reason := capabilityUnavailable(c); reason != "" {
+		p.restUnavailable(unit.Name, reason, rt)
+		return nil
+	}
+	if wasInactive {
+		p.transition(unit.Name, Starting, "", rt)
 	}
 	p.transition(unit.Name, Active, "", rt)
 	return nil
@@ -164,7 +244,26 @@ func (p *Internal) Configure(ctx context.Context, unit fleet.Service, rt Runtime
 	if err != nil {
 		return err
 	}
-	return c.Configure(ctx, ConfigOf(unit, rt))
+	if err := c.Configure(ctx, ConfigOf(unit, rt)); err != nil {
+		return err
+	}
+	// A live reconfigure can lose (or regain) the backend the same way
+	// Activate can; keep the resting state truthful in both directions.
+	if reason := capabilityUnavailable(c); reason != "" {
+		p.restUnavailable(unit.Name, reason, rt)
+		return nil
+	}
+	p.mu.Lock()
+	resting := false
+	if u, ok := p.units[unit.Name]; ok {
+		resting = u.status.State == Inactive && IsUnavailableReason(u.status.Reason)
+	}
+	p.mu.Unlock()
+	if resting {
+		p.transition(unit.Name, Starting, "", rt)
+		p.transition(unit.Name, Active, "", rt)
+	}
+	return nil
 }
 
 // Deactivate implements Provider.
@@ -244,7 +343,16 @@ func (p *Internal) Health(ctx context.Context, unit string) error {
 	if !ok {
 		return fmt.Errorf("service: %s: capability %q gone", unit, capID)
 	}
-	return c.Health(ctx)
+	if err := c.Health(ctx); err != nil {
+		return err
+	}
+	// The capability's own check may re-probe and recover; whatever it
+	// still reports unavailable afterwards is the health verdict, so
+	// health never says ok over an absent backend.
+	if reason := capabilityUnavailable(c); reason != "" {
+		return errors.New(reason)
+	}
+	return nil
 }
 
 // Status implements Provider. PID is always 0: an internal unit has none.

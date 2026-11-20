@@ -95,6 +95,80 @@ func TestInternalProviderLifecycleHasNoPID(t *testing.T) {
 	}
 }
 
+type idleFakeCap struct {
+	fakeCap
+	unavailable string
+}
+
+func (f *idleFakeCap) Unavailable() string { return f.unavailable }
+
+// Story 9deb591a: a capability whose backend is absent on a healthy
+// host (no podman socket) activates "successfully" while serving
+// nothing. The provider must rest it Inactive with the unavailable
+// reason — never Active — and recover on a later Activate once the
+// backend appears, without event churn while it stays absent.
+func TestInternalProviderUnavailableCapabilityRestsInactive(t *testing.T) {
+	reg := NewRegistry()
+	c := &idleFakeCap{unavailable: "podman: unavailable: no podman socket detected (tried /run/podman.sock)"}
+	if err := reg.Register("meet.events", c); err != nil {
+		t.Fatal(err)
+	}
+	p := NewInternal("meet", reg)
+	var events []Event
+	rt := Runtime{Emit: func(e Event) { events = append(events, e) }}
+	ctx := context.Background()
+
+	if err := p.Activate(ctx, eventsUnit(), rt); err != nil {
+		t.Fatalf("absent backend must not fail activation: %v", err)
+	}
+	st := p.Status("events")
+	if st.State != Inactive || st.State.Exposed() {
+		t.Fatalf("status = %+v, want resting Inactive", st)
+	}
+	if !IsUnavailableReason(st.Reason) || !strings.Contains(st.Reason, "no podman socket detected") {
+		t.Fatalf("reason = %q, want the unavailable reason naming what was probed", st.Reason)
+	}
+	if len(events) != 0 {
+		t.Fatalf("resting unavailable must not emit transitions, got %+v", events)
+	}
+	if err := p.Health(ctx, "events"); err == nil || !strings.Contains(err.Error(), "no podman socket detected") {
+		t.Fatalf("health while unavailable = %v, want the reason as the verdict", err)
+	}
+
+	// Re-probing while still absent updates the reason, still no churn.
+	c.unavailable = "podman: unavailable: no podman socket detected (tried /run/other.sock)"
+	if err := p.Activate(ctx, eventsUnit(), rt); err != nil {
+		t.Fatal(err)
+	}
+	if st := p.Status("events"); st.State != Inactive || !strings.Contains(st.Reason, "/run/other.sock") || len(events) != 0 {
+		t.Fatalf("re-probe: status=%+v events=%+v", st, events)
+	}
+
+	// The backend appears: the next Activate goes Active.
+	c.unavailable = ""
+	if err := p.Activate(ctx, eventsUnit(), rt); err != nil {
+		t.Fatal(err)
+	}
+	if st := p.Status("events"); st.State != Active || st.Reason != "" {
+		t.Fatalf("after backend appeared: %+v", st)
+	}
+	if len(events) != 2 || events[0].To != Starting || events[1].To != Active {
+		t.Fatalf("recovery events = %+v", events)
+	}
+	if err := p.Health(ctx, "events"); err != nil {
+		t.Fatalf("health after recovery: %v", err)
+	}
+
+	// A Configure that loses the backend rests the unit again.
+	c.unavailable = "podman: unavailable: socket gone"
+	if err := p.Configure(ctx, eventsUnit(), rt); err != nil {
+		t.Fatal(err)
+	}
+	if st := p.Status("events"); st.State != Inactive || !IsUnavailableReason(st.Reason) {
+		t.Fatalf("after configure lost backend: %+v", st)
+	}
+}
+
 func TestInternalProviderRefusesForeignOwnerAndReportsFailure(t *testing.T) {
 	reg := NewRegistry()
 	c := &fakeCap{failing: errors.New("listener busy")}
