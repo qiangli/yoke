@@ -29,7 +29,8 @@ type Row struct {
 	Metric, Score            string
 	Harness, SourceType      string
 	SourceURL, Date          string
-	Line                     int // 1-based line in the input file
+	Line                     int    // 1-based line in the input file
+	Inherited                string // predecessor the row was inherited from (ApplyLineage)
 }
 
 // ReadMatrix parses the tab-separated matrix. The first line is the header.

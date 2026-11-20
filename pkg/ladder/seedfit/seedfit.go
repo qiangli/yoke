@@ -71,8 +71,9 @@ const (
 	ReferenceSource  = "official-board"
 )
 
-// CapabilityAreas is the set of matrix capability_area values the fit keeps.
-// The matrix has twelve areas; θ is a coding ability, so only the two whose
+// CapabilityAreas is the default set of matrix capability_area values the fit
+// keeps when no --config selects areas (see Config). By default θ is a coding
+// ability, so only the two whose
 // benchmarks score coding or agentic tool use are kept:
 //
 //	coding-debug-test   kept  (SWE-bench family, Terminal-Bench, DeepSWE, …)
@@ -190,6 +191,9 @@ func ParseScore(metric, score string) (float64, string) {
 		return 0, SkipMissing
 	}
 	m := strings.ToLower(metric)
+	if v, reason, ok := parseDeclaredScale(m, s); ok {
+		return v, reason
+	}
 	switch {
 	case ratingWords.MatchString(m):
 		return 0, SkipRatingScale
@@ -311,12 +315,17 @@ type Obs struct {
 type Prepared struct {
 	Obs   []Obs
 	Skips map[string]int
+	Areas []string // the capability areas kept
 }
 
-// Prepare filters and normalises matrix rows into observations.
-func Prepare(rows []Row) Prepared {
+// Prepare filters and normalises matrix rows into observations, keeping the
+// default CapabilityAreas.
+func Prepare(rows []Row) Prepared { return PrepareAreas(rows, CapabilityAreas) }
+
+// PrepareAreas is Prepare keeping the named capability areas.
+func PrepareAreas(rows []Row, keep []string) Prepared {
 	areas := map[string]bool{}
-	for _, a := range CapabilityAreas {
+	for _, a := range keep {
 		areas[a] = true
 	}
 	clis, vendors := map[string]bool{}, map[string]bool{}
@@ -328,7 +337,7 @@ func Prepare(rows []Row) Prepared {
 			vendors[v] = true
 		}
 	}
-	p := Prepared{Skips: map[string]int{}}
+	p := Prepared{Skips: map[string]int{}, Areas: keep}
 	var obs []Obs
 	for _, r := range rows {
 		if !areas[r.Area] {
@@ -422,6 +431,7 @@ type Result struct {
 	Offsets      []OffsetEstimate
 	Harness      []HarnessMapping
 	Skips        map[string]int
+	Areas        []string // capability areas kept; nil means CapabilityAreas
 	Order        []Adjustment
 	OrderGiven   bool
 	NObs         int
@@ -578,6 +588,14 @@ func (r *Result) AssignBands(anchors, flagships []string, l3Gap, l2Gap float64) 
 		}
 	}
 	return nil
+}
+
+// areas returns the capability areas the fit kept.
+func (r *Result) areas() []string {
+	if r.Areas == nil {
+		return CapabilityAreas
+	}
+	return r.Areas
 }
 
 // CodeRating maps θ to the seed Glicko code rating.
@@ -925,7 +943,7 @@ func Fit(prep Prepared) (*Result, error) {
 	se := p.standardisedSE(x, w, mu, sd)
 
 	res := &Result{
-		Skips: prep.Skips, NObs: len(p.obs), Params: p.P,
+		Skips: prep.Skips, Areas: prep.Areas, NObs: len(p.obs), Params: p.P,
 		Phi: phi, Iterations: iters, Converged: conv,
 		Contributing: map[string]map[string]bool{},
 	}
@@ -1258,7 +1276,7 @@ func (r *Result) WriteMarkdown(w io.Writer, l2, l3 *float64) {
 		fmtF(PriorSDTheta, 1), fmtF(PriorSDLogA, 1), fmtF(PriorSDDifficulty, 1), fmtF(PriorSDOffset, 1))
 	pf("| score clamp | [%s, %s]; %% scores divided by 100 |\n", fmtF(ScoreClampLo, 3), fmtF(ScoreClampHi, 3))
 	pf("| identifiability | θ standardised to mean 0, sd 1 over models; reference levels fixed at 0: harness `%s`, source `%s` |\n", ReferenceHarness, ReferenceSource)
-	pf("| capability areas kept | %s |\n", strings.Join(CapabilityAreas, ", "))
+	pf("| capability areas kept | %s |\n", strings.Join(r.areas(), ", "))
 	pf("| min models per item | %d |\n", MinModelsPerItem)
 	pf("| placement lines (θ) | L2 %s, L3 %s; public data seats L1–L3 only |\n", lineText(l2), lineText(l3))
 	pf("| observations / models / items / params | %d / %d / %d / %d |\n", r.NObs, len(r.Models), len(r.Items), r.Params)
@@ -1322,7 +1340,7 @@ func (r *Result) WriteTSV(w io.Writer, l2, l3 *float64) {
 	pf("# rating = %s + %s*theta; rd = %s*se clamped [%s,%s]; interval 90%% = theta ± %s*se\n",
 		fmtF(CodeRatingBase, 0), fmtF(CodeRatingPerTheta, 0), fmtF(CodeRatingPerTheta, 0), fmtF(RDMin, 0), fmtF(RDMax, 0), fmtF(Z90, 3))
 	pf("# areas: %s; lines: l2=%s l3=%s; obs=%d items=%d phi=%s converged=%v\n",
-		strings.Join(CapabilityAreas, ","), lineText(l2), lineText(l3), r.NObs, len(r.Items), fmtF(r.Phi, 5), r.Converged)
+		strings.Join(r.areas(), ","), lineText(l2), lineText(l3), r.NObs, len(r.Items), fmtF(r.Phi, 5), r.Converged)
 	var sk []string
 	for _, k := range sortedSkips(r.Skips) {
 		sk = append(sk, fmt.Sprintf("%s=%d", k, r.Skips[k]))
@@ -1449,6 +1467,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	flagships := fs.String("flagships", "", "comma-separated current frontier flagship models")
 	l3Gap := fs.Float64("l3-gap", 1, "θ gap from L4 to L3")
 	l2Gap := fs.Float64("l2-gap", 1, "θ gap from L3 to L2")
+	perArea := fs.Bool("per-area", false, "fit each config area separately and print the manager profile (requires --config)")
+	lineagePath := fs.String("lineage", "", "lineage file vendor<TAB>line<TAB>old>...>new: a model inherits rows its newest predecessor has and it lacks")
+	configPath := fs.String("config", "", "YAML config selecting capability areas (schema "+ConfigSchema+"); default: "+strings.Join(CapabilityAreas, ","))
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -1490,11 +1511,54 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
 		return 1
 	}
+	if *perArea && *configPath == "" {
+		fmt.Fprintln(stderr, "yoke-seedfit: --per-area requires --config")
+		return 2
+	}
+	keep := CapabilityAreas
+	var cfg *Config
+	if *configPath != "" {
+		var err error
+		cfg, err = LoadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 2
+		}
+		if err := cfg.CheckRows(rows); err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 2
+		}
+		keep = cfg.AreaNames()
+	}
 	var resolutionLog []Resolution
 	if *bands || *reconcile {
 		rows, resolutionLog = Reconcile(rows)
 	}
-	res, err := Fit(Prepare(rows))
+	var inherited []Inheritance
+	if *lineagePath != "" {
+		lf, err := os.Open(*lineagePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 1
+		}
+		chains, err := ReadLineage(lf)
+		lf.Close()
+		if err != nil {
+			fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
+			return 2
+		}
+		rows, inherited = ApplyLineage(rows, chains)
+	}
+	if *perArea {
+		prof := BuildProfile(FitPerArea(rows, cfg), cfg, inherited)
+		if *format == "tsv" {
+			prof.WriteProfileTSV(stdout)
+		} else {
+			prof.WriteProfileMarkdown(stdout)
+		}
+		return 0
+	}
+	res, err := Fit(PrepareAreas(rows, keep))
 	if err != nil {
 		fmt.Fprintf(stderr, "yoke-seedfit: %v\n", err)
 		return 1
