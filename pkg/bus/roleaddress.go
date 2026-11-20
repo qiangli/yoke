@@ -32,6 +32,7 @@ package bus
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -48,6 +49,9 @@ type HostRole struct {
 	// HolderInstance is the current holder UUID, captured by the seat owner.
 	// Holder remains available for legacy registered-name readers.
 	HolderInstance string
+	// Warning is an optional caveat surfaced on send receipts, e.g. a stale
+	// heartbeat on an active doing sprint.
+	Warning string
 }
 
 // HostRoles lists the addressable roles on this host, injected by whoever owns
@@ -216,11 +220,50 @@ func roleReaderAllowed(topic, reader string) bool {
 	return RoleReaderAuthorizer != nil && RoleReaderAuthorizer(topic, reader)
 }
 
+// SenderSeats lists the sorted, deduplicated role labels (e.g. "conductor:576")
+// currently held on this host by from (matching HolderInstance or Holder).
+func SenderSeats(from string) []string {
+	from = strings.TrimSpace(from)
+	if from == "" || HostRoles == nil {
+		return nil
+	}
+	fromID, isInst := ExplicitInstanceID(from)
+	seen := make(map[string]bool)
+	var out []string
+	for _, role := range HostRoles() {
+		label := strings.TrimSpace(role.Label)
+		if label == "" {
+			continue
+		}
+		matched := false
+		if isInst {
+			if hi, ok := ExplicitInstanceID(role.HolderInstance); ok && strings.EqualFold(hi, fromID) {
+				matched = true
+			} else if h, ok := ExplicitInstanceID(role.Holder); ok && strings.EqualFold(h, fromID) {
+				matched = true
+			}
+		} else if strings.EqualFold(strings.TrimSpace(role.Holder), from) {
+			matched = true
+		}
+		if matched && !seen[label] {
+			seen[label] = true
+			out = append(out, label)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
 // resolveRoleRecipient resolves a role label to its durable address.
 //
 // The ADDRESS is stored, never the holder: a vacant seat is still a valid
 // address that retains pending mail for the next holder, and the only honest
-// thing to add is a warning that nobody holds it right now.
+// thing to add is a warning that nobody holds it right now. When a holder is
+// present, RoleHolder / RoleHolderInstance let deliverDirect steer and verify
+// the live seat holder while Post.To keeps the seat's durable topic.
 func resolveRoleRecipient(label string) (Recipient, bool) {
 	label = strings.TrimSpace(label)
 	if label == "" || HostRoles == nil {
@@ -234,8 +277,15 @@ func resolveRoleRecipient(label string) (Recipient, bool) {
 		if addr == "" {
 			addr = role.Label
 		}
-		r := Recipient{Addr: addr, Kind: TargetRole, Label: role.Label}
-		if strings.TrimSpace(role.Holder) == "" {
+		r := Recipient{
+			Addr:               addr,
+			Kind:               TargetRole,
+			Label:              role.Label,
+			RoleHolder:         strings.TrimSpace(role.Holder),
+			RoleHolderInstance: strings.TrimSpace(role.HolderInstance),
+			Warning:            strings.TrimSpace(role.Warning),
+		}
+		if r.RoleHolder == "" && r.RoleHolderInstance == "" {
 			r.Warning = "seat " + r.Label + " is vacant — mail stays pending for its next holder; nobody has read it"
 		}
 		return r, true

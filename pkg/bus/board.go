@@ -82,6 +82,13 @@ type Post struct {
 	// directed at one agent — see Audience. It is a hint about who should act,
 	// never a permission: every reader can see every post.
 	To string `json:"to,omitempty"`
+	// Seat names the role seat label (e.g. "conductor:678") when To stores a
+	// role topic ("conductor.678").
+	Seat string `json:"seat,omitempty"`
+	// FromSeats snapshots the role seat labels held by the sender at send time
+	// (e.g. ["conductor:576", "conductor:678"]) so recipients can identify and
+	// reply to the sender's seat when several sessions share its agent name.
+	FromSeats []string `json:"from_seats,omitempty"`
 	// Audience is a GROUP the post is for, stored as the SELECTOR rather than
 	// expanded into one post per member.
 	//

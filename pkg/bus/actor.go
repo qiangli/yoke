@@ -20,6 +20,13 @@ const identityRefusalTopic = "identity.refusal"
 // The value is hashed before comparison and is never persisted or rendered.
 var CurrentSessionClaim func(agentName string) string
 
+// FleetAgentLookup resolves a registered fleet agent's Tool/Model binding so
+// unclaimed-seat admission can verify that an ancestor session card matches
+// both tool AND model (never tool alone).
+var FleetAgentLookup = func(name string) (fleet.Agent, bool) {
+	return fleet.New().Agent(name)
+}
+
 // HashSessionClaim returns the one-way representation stored in a room card.
 // Hosts use this helper when registering a watcher or interactive session.
 func HashSessionClaim(raw string) string {
@@ -225,29 +232,136 @@ func resolveRegisteredActorClaim(actor, claimant string) (string, error) {
 		}
 	}
 	if !live {
-		// Nobody holds the seat. A process that DECLARES this identity the
-		// way the session roster already trusts it (BASHY_AGENT and its
-		// aliases) takes the seat now — the same first-come rule an inbox
-		// watcher's claim follows — instead of being told to go start a
-		// watcher first. A bare codex/claude in a checkout could otherwise
-		// join a repo session as <name>@<host>, receive mail, and still be
-		// refused when it answered. The guard is unchanged for a HELD seat:
-		// a live claim by another session still wins below.
+		// Nobody holds the seat. Admit taking it on first authored message when:
+		//  (a) the process explicitly declared this identity via BASHY_AGENT
+		//      (or its weave aliases), OR
+		//  (b) an ancestor live room card was launched as this exact registered
+		//      agent OR runs the exact matching tool AND model (never tool
+		//      alone: several muse-* / claude-* seats share one tool, and an
+		//      unknown or mismatched model on the card must be refused).
 		if declared, ok := declaredAgentIdentity(); ok && strings.EqualFold(declared, canonical) {
 			if err := takeAuthoredSeat(canonical, claimant); err != nil {
 				return "", fmt.Errorf("authored communication: take seat %q: %w", canonical, err)
 			}
 			return canonical, nil
 		}
-		reason := fmt.Sprintf("%s has no matching live session claim for %q, and nobody holds that seat — export BASHY_AGENT=%s in the agent's environment (the seat is then taken on its first message), or keep `bashy inbox --as %s --watch` running in that session",
-			claimant, canonical, canonical, canonical)
+		matched, mismatchReason := sessionMatchesUnclaimedAgent(canonical, claimant)
+		if matched {
+			if err := takeAuthoredSeat(canonical, claimant); err != nil {
+				return "", fmt.Errorf("authored communication: take seat %q: %w", canonical, err)
+			}
+			return canonical, nil
+		}
+		if mismatchReason != "" {
+			return "", authoredActorRefusal(canonical, claimant, mismatchReason)
+		}
+		reason := fmt.Sprintf("%s has no matching live session claim for %q, and nobody holds that seat — export BASHY_AGENT=%s in the agent's environment (the seat is then taken on its first message), open a dedicated instance with `bashy instance open %s`, or keep `bashy inbox --as %s --watch` running in that session",
+			claimant, canonical, canonical, canonical, canonical)
 		return "", authoredActorRefusal(canonical, claimant, reason)
 	}
 	if anchor <= 0 || !processHasAncestor(anchor) {
-		reason := fmt.Sprintf("%s has no matching live session claim for %q", claimant, canonical)
+		mode := strings.TrimSpace(card.Mode)
+		if mode == "" {
+			mode = "session"
+		}
+		reason := fmt.Sprintf("%s has no matching live session claim for %q (seat held by live %s pid %d in %s) — open a separate instance with `bashy instance open %s` or address by instance UUID",
+			claimant, canonical, mode, anchor, orUnreported(card.Cwd), canonical)
 		return "", authoredActorRefusal(canonical, claimant, reason)
 	}
 	return canonical, nil
+}
+
+// sessionMatchesUnclaimedAgent checks whether an ancestor live room card proves
+// this process belongs to canonical: either because the card was launched as
+// canonical itself, or because it is a tool session card whose recorded Tool
+// AND Model both match canonical's catalog binding. Tool-only or model-unknown
+// cards are explicitly refused so one tool session can never post as a
+// different model sharing the same harness.
+func sessionMatchesUnclaimedAgent(canonical, claimant string) (bool, string) {
+	members, err := room.Members()
+	if err != nil || len(members) == 0 {
+		return false, ""
+	}
+	claimID := room.AgentClaimID(canonical)
+	ag, hasAgent := FleetAgentLookup(canonical)
+	agTool := strings.TrimSpace(ag.Tool)
+	agModel := strings.TrimSpace(ag.Model)
+
+	var mismatchedModel, mismatchedAgent string
+	unknownModel := false
+
+	for _, c := range members {
+		if strings.EqualFold(strings.TrimSpace(c.Mode), "shell") {
+			continue
+		}
+		anchor := c.OwnerPID
+		if anchor <= 0 {
+			anchor = c.PID
+		}
+		if anchor <= 0 || !processHasAncestor(anchor) {
+			continue
+		}
+		cid := strings.TrimSpace(c.ID)
+		nick := strings.TrimSpace(c.Nick)
+		if strings.EqualFold(cid, claimID) || strings.EqualFold(cid, canonical) || strings.EqualFold(nick, canonical) {
+			return true, ""
+		}
+		if !hasAgent || agTool == "" {
+			continue
+		}
+		cardTool := strings.TrimSpace(c.Tool)
+		cardModel := strings.TrimSpace(c.Model)
+		if b := strings.TrimSpace(c.Binding); b != "" {
+			if bt, bm, ok := strings.Cut(b, ":"); ok {
+				if cardTool == "" {
+					cardTool = strings.TrimSpace(bt)
+				}
+				if cardModel == "" {
+					cardModel = strings.TrimSpace(bm)
+				}
+			}
+		}
+		if !strings.EqualFold(cardTool, agTool) {
+			continue
+		}
+		// A card launched for a DIFFERENT registered agent may not auto-take canonical,
+		// even when both clones share one tool:model binding.
+		for _, candidate := range []string{nick, cid} {
+			if candidate == "" || strings.EqualFold(candidate, agTool) {
+				continue
+			}
+			if other, isReg := resolveAgentName(candidate); isReg && !strings.EqualFold(other, canonical) {
+				mismatchedAgent = other
+				cardTool = ""
+				break
+			}
+		}
+		if cardTool == "" {
+			continue
+		}
+		if cardModel == "" || agModel == "" {
+			unknownModel = true
+			continue
+		}
+		if strings.EqualFold(cardModel, agModel) {
+			return true, ""
+		}
+		mismatchedModel = cardModel
+	}
+
+	switch {
+	case mismatchedModel != "":
+		return false, fmt.Sprintf("%s has no matching live session claim for %q: live %s session runs model %q, not %q — use the matching agent seat, export BASHY_AGENT=%s in its own session, or run `bashy instance open %s`",
+			claimant, canonical, agTool, mismatchedModel, agModel, canonical, canonical)
+	case mismatchedAgent != "":
+		return false, fmt.Sprintf("%s has no matching live session claim for %q: live session is bound to %q — export BASHY_AGENT=%s in its own session or run `bashy instance open %s`",
+			claimant, canonical, mismatchedAgent, canonical, canonical)
+	case unknownModel:
+		return false, fmt.Sprintf("%s has no matching live session claim for %q: live %s session card has no recorded model — refusing to guess among %s seats; export BASHY_AGENT=%s or run `bashy instance open %s`",
+			claimant, canonical, agTool, agTool, canonical, canonical)
+	default:
+		return false, ""
+	}
 }
 
 // declaredAgentIdentity is the process-local identity a bare tool declares

@@ -283,7 +283,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 						to += " [" + strings.Join(v, ", ") + "]"
 					}
 				}
-				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s` → %s\n  %s\n", p.Seq, p.Topic, p.From, to, p.Body)
+				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s`%s → %s\n  %s\n", p.Seq, p.Topic, p.From, formatFromSeats(p.FromSeats), to, p.Body)
 				if line := refsLine(MessageLocators(p.Body, p.From)); line != "" {
 					fmt.Fprintf(w, "  %s\n", line)
 				}
@@ -310,6 +310,13 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 // runBoardRead is the front door's read: the same board, same cursor.
 func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) error {
 	return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, history: all})
+}
+
+func formatFromSeats(seats []string) string {
+	if len(seats) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(seats, ", ") + "]"
 }
 
 // newMBSendCmd posts to one agent, or to everyone a selector matches.
@@ -356,7 +363,10 @@ func newMBShowCmd() *cobra.Command {
 				enc.SetIndent("", "  ")
 				return enc.Encode(out)
 			}
-			fmt.Fprintf(w, "mb:%d  %s from %s -> %s\n", p.Seq, p.Topic, p.From, p.Audiences())
+			fmt.Fprintf(w, "mb:%d  %s from %s%s -> %s\n", p.Seq, p.Topic, p.From, formatFromSeats(p.FromSeats), p.Audiences())
+			if p.Seat != "" {
+				fmt.Fprintf(w, "seat   %s\n", p.Seat)
+			}
 			if p.At != "" {
 				fmt.Fprintf(w, "at     %s\n", p.At)
 			}

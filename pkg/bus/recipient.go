@@ -71,6 +71,11 @@ type Recipient struct {
 	Label string
 	// Party snapshots an instance recipient; nil for every other kind.
 	Party *Party
+	// RoleHolder and RoleHolderInstance name the current occupant of a
+	// TargetRole seat at send time so deliverDirect steers and checks its
+	// cursor while Addr keeps the durable seat topic.
+	RoleHolder         string
+	RoleHolderInstance string
 	// Warning is a caveat known at resolve time, e.g. a vacant seat.
 	Warning string
 }
@@ -291,19 +296,84 @@ func resolveInstanceName(name string, all []fleet.Instance) (fleet.Instance, boo
 }
 
 func listInstances(is []fleet.Instance) string {
+	byInst := map[string][]string{}
+	if HostRoles != nil {
+		for _, r := range HostRoles() {
+			label := strings.TrimSpace(r.Label)
+			if label == "" {
+				continue
+			}
+			for _, raw := range []string{r.HolderInstance, r.Holder} {
+				if id, ok := ExplicitInstanceID(raw); ok {
+					key := strings.ToLower(id)
+					if !containsFold(byInst[key], label) {
+						byInst[key] = append(byInst[key], label)
+					}
+				}
+			}
+		}
+	}
 	var b strings.Builder
 	for _, i := range is {
-		fmt.Fprintf(&b, "\n    %s  %s  (%s)", i.UUID, instanceLabel(i), i.Family)
+		seats := byInst[strings.ToLower(i.UUID)]
+		sort.Strings(seats)
+		suffix := ""
+		if len(seats) > 0 {
+			suffix = "  [seat: " + strings.Join(seats, ", ") + "]"
+		}
+		fmt.Fprintf(&b, "\n    %s  %s  (%s)%s", i.UUID, instanceLabel(i), i.Family, suffix)
 	}
 	return b.String()
 }
 
+func containsFold(ss []string, want string) bool {
+	for _, s := range ss {
+		if strings.EqualFold(s, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func heldSeatsForAmbiguousTarget(name string, is []fleet.Instance) []string {
+	if HostRoles == nil {
+		return nil
+	}
+	candidates := []string{strings.TrimSpace(name)}
+	if canon := strings.TrimSpace(resolveBoardName(name)); canon != "" && !containsFold(candidates, canon) {
+		candidates = append(candidates, canon)
+	}
+	for _, i := range is {
+		if f := strings.TrimSpace(i.Family); f != "" && !containsFold(candidates, f) {
+			candidates = append(candidates, f)
+		}
+		if i.UUID != "" && !containsFold(candidates, i.UUID) {
+			candidates = append(candidates, i.UUID)
+		}
+	}
+	var seats []string
+	for _, c := range candidates {
+		for _, s := range SenderSeats(c) {
+			if !containsFold(seats, s) {
+				seats = append(seats, s)
+			}
+		}
+	}
+	sort.Strings(seats)
+	return seats
+}
+
 func ambiguousError(name string, is []fleet.Instance) error {
+	seatHint := ""
+	if seats := heldSeatsForAmbiguousTarget(name, is); len(seats) > 0 {
+		seatHint = fmt.Sprintf("\n  or address a role seat it holds: bashy mb send %s \"...\" (held seats: %s)",
+			seats[0], strings.Join(seats, ", "))
+	}
 	return &RecipientError{Reason: ReasonAmbiguous, Target: name, msg: fmt.Sprintf(
 		"failed: %q matches %d live instances — a family or shared name is not a personal mailbox, and no instance was guessed; nothing was posted%s\n"+
-			"  address one by label or UUID: bashy mb send <uuid> \"...\"\n"+
+			"  address one by label or UUID: bashy mb send <uuid> \"...\"%s\n"+
 			"  or reach the whole family as a selector: bashy mb send --family <name> \"...\"",
-		strings.TrimSpace(name), len(is), listInstances(is))}
+		strings.TrimSpace(name), len(is), listInstances(is), seatHint)}
 }
 
 func retiredError(typed string, gone fleet.Instance, all []fleet.Instance) error {
