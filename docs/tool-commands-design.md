@@ -30,11 +30,13 @@ Session and agent features (Sprint #324):
 
 | Name | Feature |
 |---|---|
+| `clear` | clear the session and start a fresh conversation |
 | `compact` | compact the session context |
 | `deep-research` | multi-step researched report |
 | `exit` | end the session |
 | `init` | write the tool's project instruction file |
 | `plan` | produce a plan without acting |
+| `rename` | rename the current session |
 | `resume` | resume a prior session |
 | `review` | review a change |
 | `security-review` | security review of a change |

@@ -85,6 +85,7 @@ type Session struct {
 	// on Say is ANOTHER billable turn against the same model, and the gate needs
 	// the model name and lane to judge it.
 	launch       Launch
+	catalog      *fleet.Catalog
 	allowPremium bool
 
 	mu         sync.Mutex
@@ -347,6 +348,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		ptyInbox:     newPTYInbox(name),
 		events:       tail,
 		launch:       l,
+		catalog:      catalog,
 		allowPremium: opt.AllowPremium,
 		done:         make(chan struct{}),
 		cancel:       cancel,
@@ -987,6 +989,28 @@ func (s *Session) Interrupt() error {
 	return agentpty.SendFrame(s.CtlSock, agentpty.VerbatimFrame([]byte{0x1b}))
 }
 
+func (s *Session) quitSlash() string {
+	toolName := strings.TrimSpace(s.launch.ToolName)
+	if toolName == "" {
+		head, _, _ := strings.Cut(strings.TrimSpace(s.Agent), ":")
+		toolName = strings.TrimSpace(head)
+	}
+	if toolName != "" {
+		cat := s.catalog
+		if cat == nil {
+			cat = newCatalog()
+		}
+		if tl, ok := cat.Tool(toolName); ok {
+			if cmd, ok := tl.Command("exit"); ok && cmd.Mode == fleet.ToolCommandTUI {
+				if slash := fleet.RenderSlash(cmd.Slash, ""); slash != "" {
+					return slash
+				}
+			}
+		}
+	}
+	return "/quit"
+}
+
 // Quit asks the agent to leave, rather than killing it.
 //
 // Asking is not the same as making it go: a tool that ignores the request is
@@ -995,14 +1019,14 @@ func (s *Session) Interrupt() error {
 // Quit is a control command, not a turn: it buys no model work, so it is never
 // gated. An exhausted budget must still be able to shut a session down.
 func (s *Session) Quit() error {
-	// "/quit" is a TUI slash command, and an ACP agent has no TUI: sending it
-	// would buy a turn in which the agent dutifully explains that it cannot quit.
-	// The protocol's own shutdown is closing the connection.
+	// "/quit" / "/exit" is a TUI slash command, and an ACP agent has no TUI:
+	// sending it would buy a turn in which the agent dutifully explains that it
+	// cannot quit. The protocol's own shutdown is closing the connection.
 	if s.acp != nil {
 		s.closeACP()
 		return nil
 	}
-	return s.say("/quit")
+	return s.say(s.quitSlash())
 }
 
 // Close ends the session now.

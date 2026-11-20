@@ -121,11 +121,11 @@ func HasCapability(c Card, capability string) bool {
 	return false
 }
 
-// Event is one timeline entry — a join/leave/steer/status/note the room records.
+// Event is one timeline entry — a join/leave/steer/command/status/note the room records.
 type Event struct {
 	Seq       int64  `json:"seq"`
 	TS        string `json:"ts"`
-	Type      string `json:"type"` // join | leave | steer | interrupt | status | note | notify | sprint | handoff | todo | approval | usage | inbound
+	Type      string `json:"type"` // join | leave | steer | command | interrupt | status | note | notify | sprint | handoff | todo | approval | usage | inbound
 	Actor     string `json:"actor,omitempty"`
 	Target    string `json:"target,omitempty"`
 	Body      string `json:"body,omitempty"`
@@ -187,6 +187,7 @@ const (
 	EventJoin      = "join"
 	EventLeave     = "leave"
 	EventSteer     = "steer"
+	EventCommand   = "command"
 	EventInterrupt = "interrupt"
 	EventGrant     = "grant"
 	EventStatus    = "status"

@@ -274,6 +274,33 @@ commands:
     output: turn
     effects: [read, net, remote]
     exec: claude -p --permission-mode dontAsk --allowedTools mcp__claude_ai_Google_Drive__search_files,mcp__claude_ai_Google_Drive__list_recent_files,mcp__claude_ai_Google_Drive__read_file_content,mcp__claude_ai_Google_Drive__download_file_content,mcp__claude_ai_Google_Drive__get_file_metadata,mcp__claude_ai_Google_Drive__get_file_permissions,mcp__claude_ai_Google_Drive__list_shared_drives,mcp__claude_ai_Google_Drive__get_shared_drive_metadata,mcp__claude_ai_Google_Drive__list_file_revisions --disallowedTools Bash,Edit,Write,NotebookEdit,mcp__claude_ai_Google_Drive__share_file,mcp__claude_ai_Google_Drive__create_file,mcp__claude_ai_Google_Drive__update_file,mcp__claude_ai_Google_Drive__copy_file,mcp__claude_ai_Google_Drive__trash_file,mcp__claude_ai_Gmail,mcp__claude_ai_Google_Calendar,mcp__claude_ai_Claude_Docs --output-format json --model {model} {args}
+  # MEASURED 2026-11-20 (claude 2.1.295, Sprint #681 L1): interactive slash
+  # menu / `/help` descriptions and argument hints read from the pinned 2.1.295
+  # binary's built-in slash command registry:
+  #   clear   -> /clear [name]   ("Clear conversation history and free up context"; aliases: reset, new)
+  #   compact -> /compact <optional custom summarization instructions> ("Clear conversation history but keep a summary in context...")
+  #   exit    -> /exit           ("Exit the REPL"; alias: quit)
+  #   rename  -> /rename [name]  ("Rename the current conversation"; alias: name)
+  #   resume  -> /resume [conversation id or search term] ("Resume a conversation"; alias: continue)
+  #   status  -> /status         ("Show Claude Code status including version, model, account, API connectivity, and tool statuses")
+  - name: clear
+    slash: /clear {args}
+    mode: tui
+  - name: compact
+    slash: /compact {args}
+    mode: tui
+  - name: exit
+    slash: /exit
+    mode: tui
+  - name: rename
+    slash: /rename {args}
+    mode: tui
+  - name: resume
+    slash: /resume {args}
+    mode: tui
+  - name: status
+    slash: /status
+    mode: tui
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

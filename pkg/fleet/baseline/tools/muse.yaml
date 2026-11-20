@@ -180,6 +180,32 @@ commands:
     capability: transcribe
     output: turn
     exec: muse voice transcribe {args}
+  # MEASURED 2026-11-20 (Muse Code 1.4.4-R5419.1, Sprint #681 L1): interactive
+  # TUI `/help` slash menu and help text read from the pinned 1.4.4-R5419.1 binary:
+  #   clear   -> /clear          ("Start a fresh session"; alias: /new)
+  #   compact -> /compact        ("Compact conversation history")
+  #   exit    -> /exit           ("Exit Muse"; alias: /quit)
+  #   rename  -> /name {args}    ("/name [<name>]" — show or set session name; alias: /rename)
+  #   resume  -> /resume {args}  ("/resume [--last|<id-or-name>]" — resume a previous session)
+  #   status  -> /status         ("Show model, workspace, session, and token usage")
+  - name: clear
+    slash: /clear
+    mode: tui
+  - name: compact
+    slash: /compact
+    mode: tui
+  - name: exit
+    slash: /exit
+    mode: tui
+  - name: rename
+    slash: /name {args}
+    mode: tui
+  - name: resume
+    slash: /resume {args}
+    mode: tui
+  - name: status
+    slash: /status
+    mode: tui
 # Where this tool reads skills, instructions and MCP servers (dhnt research
 # agentic-cli-integration-surfaces-2026-10): bashy skill export --tool reads it.
 integration:

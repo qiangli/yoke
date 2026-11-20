@@ -372,6 +372,41 @@ func TestRunTUIAgentAndModel(t *testing.T) {
 	}
 }
 
+func TestRunTUISeededSessionCommandsRenderAgainstFakeTUI(t *testing.T) {
+	cat := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithoutCloudOverlay())
+	cases := []struct {
+		tool, name, args, wantSay string
+	}{
+		{"claude", "clear", "", "say /clear"},
+		{"claude", "rename", "sprint-681", "say /rename sprint-681"},
+		{"agy", "compact", "keep auth notes", "say /compact keep auth notes"},
+		{"muse", "rename", "peer-seat", "say /name peer-seat"},
+		{"muse", "resume", "--last", "say /resume --last"},
+		{"codex", "status", "", "say /status"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool+":"+tc.name, func(t *testing.T) {
+			tl, ok := cat.Tool(tc.tool)
+			if !ok {
+				t.Fatalf("tool %q not in baseline", tc.tool)
+			}
+			cmd, ok := tl.Command(tc.name)
+			if !ok {
+				t.Fatalf("%s:%s not declared", tc.tool, tc.name)
+			}
+			f := &fakeTUI{turn: "ok"}
+			withFake(t, f)
+			res, err := Run(context.Background(), tl, cmd, tc.args, Options{Dir: t.TempDir(), Catalog: cat})
+			if err != nil || res.Outcome != OutcomeSuccess {
+				t.Fatalf("Run(%s:%s) = %+v, %v", tc.tool, tc.name, res, err)
+			}
+			if !slicesContain(f.log(), tc.wantSay) {
+				t.Fatalf("fakeTUI log = %q, want %q", f.log(), tc.wantSay)
+			}
+		})
+	}
+}
+
 func slicesContain(s []string, v string) bool { return indexOf(s, v) >= 0 }
 
 func indexOf(s []string, v string) int {

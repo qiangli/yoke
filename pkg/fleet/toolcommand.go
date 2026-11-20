@@ -34,6 +34,7 @@ import (
 // dotted name whose head is in this list is canonical.
 var CanonicalToolCommands = []string{
 	"animate",
+	"clear",
 	"compact",
 	"deep-research",
 	"draw",
@@ -46,6 +47,7 @@ var CanonicalToolCommands = []string{
 	"narrate",
 	"pdf",
 	"plan",
+	"rename",
 	"resume",
 	"review",
 	"search",
@@ -61,6 +63,19 @@ func IsCanonicalToolCommand(name string) bool {
 	return slices.Contains(CanonicalToolCommands, name)
 }
 
+// RenderSlash substitutes {args} in the slash line, or appends args after a
+// space when the line has no {args} token.
+func RenderSlash(slash, args string) string {
+	args = strings.TrimSpace(args)
+	if strings.Contains(slash, "{args}") {
+		return strings.TrimSpace(strings.ReplaceAll(slash, "{args}", args))
+	}
+	if args == "" {
+		return strings.TrimSpace(slash)
+	}
+	return strings.TrimSpace(slash) + " " + args
+}
+
 // Command returns the tool's declared command by canonical name.
 func (t Tool) Command(name string) (ToolCommand, bool) {
 	for _, c := range t.Commands {
@@ -69,6 +84,25 @@ func (t Tool) Command(name string) (ToolCommand, bool) {
 		}
 	}
 	return ToolCommand{}, false
+}
+
+// DeclaredCommandNames returns the canonical names of commands declared on t
+// (filtered to mode when non-empty), in declaration order without duplicates.
+func (t Tool) DeclaredCommandNames(mode string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range t.Commands {
+		name := strings.TrimSpace(c.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		if mode != "" && c.Mode != mode {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // ValidateCommands checks the commands block. errs are declarations a

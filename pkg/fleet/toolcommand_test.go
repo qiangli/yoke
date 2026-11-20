@@ -150,11 +150,15 @@ func TestToolCommandsUndeclaredNameWarnsNotRefuses(t *testing.T) {
 	}
 }
 
-// The Sprint #626 service names are canonical, so a seed registered under
-// one validates with no warning; mail stays the classic Unix verb.
+// The Sprint #626 service names and Sprint #681 live-session command names are
+// canonical, so a seed registered under one validates with no warning; mail
+// stays the classic Unix verb.
 func TestServiceToolCommandsAreCanonical(t *testing.T) {
-	services := []string{"search", "image", "draw", "pdf", "video", "film", "transcribe", "narrate", "song", "animate", "email", "drive"}
-	for _, n := range services {
+	canonical := []string{
+		"search", "image", "draw", "pdf", "video", "film", "transcribe", "narrate", "song", "animate", "email", "drive",
+		"clear", "compact", "exit", "rename", "resume", "status",
+	}
+	for _, n := range canonical {
 		if !IsCanonicalToolCommand(n) {
 			t.Errorf("%q must be canonical", n)
 		}
@@ -263,9 +267,9 @@ func TestToolSchemaListsCommandFields(t *testing.T) {
 	}
 }
 
-// The shipped baseline carries only MEASURED commands (Sprint #324 S6), and
-// every one must validate with no error and no warning: a seed that warns is
-// a seed nobody measured under its canonical name.
+// The shipped baseline carries only MEASURED commands (Sprint #324 S6, Sprint
+// #681 L1), and every one must validate with no error and no warning: a seed
+// that warns is a seed nobody measured under its canonical name.
 func TestBaselineToolCommandsValidate(t *testing.T) {
 	entries, err := baselineFS.ReadDir("baseline/tools")
 	if err != nil {
@@ -292,7 +296,12 @@ func TestBaselineToolCommandsValidate(t *testing.T) {
 			seeded[tool.Name] = append(seeded[tool.Name], c.Name+"/"+c.Mode)
 		}
 	}
-	want := map[string][]string{"agy": {"pdf/print", "plan/print", "video/print"}, "claude": {"draw/print", "pdf/print", "plan/print", "email.read/print", "drive.read/print"}, "codex": {"image/print", "review/print"}, "muse": {"plan/print", "transcribe/print"}}
+	want := map[string][]string{
+		"agy":    {"pdf/print", "plan/print", "video/print", "clear/tui", "compact/tui", "exit/tui", "rename/tui", "resume/tui"},
+		"claude": {"draw/print", "pdf/print", "plan/print", "email.read/print", "drive.read/print", "clear/tui", "compact/tui", "exit/tui", "rename/tui", "resume/tui", "status/tui"},
+		"codex":  {"image/print", "review/print", "clear/tui", "compact/tui", "exit/tui", "rename/tui", "resume/tui", "status/tui"},
+		"muse":   {"plan/print", "transcribe/print", "clear/tui", "compact/tui", "exit/tui", "rename/tui", "resume/tui", "status/tui"},
+	}
 	if len(seeded) != len(want) {
 		t.Errorf("seeded commands %v, want exactly %v (seed only what is measured)", seeded, want)
 	}
