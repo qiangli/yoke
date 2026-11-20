@@ -324,8 +324,8 @@ func TestWeavePullRefusesEmptyButMergesSubmittedKilledEvidence(t *testing.T) {
 	}
 
 	out, code := runWeave(t, "pull", "1")
-	if code != 0 {
-		t.Fatalf("pull empty exit=%d out=%s", code, out)
+	if code == 0 {
+		t.Fatalf("pull empty must exit non-zero, got exit=0 out=%s", out)
 	}
 	if !strings.Contains(out, "empty") || !strings.Contains(out, "0 commits ahead") {
 		t.Fatalf("pull empty output did not refuse with evidence:\n%s", out)
@@ -527,11 +527,11 @@ func TestWeaveKilledRunResumeClearsStaleEvidenceAndPullsFreshSubmission(t *testi
 	if err := saveWeaveQueue(dir, q); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := runWeave(t, "pull", "2"); code != 0 || !strings.Contains(out, "killed") || !strings.Contains(out, "agy") {
-		t.Fatalf("pull truly killed exit=%d out=%s", code, out)
+	if out, code := runWeave(t, "pull", "2"); code == 0 || !strings.Contains(out, "killed") || !strings.Contains(out, "agy") {
+		t.Fatalf("pull truly killed want non-zero refusal, got exit=%d out=%s", code, out)
 	}
-	if out, code := runWeave(t, "pull", "3"); code != 0 || !strings.Contains(out, "empty") || !strings.Contains(out, "0 commits ahead") {
-		t.Fatalf("pull zero-commit exit=%d out=%s", code, out)
+	if out, code := runWeave(t, "pull", "3"); code == 0 || !strings.Contains(out, "empty") || !strings.Contains(out, "0 commits ahead") {
+		t.Fatalf("pull zero-commit want non-zero refusal, got exit=%d out=%s", code, out)
 	}
 }
 

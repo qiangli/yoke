@@ -5669,11 +5669,15 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			//
 			// So: before skipping, ASK — through the same weaveUnmergedAhead that
 			// feeds the SALVAGEABLE line, never a second count that can drift from
-			// it. Zero commits ahead still skips silently; that run really is empty.
+			// it. When an explicit issue was named, even 0 commits ahead records
+			// the run's state so `weave pull <id>` never exits silently.
 			if it.State != "working" && it.State != "submitted" {
 				if ahead, _ := weaveUnmergedAhead(root, base, it); ahead > 0 {
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "not-pullable",
 						Detail: weaveNotPullableDetail(it, base, ahead)})
+				} else if issueSpecified {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "not-pullable",
+						Detail: fmt.Sprintf("run is %q with 0 unmerged commits — nothing to merge", it.State)})
 				}
 				continue
 			}
@@ -5885,7 +5889,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				continue
 			}
 			if it.IsolationViolated && force {
-				fmt.Fprintf(cmd.ErrOrStderr(), "weave: --force: merging isolation-violated run #%d anyway — %s\n",
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave: --force: overriding isolation guard for run #%d — %s\n",
 					it.ID, weaveIsolationDetail(it))
 			}
 			// The agent's branch lives in the workspace clone, not the
@@ -5919,7 +5923,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					continue
 				}
 				if conflict {
-					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: sgOutput})
+					detail := strings.TrimSpace(sgOutput)
+					if detail == "" {
+						detail = "merge conflict against base during suite gate"
+					}
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: detail})
 					continue
 				}
 				it.SuiteGateExit = &sgExit
@@ -5930,11 +5938,17 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					if reviewAgent != "" && it.ReviewAgent != "" {
 						it.State = "failed"
 					}
+					detail := strings.TrimSpace(sgOutput)
+					if detail == "" {
+						detail = fmt.Sprintf("suite gate exited %d", sgExit)
+					} else {
+						detail = fmt.Sprintf("suite gate exited %d: %s", sgExit, detail)
+					}
 					suiteResult := result{
 						Issue:           it.ID,
 						Branch:          it.Branch,
 						Status:          "suite-gate-failed",
-						Detail:          sgOutput,
+						Detail:          detail,
 						SuiteGateExit:   &sgExit,
 						SuiteGateOutput: sgOutput,
 					}
@@ -5960,12 +5974,20 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				if err := weaveValidatePullEvidence(root, dir, it.ID, gateHead, gateLive, gateItemFingerprint); err != nil {
 					return err
 				}
-				fetchSpec := fmt.Sprintf("%s:%s", it.Branch, it.Branch)
+				// Fetch into a forced private ref rather than <branch>:<branch> or
+				// repository-wide FETCH_HEAD: a rebased workspace branch is never
+				// rejected as non-fast-forward, and a concurrent manual `git fetch`
+				// in the live checkout cannot overwrite the ref before merge.
+				pullRef := fmt.Sprintf("refs/weave/pull/%d", it.ID)
+				defer func() {
+					_ = exec.Command(gitBin(), "-C", root, "update-ref", "-d", pullRef).Run()
+				}()
+				fetchSpec := fmt.Sprintf("+%s:%s", it.Branch, pullRef)
 				if _, err := gitOut(root, "fetch", "--no-tags", it.Workspace, fetchSpec); err != nil {
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("fetch from workspace: %v", err)})
 					return nil
 				}
-				cnt, err := gitOut(root, "rev-list", "--count", fmt.Sprintf("HEAD..%s", it.Branch))
+				cnt, err := gitOut(root, "rev-list", "--count", "HEAD.."+pullRef)
 				if err != nil {
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: err.Error()})
 					return nil
@@ -5977,16 +5999,20 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					return nil
 				}
 				mergeSubject := fmt.Sprintf("weave: merge run #%d — %s", it.ID, it.Title)
-				mergeMsg := weaveMergeCommitMessage(root, it.Branch, mergeSubject)
-				mc := exec.Command(gitBin(), "-C", root, "merge", "--no-ff", "-m", mergeMsg, it.Branch)
+				mergeMsg := weaveMergeCommitMessage(root, pullRef, mergeSubject)
+				mc := exec.Command(gitBin(), "-C", root, "merge", "--no-ff", "-m", mergeMsg, pullRef)
 				out, err := mc.CombinedOutput()
 				if err != nil {
 					_ = exec.Command(gitBin(), "-C", root, "merge", "--abort").Run()
-					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: strings.TrimSpace(string(out))})
+					detail := strings.TrimSpace(string(out))
+					if detail == "" {
+						detail = fmt.Sprintf("git merge failed: %v", err)
+					}
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: detail})
 					return nil
 				}
-				// Delete the fetched branch from user repo if fully merged (-d,
-				// never -D), while the same live-checkout lock is still held.
+				// Delete any previously fetched local branch from user repo if fully
+				// merged (-d, never -D), while the same live-checkout lock is held.
 				_ = exec.Command(gitBin(), "-C", root, "branch", "-d", it.Branch).Run()
 				weaveCloseRegisterOnMerge(root, base, it)
 				merged = true
@@ -6085,31 +6111,84 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 	for i := range gateDecisions {
 		weaveRecordCapability(&gateDecisions[i])
 	}
-	if mode == weavecli.OutputJSON {
-		_ = emitOK(cmd.OutOrStdout(), mode, "weave pull", map[string]any{
-			"results": results,
-		})
-		if pairExit != weavePairPassExit {
-			return ec(pairExit)
+	mergedCount := 0
+	var unmergedReasons []string
+	hasGateOrExecFailure := false
+	for i := range results {
+		r := &results[i]
+		if r.Status == "merged" || r.Status == "already-merged" {
+			mergedCount++
+			continue
 		}
-		return nil
+		if r.Detail == "" {
+			r.Detail = fmt.Sprintf("run did not merge (status %s)", r.Status)
+		}
+		switch r.Status {
+		case "verify-failed", "suite-gate-failed", "conflict", "skipped", "cleanup-failed",
+			"harness-error", "broken-before", "unmeasured", "review-block":
+			hasGateOrExecFailure = true
+		}
+		firstLine := r.Detail
+		if nl := strings.IndexByte(firstLine, '\n'); nl >= 0 {
+			firstLine = firstLine[:nl]
+		}
+		unmergedReasons = append(unmergedReasons, fmt.Sprintf("run #%d (%s): %s — %s", r.Issue, r.Branch, r.Status, firstLine))
+	}
+	exitCode := 0
+	if pairExit != weavePairPassExit {
+		exitCode = pairExit
+	} else if len(unmergedReasons) > 0 {
+		if hasGateOrExecFailure {
+			exitCode = weavecli.ExitGenericFail
+		} else {
+			exitCode = weavecli.ExitStateConflict
+		}
+	}
+
+	if mode == weavecli.OutputJSON {
+		if exitCode == 0 {
+			_ = emitOK(cmd.OutOrStdout(), mode, "weave pull", map[string]any{
+				"results": results,
+			})
+			return nil
+		}
+		envStatus := "error"
+		if mergedCount > 0 {
+			envStatus = "partial"
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(weavecli.Envelope{
+			SchemaVersion: weavecli.SchemaVersion,
+			Command:       "weave pull",
+			Status:        envStatus,
+			Result: map[string]any{
+				"results": results,
+			},
+			Error: weavecli.NewEnvelopeError(exitCode, errors.New(strings.Join(unmergedReasons, "; "))),
+		})
+		return ec(exitCode)
 	}
 	if len(results) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "weave pull: nothing to merge")
+		fmt.Fprintln(cmd.ErrOrStderr(), "weave pull: nothing to merge (no submitted or working runs in queue)")
 		return nil
 	}
 	for _, r := range results {
+		w := cmd.OutOrStdout()
+		if r.Status != "merged" && r.Status != "already-merged" {
+			w = cmd.ErrOrStderr()
+		}
 		detail := ""
 		if r.Detail != "" {
 			detail = " — " + r.Detail
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): %s%s\n", r.Issue, r.Branch, r.Status, detail)
+		fmt.Fprintf(w, "  run #%d (%s): %s%s\n", r.Issue, r.Branch, r.Status, detail)
 		if r.PairVerdict != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "    PAIR %s — %s\n", strings.ToUpper(r.PairVerdict), r.PairReason)
+			fmt.Fprintf(w, "    PAIR %s — %s\n", strings.ToUpper(r.PairVerdict), r.PairReason)
 		}
 	}
-	if pairExit != weavePairPassExit {
-		return ec(pairExit)
+	if exitCode != 0 {
+		return ec(exitCode)
 	}
 	return nil
 }
