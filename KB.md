@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] Run llmgw gates from its nested module — WHEN a yoke gate names ./pkg/llmgw/..., the root Go module rejects that pattern because pkg/llmgw has its own go.mod. Run go test ./... (and go vet ./...) with cwd pkg/llmgw; keep the root cligw, broker, and fleet gates separate so the nested-module setup error cannot mask their results.  (kb:run-llmgw-gates-from-its-nested-module)
+- [repo/page] secrets-by-handle-and-stdin-keyed-reveal-gate — Give every programmatic secret consumer a handle route; key the reveal gate on stdin (WHAT + WHEN: adopting TTY-gated secret reveal verbs in yoke/bashy) Reveal verbs (secret show/env) refuse non-interactive and agent callers, so every programmatic credential consumer needs a HANDLE  (kb:secrets-by-handle-and-stdin-keyed-reveal-gate)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
