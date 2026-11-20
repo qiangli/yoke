@@ -1,0 +1,18 @@
+name: muse-ember
+family: muse-ember
+version: "1.0"
+band: 4
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded 2026-11-20 (todo 2c2649ef01a9), inherited from muse-spark1.3
+# (L4 measured): Muse Ember, one of Meta's Muse models. No gated run on this host has placed it.
+display: Muse Ember
+provider: meta
+kind: subscription
+plan: meta-muse-pro  # the seat this model is billed through; see plans/meta-muse-pro.yaml
+# The vendor id declared for this seed. muse publishes no model list and
+# `muse model-profile show` accepts any string, so only a live call proves it:
+# live-verified 2026-11-20: `muse exec --model muse-ember-1.0` answered; a bogus id is refused.
+model: muse-ember-1.0
+quality: 0.85
+cost_micro: 5000

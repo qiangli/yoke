@@ -1,0 +1,8 @@
+agents:
+  - name: muse-ember
+    tool: muse
+    model: muse-ember
+    display: "muse · muse-ember"
+    ledger:
+      reliability: unmeasured
+      notes: seeded 2026-11-20 (todo 2c2649ef01a9); model id live-verified 2026-11-20 (muse exec --model muse-ember-1.0 answered; a bogus id is refused); band is a declared prior, no gated run on this host yet; needs a Muse Code subscription
