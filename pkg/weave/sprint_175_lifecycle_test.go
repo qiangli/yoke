@@ -89,9 +89,21 @@ func TestSprintManagerAcceptIsTheOnlyClosePath(t *testing.T) {
 	var submitOut bytes.Buffer
 	submit.SetOut(&submitOut)
 	submit.SetErr(&submitOut)
-	submit.SetArgs([]string{"submit", "1", it.ID, "--repo", repo, "--as", "worker"})
+	args := []string{"submit", "1", it.ID, "--repo", repo, "--as", "worker"}
+	for _, extra := range [][]string{nil, {"-m", "  "}, {"-m", "commit abc; verify: "}} {
+		submitOut.Reset()
+		submit.SetArgs(append(args, extra...))
+		if err := submit.Execute(); err == nil || !strings.Contains(submitOut.String(), "verification evidence") {
+			t.Fatalf("empty verification %q: %v %s", extra, err, submitOut.String())
+		}
+	}
+	qBefore, err := loadWeaveQueue(home)
+	if err != nil || sprintSubmissionEvidence(qBefore.Stories[0], it.ID) {
+		t.Fatalf("empty verification changed the submission: %v", err)
+	}
+	submit.SetArgs([]string{"submit", "1", it.ID, "--repo", repo, "--as", "worker", "-m", "unit gate passed"})
 	if err := submit.Execute(); err != nil {
-		t.Fatalf("submit without message: %v\n%s", err, submitOut.String())
+		t.Fatalf("submit with evidence: %v\n%s", err, submitOut.String())
 	}
 
 	cmd := NewSprintCmd()

@@ -193,6 +193,17 @@ func newChatSteerCmd() *cobra.Command {
 			case strings.TrimSpace(text) == "":
 				return fmt.Errorf("chat: steer needs text, or --enter to press Enter")
 			default:
+				if inbox := steerInbox(c); inbox != "" {
+					if err := bus.PostMessage(bus.Post{To: inbox, From: principalName(), Topic: c.ID, Body: text}); err != nil {
+						return err
+					}
+					if c.Mode == "weave" && c.CtlSock == "" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "chat: steering queued for %s (headless worker, retained for resume)\n", c.ID)
+					} else {
+						fmt.Fprintf(cmd.ErrOrStderr(), "chat: steering queued for %s\n", c.ID)
+					}
+					return nil
+				}
 				if err := deliverSteer(c, text); err != nil {
 					return err
 				}

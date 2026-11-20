@@ -58,7 +58,18 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		defer stopEvents()
 	}
 
+	var prompt *chat.SteerRelay
+	var gateAnswered func(agentpty.GateVerdict, string)
+	if guards.steerCard.ID != "" && guards.ctlSock != "" {
+		prompt = chat.StartSteerRelay(guards.steerCard, guards.steerReplayedThrough, nil)
+		defer prompt.Close()
+		gateAnswered = prompt.GateAnswered
+		if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
+			sink = weaveCoachSink(sink, prompt)
+		}
+	}
 	code, reason, err := agentpty.Run(cmd, sink, agentpty.Options{
+		OnGateRouted:  gateAnswered,
 		IdleTimeout:   guards.idleTimeout,
 		Activity:      activity,
 		MaxRuntime:    guards.maxRuntime,
@@ -79,6 +90,9 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 			sj := newWeaveStreamJSONLogWriter(w)
 			sj.errs = guards.streamErrs
 			sj.tracker = guards.resultTracker
+			if prompt != nil {
+				return io.MultiWriter(prompt, sj), sj.Flush
+			}
 			return sj, sj.Flush
 		},
 	})
