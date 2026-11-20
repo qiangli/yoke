@@ -35,6 +35,7 @@ const (
 	GateDeviceCode   GateKind = "device_code"
 	GateAPIKey       GateKind = "api_key"
 	GateHuman        GateKind = "human"
+	GateApproval     GateKind = "approval"
 )
 
 // GateVerdict is what the tail was classified as.
@@ -99,10 +100,15 @@ var (
 
 // authGateSignatures are the phrases an agent emits when it has stopped to ask
 // for a human instead of doing work. Matched case-insensitively.
+//
+// Avoid bare stems like "authenticate" that match ordinary engineering prose
+// ("authenticated console route", "authenticated address discovery") and wedge
+// DialogGuard mid-steer; require prompt-shaped phrases instead.
 var authGateSignatures = []string{
 	"not signed in", "sign in", "sign-in", "please log in", "please login",
 	"not logged in", "log in to", "login required", "authentication required",
-	"authenticate", "unauthorized", "run `login`", "run 'login'",
+	"please authenticate", "authenticate to", "authenticate with",
+	"unauthorized", "run `login`", "run 'login'",
 	"do you trust", "trust the contents", "trust this", "requires permission",
 	"you must log in", "session expired", "no api key", "api key not",
 }
@@ -311,6 +317,26 @@ func TextFrame(text string) string {
 	return text + "\r\n"
 }
 
+var approvalGateSignatures = []string{
+	"allow once", "always allow", "allow for this session",
+	"do you want to run", "do you want to allow", "approve this command",
+}
+
+// VisibleDialogGate inspects the bottom of a live terminal buffer (the last
+// trustDialogLines non-blank rows) and reports any recognized interactive
+// trust, auth, nag, or approval gate currently on screen.
+func VisibleDialogGate(rawTail string) GateVerdict {
+	screen := screenEnd(rawTail, trustDialogLines)
+	if v := ClassifyGate(screen); v.Kind != GateNone {
+		return v
+	}
+	low := strings.ToLower(ScreenText(screen))
+	if sig, ok := findSignature(low, approvalGateSignatures); ok {
+		return GateVerdict{Kind: GateApproval, Signature: sig}
+	}
+	return GateVerdict{Kind: GateNone}
+}
+
 // VerbatimFrame carries arbitrary BYTES — control characters, Tab, a bare Enter,
 // an escape sequence — which a plain line cannot express. This is what `weave say
 // --raw/--enter/--tab` needs, and it is why the wire has two frame kinds rather
@@ -318,6 +344,18 @@ func TextFrame(text string) string {
 // genuinely different acts.
 func VerbatimFrame(payload []byte) string {
 	return "\x00R" + base64.StdEncoding.EncodeToString(payload) + "\n"
+}
+
+// EnterFrame encodes an explicit Enter keystroke for `chat steer --enter`.
+// When force is false it uses the standard VerbatimFrame("\r"), which
+// DialogGuard refuses if a recognized gate is visible on screen; when force is
+// true it uses the forced-verbatim prefix so an explicit operator `--force`
+// reaches the PTY.
+func EnterFrame(force bool) string {
+	if force {
+		return "\x00F" + base64.StdEncoding.EncodeToString([]byte{'\r'}) + "\n"
+	}
+	return VerbatimFrame([]byte{'\r'})
 }
 
 // SendFrame writes a pre-built frame to a run's control channel.

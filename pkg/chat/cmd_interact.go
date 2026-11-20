@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -238,16 +239,20 @@ the raw append-only record; for messages addressed to you, read 'bashy inbox'.`,
 
 // newChatSteerCmd injects a line into a live session mid-turn.
 func newChatSteerCmd() *cobra.Command {
-	var enter bool
+	var enter, force bool
 	cmd := &cobra.Command{
-		Use:   "steer <id> <text> | steer <id> --enter",
+		Use:   "steer <id> <text> | steer <id> --enter [--force]",
 		Short: "inject a line into a live session (the one control surface: mid-turn steering)",
 		Long: "inject a line into a live session (the one control surface: mid-turn steering).\n\n" +
 			"--enter presses Enter instead: some TUIs drop the Enter of a line typed while they\n" +
 			"are busy and leave it unsent in their input box; an empty text line cannot\n" +
-			"express a bare key, so this sends the raw keystroke.",
+			"express a bare key, so this sends the raw keystroke. Refused when a recognized\n" +
+			"trust/auth/approval gate is visible on screen unless --force is given.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if force && !enter {
+				return fmt.Errorf("chat: --force only applies to --enter")
+			}
 			c, err := findMember(args[0])
 			if err != nil {
 				return err
@@ -255,7 +260,16 @@ func newChatSteerCmd() *cobra.Command {
 			text := strings.Join(args[1:], " ")
 			switch {
 			case enter:
-				if err := steerSend(c.CtlSock, agentpty.VerbatimFrame([]byte("\r"))); err != nil {
+				if !force {
+					if v := visibleCardGate(c); v.Kind != agentpty.GateNone {
+						detail := string(v.Kind)
+						if v.Signature != "" {
+							detail += fmt.Sprintf(" (%q)", v.Signature)
+						}
+						return fmt.Errorf("chat: refusing --enter for %s while %s gate is visible on screen; inspect/grant the dialog or pass --force to press Enter anyway", c.ID, detail)
+					}
+				}
+				if err := steerSend(c.CtlSock, agentpty.EnterFrame(force)); err != nil {
 					return fmt.Errorf("chat: could not steer %s: %w", c.ID, err)
 				}
 				text = "<Enter>"
@@ -282,7 +296,32 @@ func newChatSteerCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&enter, "enter", false, "press Enter in the session instead of sending a line")
+	cmd.Flags().BoolVar(&force, "force", false, "with --enter: send Enter even when a recognized trust/auth/approval gate is visible")
 	return cmd
+}
+
+func visibleCardGate(c room.Card) agentpty.GateVerdict {
+	p := strings.TrimSpace(c.LogPath)
+	if p == "" {
+		return agentpty.GateVerdict{Kind: agentpty.GateNone}
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return agentpty.GateVerdict{Kind: agentpty.GateNone}
+	}
+	defer f.Close()
+	const tailCap = 8 << 10
+	if st, err := f.Stat(); err == nil && st.Size() > tailCap {
+		_, _ = f.Seek(st.Size()-tailCap, io.SeekStart)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil || len(b) == 0 {
+		return agentpty.GateVerdict{Kind: agentpty.GateNone}
+	}
+	if i := bytes.LastIndex(b, []byte("\x1b[2J")); i >= 0 {
+		b = b[i+4:]
+	}
+	return agentpty.VisibleDialogGate(string(b))
 }
 
 // SteerReceipt says where a steer went.
