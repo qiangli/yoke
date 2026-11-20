@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -54,9 +55,55 @@ type weaveLiveSnapshot struct {
 	Truncated bool
 }
 
-// weaveSnapshotLiveTree fingerprints root's working tree. An error means
-// no snapshot — the guard then stays silent rather than guessing, because
-// a fabricated baseline would flag every run.
+// weaveIsStoryStorePath reports whether a porcelain path is a story-store
+// record (`docs/todo/<hex-id>-<slug>.md`) or the store index under `docs/todo/`.
+// Non-store files placed under `docs/todo/` (scripts, arbitrary notes, nested
+// directories) are NOT excluded and still trip workspace isolation.
+func weaveIsStoryStorePath(path string) bool {
+	p := strings.TrimSpace(path)
+	if len(p) >= 2 && p[0] == '"' && p[len(p)-1] == '"' {
+		p = p[1 : len(p)-1]
+	}
+	p = strings.TrimPrefix(filepath.ToSlash(p), "./")
+	const prefix = "docs/todo/"
+	if !strings.HasPrefix(p, prefix) {
+		return false
+	}
+	base := p[len(prefix):]
+	if base == "" || strings.Contains(base, "/") {
+		return false
+	}
+	switch strings.ToLower(base) {
+	case "index.json", ".index.json", "index.md", ".seq":
+		return true
+	}
+	if !strings.HasSuffix(base, ".md") {
+		return false
+	}
+	stem := strings.TrimSuffix(base, ".md")
+	id, slug, ok := strings.Cut(stem, "-")
+	if !ok || len(id) < 8 || len(id) > 64 || slug == "" {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	for i := 0; i < len(slug); i++ {
+		c := slug[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// weaveSnapshotLiveTree fingerprints root's working tree. Story-store files are
+// excluded from SHA (so conductor story edits do not trip isolation or stale an
+// in-flight `weave pull`) while kept in Lines so the isolation report can still
+// list them as `ignored: story store`.
 func weaveSnapshotLiveTree(root string) (weaveLiveSnapshot, error) {
 	if root == "" {
 		return weaveLiveSnapshot{}, fmt.Errorf("no repo root")
@@ -65,13 +112,21 @@ func weaveSnapshotLiveTree(root string) (weaveLiveSnapshot, error) {
 	if err != nil {
 		return weaveLiveSnapshot{}, fmt.Errorf("git status in %s: %w", root, err)
 	}
-	sum := sha256.Sum256(out)
-	snap := weaveLiveSnapshot{SHA: hex.EncodeToString(sum[:])}
+	var allLines []string
+	var canonical strings.Builder
 	for _, ln := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		if ln != "" {
-			snap.Lines = append(snap.Lines, ln)
+		if ln == "" {
+			continue
 		}
+		allLines = append(allLines, ln)
+		if weaveIsStoryStorePath(weavePorcelainPath(ln)) {
+			continue
+		}
+		canonical.WriteString(ln)
+		canonical.WriteByte('\n')
 	}
+	sum := sha256.Sum256([]byte(canonical.String()))
+	snap := weaveLiveSnapshot{SHA: hex.EncodeToString(sum[:]), Lines: allLines}
 	if len(snap.Lines) > weaveLiveBaselineMaxLines {
 		snap.Lines = nil
 		snap.Truncated = true
@@ -117,15 +172,16 @@ func weavePorcelainPath(line string) string {
 // The SHA is the verdict; the lines only name paths. When the baseline was
 // truncated, or the current tree is too dirty to line up, the change is
 // still reported — with no paths, which the caller renders honestly.
-func weaveIsolationStatus(it *weaveItem, now weaveLiveSnapshot) (violated bool, escaped []string) {
+// weaveIsolationCheck compares the item's baseline against a snapshot taken
+// now, partitioning changed live-checkout paths into escaped paths (which
+// violate isolation) and story-store paths (excluded from violation and surfaced
+// as `ignored: story store`).
+func weaveIsolationCheck(it *weaveItem, now weaveLiveSnapshot) (violated bool, escaped []string, ignored []string) {
 	if it == nil || it.LiveTreeSHA == "" || now.SHA == "" {
-		return false, nil
-	}
-	if it.LiveTreeSHA == now.SHA {
-		return false, nil
+		return false, nil, nil
 	}
 	if it.LiveTreeTruncated || now.Truncated {
-		return true, nil
+		return it.LiveTreeSHA != now.SHA, nil, nil
 	}
 	was := make(map[string]bool, len(it.LiveTreeLines))
 	for _, ln := range it.LiveTreeLines {
@@ -147,12 +203,58 @@ func weaveIsolationStatus(it *weaveItem, now weaveLiveSnapshot) (violated bool, 
 		}
 	}
 	for p := range paths {
-		if p != "" {
+		if p == "" {
+			continue
+		}
+		if weaveIsStoryStorePath(p) {
+			ignored = append(ignored, p)
+		} else {
 			escaped = append(escaped, p)
 		}
 	}
 	sort.Strings(escaped)
-	return true, escaped
+	sort.Strings(ignored)
+	if len(escaped) > 0 {
+		return true, escaped, ignored
+	}
+	if len(it.LiveTreeLines) == 0 && len(now.Lines) == 0 && it.LiveTreeSHA != now.SHA {
+		return true, nil, nil
+	}
+	return false, nil, ignored
+}
+
+func weaveIsolationStatus(it *weaveItem, now weaveLiveSnapshot) (violated bool, escaped []string) {
+	v, esc, _ := weaveIsolationCheck(it, now)
+	return v, esc
+}
+
+func weaveMergeSortedUnique(a, b []string) []string {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	var out []string
+	for _, s := range append(append([]string(nil), a...), b...) {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func weaveIgnoredStoryNote(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	shown := paths
+	suffix := ""
+	if len(shown) > weaveEscapedPathsMax {
+		suffix = fmt.Sprintf(" (+%d more)", len(shown)-weaveEscapedPathsMax)
+		shown = shown[:weaveEscapedPathsMax]
+	}
+	return fmt.Sprintf("ignored: story store (%s%s)", strings.Join(shown, ", "), suffix)
 }
 
 // weaveApplyIsolationCheck re-checks the item against its live root and
@@ -170,7 +272,10 @@ func weaveApplyIsolationCheck(it *weaveItem) bool {
 	if err != nil {
 		return false
 	}
-	violated, escaped := weaveIsolationStatus(it, snap)
+	violated, escaped, ignored := weaveIsolationCheck(it, snap)
+	if len(ignored) > 0 {
+		it.IgnoredStoryPaths = weaveMergeSortedUnique(it.IgnoredStoryPaths, ignored)
+	}
 	if !violated {
 		return false
 	}
@@ -199,7 +304,11 @@ func weaveComputeIsolation(root string, q *weaveQueue) {
 		return
 	}
 	for _, it := range q.Items {
-		if violated, escaped := weaveIsolationStatus(it, snap); violated {
+		violated, escaped, ignored := weaveIsolationCheck(it, snap)
+		if len(ignored) > 0 {
+			it.IgnoredStoryPaths = weaveMergeSortedUnique(it.IgnoredStoryPaths, ignored)
+		}
+		if violated {
 			it.IsolationViolated = true
 			if len(escaped) > 0 {
 				it.EscapedPaths = escaped
@@ -220,9 +329,13 @@ func weaveIsolationDetail(it *weaveItem) string {
 	if root == "" {
 		root = "the live checkout"
 	}
+	ignoredSuffix := ""
+	if note := weaveIgnoredStoryNote(it.IgnoredStoryPaths); note != "" {
+		ignoredSuffix = "; " + note
+	}
 	if len(it.EscapedPaths) == 0 {
 		return fmt.Sprintf("the live checkout (%s) changed during this run; paths unavailable "+
-			"(it was already too dirty at start to diff) — review it by hand, then `weave pull --force` if the change is yours", root)
+			"(it was already too dirty at start to diff)%s — review it by hand, then `weave pull --force` if the change is yours", root, ignoredSuffix)
 	}
 	paths := it.EscapedPaths
 	suffix := ""
@@ -231,8 +344,8 @@ func weaveIsolationDetail(it *weaveItem) string {
 		paths = paths[:weaveEscapedPathsMax]
 	}
 	return fmt.Sprintf("the live checkout (%s) changed during this run — the run escaped its workspace, "+
-		"or you edited the repo while it ran. Paths: %s%s. Review them by hand; `weave pull --force` merges anyway",
-		root, strings.Join(paths, ", "), suffix)
+		"or you edited the repo while it ran. Paths: %s%s%s. Review them by hand; `weave pull --force` merges anyway",
+		root, strings.Join(paths, ", "), suffix, ignoredSuffix)
 }
 
 // weavePrintIsolationFooter explains the "!" marker under `weave list`,
@@ -254,6 +367,9 @@ func weavePrintIsolationFooter(w io.Writer, violated []*weaveItem) {
 				shown = shown[:weaveEscapedPathsMax]
 			}
 			paths = strings.Join(shown, ", ") + extra
+		}
+		if note := weaveIgnoredStoryNote(it.IgnoredStoryPaths); note != "" {
+			paths += " (" + note + ")"
 		}
 		fmt.Fprintf(w, "  #%d: %s\n", it.ID, paths)
 	}

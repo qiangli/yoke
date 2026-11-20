@@ -99,6 +99,12 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 		if usable() {
 			return cached.Result, nil
 		}
+		if ctx.Value(cachedSourcesOnlyContextKey{}) == true {
+			if cached.Version == 1 {
+				return staleResult(cached.Result, "Cached observation; run 'bashy sprint monitor --refresh' to probe live."), nil
+			}
+			return SourceResult{Status: "unavailable", Limitations: []string{"No cached observation; run 'bashy sprint monitor' to probe."}}, nil
+		}
 		if ctx.Value(headroomProbeContextKey{}) == true {
 			return SourceResult{Status: "unavailable", Limitations: []string{"No fresh cached observation for seat headroom."}}, nil
 		}
@@ -117,6 +123,9 @@ func (g *Gate) source(ctx context.Context, c SourceConfig, now time.Time, refres
 		if usable() {
 			return cached.Result, nil
 		}
+	}
+	if ctx.Value(cachedSourcesOnlyContextKey{}) == true {
+		return SourceResult{Status: "unavailable", Limitations: []string{"No cached observation; run 'bashy sprint monitor' to probe."}}, nil
 	}
 	if ctx.Value(headroomProbeContextKey{}) == true {
 		return SourceResult{Status: "unavailable", Limitations: []string{"No cached observation for seat headroom."}}, nil

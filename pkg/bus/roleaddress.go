@@ -30,7 +30,10 @@ package bus
 // makes a handover keep the mail — see role.Assignment.Topic, which derives the
 // topic from the assignment precisely so it cannot name a person.
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 // HostRole is a role that exists on this host and can be addressed by name.
 type HostRole struct {
@@ -129,12 +132,12 @@ func RoleLabelFor(topic string) string {
 // ok reports that the LABEL names a live seat on this host. A seat that exists
 // but is vacant is not one: there is nobody to deliver to, and saying so is the
 // honest answer.
-func RoleHolderFor(label string) (holder string, ok bool) {
+func roleHolderForRoles(roles []HostRole, label string) (holder string, ok bool) {
 	label = strings.TrimSpace(label)
-	if label == "" || HostRoles == nil {
+	if label == "" {
 		return "", false
 	}
-	for _, r := range HostRoles() {
+	for _, r := range roles {
 		if !strings.EqualFold(r.Label, label) && !strings.EqualFold(r.Topic, label) {
 			continue
 		}
@@ -144,6 +147,13 @@ func RoleHolderFor(label string) (holder string, ok bool) {
 		return r.Holder, true
 	}
 	return "", false
+}
+
+func RoleHolderFor(label string) (holder string, ok bool) {
+	if strings.TrimSpace(label) == "" || HostRoles == nil {
+		return "", false
+	}
+	return roleHolderForRoles(HostRoles(), label)
 }
 
 // AddressedToRole reports a post addressed to a role that exists on this host.
@@ -167,15 +177,12 @@ func AddressedToRole(to string) bool {
 // current occupancy; reader authentication remains the host's responsibility.
 var RoleReaderAuthorizer func(topic, reader string) bool
 
-// AuthorizeByHolder authorizes only the principal that holds the seat right
-// now. A vacant seat authorizes nobody, so its mail is retained (see
-// canArchivePost), not delivered to whoever happens to read.
-func AuthorizeByHolder(topic, reader string) bool {
+func authorizeByHolderRoles(roles []HostRole, topic, reader string) bool {
 	reader = strings.TrimSpace(reader)
-	if reader == "" || HostRoles == nil {
+	if reader == "" {
 		return false
 	}
-	for _, role := range HostRoles() {
+	for _, role := range roles {
 		if !strings.EqualFold(role.Topic, topic) && !strings.EqualFold(role.Label, topic) {
 			continue
 		}
@@ -189,6 +196,20 @@ func AuthorizeByHolder(topic, reader string) bool {
 		return role.Holder != "" && strings.EqualFold(strings.TrimSpace(role.Holder), reader)
 	}
 	return false
+}
+
+// AuthorizeByHolder authorizes only the principal that holds the seat right
+// now. A vacant seat authorizes nobody, so its mail is retained (see
+// canArchivePost), not delivered to whoever happens to read.
+func AuthorizeByHolder(topic, reader string) bool {
+	if strings.TrimSpace(reader) == "" || HostRoles == nil {
+		return false
+	}
+	return authorizeByHolderRoles(HostRoles(), topic, reader)
+}
+
+func isAuthorizeByHolder(fn func(string, string) bool) bool {
+	return fn != nil && reflect.ValueOf(fn).Pointer() == reflect.ValueOf(AuthorizeByHolder).Pointer()
 }
 
 func roleReaderAllowed(topic, reader string) bool {

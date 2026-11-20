@@ -591,7 +591,7 @@ func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 // a broken pipe cannot lose the state change.
 func resolveLabel(p Post, who string, concerns []string, audiences audienceSnapshot) string {
 	switch {
-	case p.Directed(who):
+	case p.directed(who, audiences):
 		return "you"
 	case p.Mode == ModeAny:
 		// Reading an offer TAKES it: the claim is what stops two agents doing
@@ -615,7 +615,7 @@ func resolveLabel(p Post, who string, concerns []string, audiences audienceSnaps
 
 // describeFor labels a post WITHOUT side effects, for --history and --peek.
 func describeFor(p Post, who string, concerns []string, audiences audienceSnapshot) string {
-	if p.Directed(who) {
+	if p.directed(who, audiences) {
 		return "you"
 	}
 	base, counted := "", false

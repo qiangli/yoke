@@ -391,6 +391,7 @@ type weaveItem struct {
 	// refuses these without --force.
 	IsolationViolated bool     `json:"isolation_violated,omitempty"`
 	EscapedPaths      []string `json:"escaped_paths,omitempty"`
+	IgnoredStoryPaths []string `json:"ignored_story_paths,omitempty"`
 	// OutsideWorkspacePaths is an advisory extracted from the PTY log when a
 	// worker exits without commit evidence. It does not prove a write occurred
 	// and never blocks a merge; it points operators at likely wrong-directory work.
@@ -1702,6 +1703,7 @@ func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
 	// issue permanently, refusing every retry for a tree nobody touched.
 	it.IsolationViolated = false
 	it.EscapedPaths = nil
+	it.IgnoredStoryPaths = nil
 	it.OutsideWorkspacePaths = nil
 }
 
@@ -5875,7 +5877,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// the common cause is innocent (the human edited their own repo
 			// while the agent ran), and the guard cannot tell the two apart.
 			if liveNowErr == nil {
-				if violated, escaped := weaveIsolationStatus(it, liveNow); violated {
+				violated, escaped, ignored := weaveIsolationCheck(it, liveNow)
+				if len(ignored) > 0 {
+					it.IgnoredStoryPaths = weaveMergeSortedUnique(it.IgnoredStoryPaths, ignored)
+				}
+				if violated {
 					it.IsolationViolated = true
 					if len(escaped) > 0 {
 						it.EscapedPaths = escaped
@@ -6601,6 +6607,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		if len(it.OutsideWorkspacePaths) > 0 {
 			res["outside_workspace_paths"] = it.OutsideWorkspacePaths
 		}
+		if len(it.IgnoredStoryPaths) > 0 {
+			res["ignored_story_paths"] = it.IgnoredStoryPaths
+			res["isolation_ignored"] = weaveIgnoredStoryNote(it.IgnoredStoryPaths)
+		}
 		if it.IsolationViolated {
 			res["escaped_paths"] = it.EscapedPaths
 			res["isolation_detail"] = weaveIsolationDetail(it)
@@ -6714,6 +6724,8 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	if it.IsolationViolated {
 		fmt.Fprintf(w, "  ISOLATION: VIOLATED — not mergeable without --force\n")
 		fmt.Fprintf(w, "             %s\n", weaveIsolationDetail(it))
+	} else if note := weaveIgnoredStoryNote(it.IgnoredStoryPaths); note != "" {
+		fmt.Fprintf(w, "  isolation: ok — %s\n", note)
 	}
 	if len(it.OutsideWorkspacePaths) > 0 {
 		fmt.Fprintf(w, "  advisory: worker referenced paths outside its workspace: %s\n",

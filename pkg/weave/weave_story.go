@@ -832,6 +832,7 @@ func newWeaveStoryShowCmd() *cobra.Command {
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&links, "links", false, "resolve the card's [[kb:slug]] / [[todo:id]] citations at read time against the tracked repos' kb pages and todos")
+	cmd.Flags().Bool("probe-resources", false, "allow live account resource probes when cached observations are missing or expired")
 	return cmd
 }
 

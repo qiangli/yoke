@@ -117,12 +117,16 @@ func (p Post) Broadcast() bool {
 // Directed reports a post naming ONE agent — the only kind that carries an
 // obligation, and therefore the only kind never truncated from a default view.
 func (p Post) Directed(reader string) bool {
+	return p.directed(reader, audienceSnapshot{})
+}
+
+func (p Post) directed(reader string, audiences audienceSnapshot) bool {
 	to := strings.TrimSpace(p.To)
 	if to == "" {
 		return false
 	}
-	if AddressedToRole(to) {
-		return roleReaderAllowed(to, reader)
+	if audiences.addressedToRole(to) {
+		return audiences.roleReaderAllowed(to, reader)
 	}
 	if strings.EqualFold(to, strings.TrimSpace(reader)) {
 		return true
@@ -192,7 +196,7 @@ func FilterPostsForReader(posts []Post, reader string) []Post {
 }
 
 func (p Post) forReader(reader string, audiences audienceSnapshot) bool {
-	if p.Directed(reader) || p.Broadcast() {
+	if p.directed(reader, audiences) || p.Broadcast() {
 		return true
 	}
 	if p.Audience == nil || p.Audience.Empty() {
@@ -271,12 +275,22 @@ func (p Post) OnConcern(concerns []string) bool {
 	return false
 }
 
-// audienceSnapshot memoizes each distinct selector for one board read or
-// archive scan. It belongs to that operation, never to the process: embedded
-// readers must observe lease handoffs and expiry on their next read. A snapshot
-// is used by one goroutine; concurrent reads each own a separate map.
-// Resolution errors and empty rosters are also memoized for this operation.
-type audienceSnapshot map[Audience]audienceMembers
+// audienceSnapshot memoizes each distinct selector and the host's role table
+// for one board read or archive scan. It belongs to that operation, never to
+// the process: embedded readers must observe lease handoffs and expiry on their
+// next read. A snapshot is used by one goroutine; concurrent reads each own a
+// separate state struct. Resolution errors and empty rosters are also memoized
+// for this operation.
+type audienceSnapshot struct {
+	state *audienceSnapshotState
+}
+
+type audienceSnapshotState struct {
+	audiences   map[Audience]audienceMembers
+	rolesLoaded bool
+	roles       []HostRole
+	roleTopics  map[string]bool
+}
 
 type audienceMembers struct {
 	names map[string]bool
@@ -284,12 +298,16 @@ type audienceMembers struct {
 }
 
 func newAudienceSnapshot() audienceSnapshot {
-	return make(audienceSnapshot)
+	return audienceSnapshot{state: &audienceSnapshotState{
+		audiences: make(map[Audience]audienceMembers),
+	}}
 }
 
 func (s audienceSnapshot) resolve(aud Audience) audienceMembers {
-	if members, ok := s[aud]; ok {
-		return members
+	if s.state != nil {
+		if members, ok := s.state.audiences[aud]; ok {
+			return members
+		}
 	}
 	var members audienceMembers
 	if FleetSelect != nil {
@@ -301,8 +319,64 @@ func (s audienceSnapshot) resolve(aud Audience) audienceMembers {
 			}
 		}
 	}
-	s[aud] = members
+	if s.state != nil {
+		s.state.audiences[aud] = members
+	}
 	return members
+}
+
+func (s audienceSnapshot) hostRoles() []HostRole {
+	if s.state == nil {
+		if HostRoles == nil {
+			return nil
+		}
+		return HostRoles()
+	}
+	if !s.state.rolesLoaded {
+		s.state.rolesLoaded = true
+		if HostRoles != nil {
+			s.state.roles = HostRoles()
+			s.state.roleTopics = make(map[string]bool, len(s.state.roles))
+			for _, r := range s.state.roles {
+				if t := strings.ToLower(strings.TrimSpace(r.Topic)); t != "" {
+					s.state.roleTopics[t] = true
+				}
+			}
+		}
+	}
+	return s.state.roles
+}
+
+func (s audienceSnapshot) addressedToRole(to string) bool {
+	to = strings.TrimSpace(to)
+	if to == "" || HostRoles == nil {
+		return false
+	}
+	if s.state == nil {
+		return AddressedToRole(to)
+	}
+	s.hostRoles()
+	return s.state.roleTopics[strings.ToLower(to)]
+}
+
+func (s audienceSnapshot) roleReaderAllowed(topic, reader string) bool {
+	if RoleReaderAuthorizer == nil {
+		return false
+	}
+	if s.state != nil && isAuthorizeByHolder(RoleReaderAuthorizer) {
+		return authorizeByHolderRoles(s.hostRoles(), topic, reader)
+	}
+	return RoleReaderAuthorizer(topic, reader)
+}
+
+func (s audienceSnapshot) roleHolderFor(label string) (string, bool) {
+	if strings.TrimSpace(label) == "" || HostRoles == nil {
+		return "", false
+	}
+	if s.state == nil {
+		return RoleHolderFor(label)
+	}
+	return roleHolderForRoles(s.hostRoles(), label)
 }
 
 func (s audienceSnapshot) inAudience(aud Audience, reader string) bool {
@@ -543,7 +617,7 @@ func HintUnseen(reader string) (directed, other []Post, incomplete bool, err err
 			continue
 		}
 		inAudience := p.Audience != nil && !p.Audience.Empty() && audiences.inAudience(*p.Audience, reader)
-		if p.Directed(reader) {
+		if p.directed(reader, audiences) {
 			directed = append(directed, p)
 		} else if onConcern || inAudience || p.Broadcast() {
 			other = append(other, p)
@@ -587,7 +661,7 @@ func unseen(reader string, limit int, audiences audienceSnapshot) (directed, oth
 		// Broadcasts deliberately stay in the capped rest below.
 		inAudience := p.Audience != nil && !p.Audience.Empty() && audiences.inAudience(*p.Audience, reader)
 		switch {
-		case p.Directed(reader):
+		case p.directed(reader, audiences):
 			directed = append(directed, p)
 		case onConcern || inAudience:
 			concerned = append(concerned, p)

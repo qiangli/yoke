@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/lockfile"
+	"github.com/qiangli/yoke/pkg/llmbudget"
 	"github.com/spf13/cobra"
 )
 
@@ -64,7 +65,15 @@ func sprintResources(cmd *cobra.Command, id int64) SprintResourceSummary {
 	if provider == nil {
 		return summary
 	}
-	ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+	baseCtx := cmd.Context()
+	probeLive := false
+	if cmd != nil {
+		probeLive, _ = cmd.Flags().GetBool("probe-resources")
+	}
+	if !probeLive {
+		baseCtx = llmbudget.WithCachedSourcesOnly(baseCtx)
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Second)
 	defer cancel()
 	got, err := provider(ctx, id)
 	if err != nil {
