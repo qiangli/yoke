@@ -1,0 +1,20 @@
+name: muse-wonder
+family: muse-wonder
+version: "1.0"
+band: 4
+band_source: seeded
+band_season: 1
+# A PRIOR, not a measurement. Seeded 2026-11-19 (todo a6aa6915), inherited from muse-spark1.3
+# (L4 measured): Muse Wonder, one of Meta's Muse flagships (released 2026-10-12; Spark is the smaller
+# tier). Public boards place it in the current frontier cohort (agent-bench
+# docs/manager-ranking/findings-2026-11-19.md). No gated run on this host has placed it.
+display: Muse Wonder
+provider: meta
+kind: subscription
+plan: meta-muse-pro  # the seat this model is billed through; see plans/meta-muse-pro.yaml
+# The vendor id from Meta's launch coverage. muse publishes no model list and
+# `muse model-profile show` accepts any string, so only a live call proves it:
+# `bashy agent verify --live` answered ok on 2026-11-19 (dev host, Muse Code).
+model: muse-wonder-1.0
+quality: 0.85
+cost_micro: 5000

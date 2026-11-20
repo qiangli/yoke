@@ -1,0 +1,8 @@
+agents:
+  - name: muse-wonder
+    tool: muse
+    model: muse-wonder
+    display: "muse · muse-wonder"
+    ledger:
+      reliability: unmeasured
+      notes: seeded 2026-11-19 (todo a6aa6915); verified live 2026-11-19; declared prior, no gated run on this host yet; needs a Muse Code subscription

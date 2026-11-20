@@ -185,6 +185,8 @@ func TestEmbeddedSeedsCurrentRoster(t *testing.T) {
 		{"codex-gpt6-luna", "codex", "gpt6-luna", ""},
 		{"agy-gemini3.8-flash", "agy", "gemini3.8-flash", ""},
 		{"muse-spark1.3", "muse", "muse-spark1.3", ""},
+		{"muse-wonder", "muse", "muse-wonder", ""},
+		{"muse-wonder-full", "muse", "muse-wonder-full", ""},
 
 		{"opencode-glm-5.3", "opencode", "glm-5.3", "zai-coding-plan/glm-5.3"},
 		{"opencode-glm-5.3-flash", "opencode", "glm-5.3-flash", "zai-coding-plan/glm-5.3-flash"},
