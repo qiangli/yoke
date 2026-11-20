@@ -2,6 +2,7 @@ package weave
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +27,10 @@ func TestWeaveStartCapturesMemoryObservation(t *testing.T) {
 	if out, code := runWeave(t, "add", "touch pkg/weave/memory file", "--json"); code != 0 {
 		t.Fatalf("add exit=%d out=%s", code, out)
 	}
-	script := "mkdir -p pkg/weave && printf 'hello\\n' > pkg/weave/memory_test_fixture.txt && git add pkg/weave/memory_test_fixture.txt && git commit -q -m memory-fixture"
+	// Host git via gitBin(), not ambient PATH: under bashy's shims the
+	// launched shell's `git` is the in-process applet, whose commit
+	// rejects -q (1391d568).
+	script := fmt.Sprintf("mkdir -p pkg/weave && printf 'hello\\n' > pkg/weave/memory_test_fixture.txt && %s add pkg/weave/memory_test_fixture.txt && %s commit -q -m memory-fixture", gitBin(), gitBin())
 	if out, code := runWeave(t, "start", "--issue", "1", "--json", "--", "sh", "-c", script); code != 0 {
 		t.Fatalf("start exit=%d out=%s", code, out)
 	}

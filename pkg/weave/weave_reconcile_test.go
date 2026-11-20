@@ -2,6 +2,7 @@ package weave
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -492,7 +493,11 @@ func TestWeaveKilledRunResumeClearsStaleEvidenceAndPullsFreshSubmission(t *testi
 		t.Fatalf("relaunch dropped historical body note: %q", relaunched.Body)
 	}
 
-	script := "printf 'fresh\\n' > fresh.txt && git add fresh.txt && git commit -q -m fresh"
+	// The worker script must use the same git weave itself execs (gitBin —
+	// the host/provisioned git), not whatever `git` the ambient PATH
+	// resolves inside the launched shell: under bashy's shims that is the
+	// in-process git applet, whose commit rejects -q (1391d568).
+	script := fmt.Sprintf("printf 'fresh\\n' > fresh.txt && %s add fresh.txt && %s commit -q -m fresh", gitBin(), gitBin())
 	if out, code := runWeave(t, "start", "--issue", "1", "--resume", "--json", "--", "sh", "-c", script); code != 0 {
 		t.Fatalf("resume submission exit=%d out=%s", code, out)
 	}
