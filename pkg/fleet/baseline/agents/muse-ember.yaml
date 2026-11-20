@@ -1,0 +1,8 @@
+agents:
+  - name: muse-ember
+    tool: muse
+    model: muse-ember
+    display: "muse · muse-ember"
+    ledger:
+      reliability: unmeasured
+      notes: seeded 2026-11-20 (todo 2c2649ef01a9); declared prior, not live-verified yet — conductor live-verifies after merge; no gated run on this host yet; needs a Muse Code subscription
