@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	whodb "github.com/qiangli/coreutils/pkg/who"
@@ -382,7 +383,8 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Events:    tail != nil,
-		Caps:      []string{room.CapInboxDelivery},
+		Caps:      []string{room.CapInboxDelivery, SteerInboxPrefix + "chat-steer-" + bus.NewPostID()},
+		Joined:    time.Now().UTC().Format(time.RFC3339),
 	}
 	if tail != nil {
 		card.EventsPath = tail.path
@@ -433,6 +435,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		startedOnce.Do(func() { started <- err })
 	}
 
+	var openingDelivered atomic.Bool
 	go func() {
 		defer cancel()
 		defer close(s.done)
@@ -446,7 +449,10 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 				_ = os.Remove(ptyLink)
 			}
 		}()
-		exit, killed, err := agentpty.Run(cmd, sink, agentpty.Options{
+		relay := StartSteerRelay(card, 0, openingDelivered.Load)
+		defer relay.Close()
+		exit, killed, err := agentpty.Run(cmd, io.MultiWriter(sink, relay), agentpty.Options{
+			OnGateRouted:     relay.GateAnswered,
 			CtlSock:          sock,
 			Capture:          true, // the caller records this; the human watches via observe
 			MaxRuntime:       opt.Timeout,
@@ -507,6 +513,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		s.abortStart()
 		return s, fmt.Errorf("chat: opening prompt was delivered but its inbox acknowledgement failed: %w", err)
 	}
+	openingDelivered.Store(true)
 	s.startInboxRelay(ctx)
 	return s, nil
 }

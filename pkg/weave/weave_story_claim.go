@@ -321,8 +321,7 @@ func newSprintSubmitCmd() *cobra.Command {
 		Short: "Hand a finished story to the manager for merge or closure",
 		Long: `submit says the work is done and the decision is now the manager's.
 
-An optional -m message can carry a commit, branch, test result, or other useful
-continuity note. It is context, not a mandatory review or verification gate.
+Include verification evidence with -m so the manager can review the delivery.
 
 The story stays assigned to you until the manager closes it. That is
 deliberate: work waiting on manager action is not available for somebody else to pick
@@ -340,7 +339,7 @@ up, and pretending otherwise is how two agents end up on one story.`,
 	cmd.Flags().StringVar(&as, "as", "", "submitting agent (default $WEAVE_AGENT/$WEAVE_CONDUCTOR)")
 	cmd.Flags().StringVar(&as, "owner", "", "alias for --as")
 	cmd.Flags().StringVar(&repo, "repo", "", "repo root holding the story")
-	cmd.Flags().StringVarP(&evidence, "message", "m", "", "optional continuity note: what changed, commit/branch, or checks run")
+	cmd.Flags().StringVarP(&evidence, "message", "m", "", "verification evidence for the manager")
 	flags.attach(cmd)
 	return cmd
 }
@@ -368,6 +367,10 @@ func runSprintStorySubmit(cmd *cobra.Command, id int64, ref, as, repo, evidence 
 		}
 		if strings.TrimSpace(it.Assignee) == "" {
 			return "", errors.New(unclaimedSubmitHint(id, it.ID, who))
+		}
+		message := strings.TrimSpace(evidence)
+		if message == "" || strings.HasSuffix(strings.ToLower(message), "verify:") {
+			return "", errors.New("sprint submit requires verification evidence (-m)")
 		}
 		if err := preflightStoryClaimLedger(); err != nil {
 			return "", err

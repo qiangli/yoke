@@ -47,7 +47,7 @@ func workerStoryFixture(t *testing.T) (string, string, *weaveItem) {
 	}
 	gitT(t, root, "clone", "--local", root, ws)
 	gitT(t, ws, "checkout", "-qb", "agent/weave-issue-1")
-	it := &weaveItem{ID: 1, Created: time.Now().UTC(), Owner: "worker-seat", LaunchSpec: &weaveLaunchSpec{Agent: "worker"}, Workspace: ws, Branch: "agent/weave-issue-1", BaseSHA: base, State: "working", Body: fmt.Sprintf("Implement this.\n\nSprint: #1\nStory: #%d\nStory-ID: %s\n\nThen run focused tests.", story.Seq, story.ID)}
+	it := &weaveItem{VerifyCommand: "git diff --check", ID: 1, Created: time.Now().UTC(), Owner: "worker-seat", LaunchSpec: &weaveLaunchSpec{Agent: "worker"}, Workspace: ws, Branch: "agent/weave-issue-1", BaseSHA: base, State: "working", Body: fmt.Sprintf("Implement this.\n\nSprint: #1\nStory: #%d\nStory-ID: %s\n\nThen run focused tests.", story.Seq, story.ID)}
 	if err := saveWeaveQueue(qdir, &weaveQueue{Root: root, Items: []*weaveItem{it}}); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestWorkerStoryActorAndTerminalEvidence(t *testing.T) {
 		name, message, state string
 		want                 bool
 	}{
-		{"matching", "match", "submitted", true}, {"nonmatching", "other", "submitted", false}, {"no-commits", "", "submitted", false}, {"failed", "match", "failed", false}, {"killed", "match", "killed", false},
+		{"matching", "match", "submitted", true}, {"missing-verify", "match", "submitted", false}, {"nonmatching", "other", "submitted", false}, {"no-commits", "", "submitted", false}, {"failed", "match", "failed", false}, {"killed", "match", "killed", false},
 		{"wrong-sprint", "match", "submitted", false}, {"dirty", "match", "submitted", false}, {"verify-failed", "match", "submitted", false}, {"preservation", "match", "submitted", false}, {"auto-after-delivery", "match", "submitted", true}, {"auto-dirty", "match", "submitted", false}, {"manual-submit", "match", "submitted", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,8 +100,12 @@ func TestWorkerStoryActorAndTerminalEvidence(t *testing.T) {
 					it.AutoCommitted = true
 				}
 			}
+			exitOK := 0
+			it.VerifyCommand, it.VerifyExit = "go test ./pkg/weave", &exitOK
 			it.State = tc.state
 			switch tc.name {
+			case "missing-verify":
+				it.VerifyCommand, it.VerifyExit = "", nil
 			case "dirty":
 				it.Dirty = true
 			case "verify-failed":
@@ -117,7 +121,11 @@ func TestWorkerStoryActorAndTerminalEvidence(t *testing.T) {
 				}
 			}
 			for n := 0; n < 2; n++ {
-				if err := weaveSubmitWorkerStories(cmd, it); err != nil {
+				if err := weaveSubmitWorkerStories(cmd, it); tc.name == "missing-verify" {
+					if err == nil || !strings.Contains(err.Error(), "recorded verify") {
+						t.Fatalf("missing verify: %v", err)
+					}
+				} else if err != nil {
 					t.Fatalf("submit: %v %s", err, out.String())
 				}
 			}
@@ -306,6 +314,8 @@ func TestWorkerStorySubmissionRefusalIsDurable(t *testing.T) {
 	gitT(t, it.Workspace, "add", "done.txt")
 	gitT(t, it.Workspace, "commit", "-qm", "delivery\n\n"+strings.Split(it.Body, "\n\n")[1])
 	it.State = "submitted"
+	passed := 0
+	it.VerifyExit = &passed
 	story, _ := todopkg.ResolveRef(todopkg.RepoStore(root), it.WorkerStories[0].ID)
 	story.Assignee = "someone-else"
 	todopkg.RepoStore(root).Save(story)

@@ -498,6 +498,10 @@ func TestResumeHandoffStoryRequiresNewAttributedCommit(t *testing.T) {
 			if actor == "inherited" {
 				it.HandoffBaseSHA = strings.TrimSpace(gitT(t, it.Workspace, "rev-parse", "HEAD"))
 			}
+			// The terminal wrapper records the verify result before finishing
+			// the run; a submitted handoff replays that state.
+			exitOK := 0
+			it.VerifyExit = &exitOK
 			it.State = "submitted"
 			if err := weaveSubmitWorkerStories(cmd, it); err != nil {
 				t.Fatal(err)

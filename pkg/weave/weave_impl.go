@@ -3414,7 +3414,9 @@ type weaveGuards struct {
 	// serves for `weave say`: each line received is written to the
 	// PTY master with a trailing \r — keystrokes, as far as the
 	// subagent can tell.
-	ctlSock string
+	ctlSock              string
+	steerCard            room.Card
+	steerReplayedThrough int64
 	// coachee is the binding of the agent running this item, used by the reflex
 	// coach's P2b escalation to pick an agent-coach one band above it.
 	coachee string
@@ -3567,9 +3569,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// `-- 007` / `-- claude:opus` name an AGENT, so the launch argv comes from
 	// the registry with the issue body as the prompt. This is resolved here,
 	// after the issue is known, because the body IS the prompt.
+	var steerReplayedThrough int64
 	promptBody := it.Body
 	if opts.resume && !opts.blind && !it.Blind && it.ArenaSprint == 0 {
-		promptBody, err = weaveResumePrompt(it)
+		promptBody, steerReplayedThrough, err = weaveResumePrompt(it)
 		if err != nil {
 			return err
 		}
@@ -3915,7 +3918,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// subagent gets a PTY and we're actually spawning it. Codex exec does
 	// not consume live terminal messages; keep its steering queued for resume.
 	ctlSock := ""
-	if opts.ptyMode() != "never" && !opts.noSpawn && !weaveCodexExec(launchSpec) {
+	if opts.ptyMode() != "never" && !opts.noSpawn && !weaveHeadlessExec(launchSpec) {
 		ctlSock = weaveCtlSockPath(dir, it.ID)
 	}
 	if opts.resume {
@@ -4512,6 +4515,17 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		LogPath:   logPath,
 		PID:       os.Getpid(),
 		Cwd:       tool.Dir,
+	}
+	weaveCard.Joined = time.Now().UTC().Format(time.RFC3339)
+	inbox := weaveSteerInbox(it)
+	if guards.ctlSock == "" && it.Instance != "" {
+		// Headless workers can read their own inbox; resume also replays it.
+		inbox = fleet.InstanceAddressPrefix + it.Instance
+	}
+	weaveCard.Caps = []string{chat.SteerInboxPrefix + inbox}
+	guards.steerCard = weaveCard
+	if agentLaunch != nil {
+		guards.steerReplayedThrough = steerReplayedThrough
 	}
 	_ = room.Join(weaveCard)
 	defer room.Leave(weaveCard.ID)

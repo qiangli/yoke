@@ -65,7 +65,7 @@ func TestSteeringReceiptChild(t *testing.T) {
 }
 
 func TestResumeSteeringReceipt(t *testing.T) {
-	for _, channel := range []string{"comment", "say", "mb"} {
+	for _, channel := range []string{"comment", "say", "mb", "chat-steer"} {
 		t.Run(channel, func(t *testing.T) {
 			root, dir, it := workerStoryFixture(t)
 			t.Chdir(root)
@@ -112,6 +112,10 @@ func TestResumeSteeringReceipt(t *testing.T) {
 				out, code = runWeave(t, "comment", "1", "--kind", "review", marker)
 				if code != 0 {
 					t.Fatalf("comment: %d %s", code, out)
+				}
+			} else if channel == "chat-steer" {
+				if err := bus.PostMessage(bus.Post{To: weaveSteerInbox(it), From: "conductor", Topic: "old-session", Body: marker}); err != nil {
+					t.Fatal(err)
 				}
 			} else if channel == "say" {
 				out, code = runWeave(t, "say", "1", marker)
@@ -366,13 +370,15 @@ func TestCodexExecLegacySocketDoesNotAcceptSteering(t *testing.T) {
 	}
 }
 
-func TestCodexExecControlCapability(t *testing.T) {
+func TestHeadlessExecControlCapability(t *testing.T) {
 	for _, tc := range []struct {
 		name, tool string
 		args       []string
 		want       bool
 	}{
 		{"exec", "codex", []string{"-c", "x=true", "exec", "--model", "test", "prompt"}, true},
+		{"muse exec", "muse", []string{"exec", "--yolo", "prompt"}, true},
+		{"muse interactive", "muse", []string{"--model", "demo"}, false},
 		{"windows exec", "codex.exe", []string{"exec", "prompt"}, true},
 		{"interactive", "codex", []string{"--model", "test", "prompt"}, false},
 		{"prompt word", "codex", []string{"--", "exec"}, false},
@@ -380,7 +386,7 @@ func TestCodexExecControlCapability(t *testing.T) {
 		{"other streaming tool", "claude", []string{"--input-format", "stream-json", "exec"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := weaveCodexExec(&weaveLaunchSpec{Tool: tc.tool, Argv: tc.args}); got != tc.want {
+			if got := weaveHeadlessExec(&weaveLaunchSpec{Tool: tc.tool, Argv: tc.args}); got != tc.want {
 				t.Fatalf("capability=%v want %v", got, tc.want)
 			}
 		})

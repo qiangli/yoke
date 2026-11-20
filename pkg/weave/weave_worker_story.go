@@ -287,7 +287,10 @@ func weaveSubmitWorkerStories(cmd *cobra.Command, it *weaveItem) error {
 		if len(hashes) == 0 {
 			continue
 		}
-		evidence := fmt.Sprintf("weave worker Story-ID: %s; commits: %s; workspace: %s; verify: %s", st.ID, strings.Join(hashes, ","), it.Workspace, it.VerifyOutput)
+		if strings.TrimSpace(it.VerifyCommand) == "" || it.VerifyExit == nil {
+			return fmt.Errorf("story %s requires a recorded verify command and result before submission", st.ID)
+		}
+		evidence := fmt.Sprintf("weave worker Story-ID: %s; commits: %s; workspace: %s; verify: %s (exit %d) %s", st.ID, strings.Join(hashes, ","), it.Workspace, it.VerifyCommand, *it.VerifyExit, it.VerifyOutput)
 		if err := runSprintStorySubmit(quiet, st.Sprint, st.ID, st.Actor, st.Repo, evidence, &weaveOutputFlags{}); err != nil {
 			return err
 		}

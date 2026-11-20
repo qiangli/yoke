@@ -168,7 +168,8 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		Native:    native,
-		Caps:      []string{room.CapInboxDelivery},
+		Caps:      []string{room.CapInboxDelivery, SteerInboxPrefix + "chat-steer-" + bus.NewPostID()},
+		Joined:    time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := room.Join(card); err != nil {
 		var live *room.ErrLive
@@ -263,6 +264,9 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	} else {
 		logSink = ready
 	}
+	relay := StartSteerRelay(card, 0, promptDelivered.Load)
+	defer relay.Close()
+	logSink = io.MultiWriter(logSink, relay)
 	inboxReady := func() bool {
 		return promptDelivered.Load() && ready.settled(defaultInteractiveDeliveryTiming.settle)
 	}
@@ -313,11 +317,14 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.
 	exit, killed, runErr := agentpty.Run(cmd, logSink, agentpty.Options{
-		CtlSock:      sock,
-		Capture:      false,
-		MaxRuntime:   opt.Timeout,
-		OnResize:     publishGeometry(card),
-		OnGateRouted: ready.gateAnswered,
+		CtlSock:    sock,
+		Capture:    false,
+		MaxRuntime: opt.Timeout,
+		OnResize:   publishGeometry(card),
+		OnGateRouted: func(v agentpty.GateVerdict, action string) {
+			ready.gateAnswered(v, action)
+			relay.GateAnswered(v, action)
+		},
 	})
 	if runDone != nil {
 		close(runDone)
