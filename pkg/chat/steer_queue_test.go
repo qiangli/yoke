@@ -122,3 +122,12 @@ func TestNewSteerInboxStartsAtBoardHead(t *testing.T) {
 		t.Fatalf("unseen = %+v, %v; want the one steer", posts, err)
 	}
 }
+
+func TestStartedLineNamesTheWatchedInbox(t *testing.T) {
+	if got, want := startedLine("claude", true), "chat: \"claude\" started — watching inbox claude (`bashy mb send claude \"...\"`)"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := startedLine("claude", false); !strings.Contains(got, "inbox delivery off") {
+		t.Fatalf("inbox off: %q", got)
+	}
+}

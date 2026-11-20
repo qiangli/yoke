@@ -241,9 +241,14 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	if native {
 		posture = "native harness (self-governing) + steerable"
 	}
-	fmt.Fprintf(status, "chat: %s (%s) — %s (id %s). Ctrl-C ends it; "+
+	who := card.Nick
+	if card.Binding != "" {
+		who += " (" + card.Binding + ")"
+	}
+	fmt.Fprintf(status, "chat: %s — %s (id %s). Ctrl-C ends it; "+
 		"from another terminal: `bashy chat steer %s \"...\"` / `attach %s`.\n",
-		card.Nick, card.Binding, posture, card.ID, card.ID, card.ID)
+		who, posture, card.ID, card.ID, card.ID)
+	fmt.Fprintln(status, startedLine(name, os.Getenv("BASHY_CHAT_INBOX") != "off"))
 
 	// An interactive instruction must go through the live terminal, after the TUI
 	// has actually drawn and settled. Passing it on argv works for only some tools;
@@ -465,6 +470,15 @@ func deliverInteractivePromptWithTiming(ctx context.Context, nick, sock, prompt 
 
 // bindingBand is the capability band of a resolved agent name, or 0 when the name
 // is a bare tool that pegs to no model. Best-effort decoration for `chat sessions`.
+// startedLine tells the human which inbox this session watches, so mail for
+// the agent has an obvious address.
+func startedLine(agent string, inbox bool) string {
+	if !inbox {
+		return fmt.Sprintf("chat: %q started — inbox delivery off (BASHY_CHAT_INBOX=off)", agent)
+	}
+	return fmt.Sprintf("chat: %q started — watching inbox %s (`bashy mb send %s \"...\"`)", agent, agent, agent)
+}
+
 func bindingBand(name string) int {
 	if _, _, m, err := newCatalog().Binding(name); err == nil {
 		return m.Band
