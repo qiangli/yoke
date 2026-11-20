@@ -351,7 +351,9 @@ func (e *ErrLive) Error() string {
 	return fmt.Sprintf("room: %q is already live (pid %d)", e.ID, e.PID)
 }
 
-// Join CLAIMS a membership id and records a join event.
+// Join CLAIMS a membership id and records a join event — on an arrival: a
+// fresh claim, or reclaiming a stale card. Revising a card the same live
+// holder already holds is an update and emits no event.
 //
 // It is a claim, not a write. It used to be an unconditional WriteFile, so a
 // second member taking an id already in use silently overwrote the first's card
@@ -386,6 +388,7 @@ func Join(c Card) error {
 			prior, ok = readCard(candidate)
 		}
 	}
+	revision := false
 	if ok {
 		// The holder, not the writer (see card_holder.go). A session card's
 		// writer is a per-turn child command and is dead between turns, so
@@ -397,6 +400,11 @@ func Join(c Card) error {
 			return &ErrLive{ID: c.ID, PID: holder}
 		}
 		if holder == c.PID {
+			// Revising a card this live holder already holds is an update,
+			// not an arrival — recorded by the card's Updated stamp, not by
+			// another join event (3347a701: geometry republishes on every
+			// resize step rendered as dozens of joins for one session).
+			revision = cardAlive(prior)
 			// The same holder revising its own card. Carry the fence forward:
 			// a card left in place but claiming nothing refuses nobody, which
 			// is the same end state as deleting it.
@@ -420,6 +428,9 @@ func Join(c Card) error {
 	}
 	if legacy != "" && legacy != path {
 		_ = os.Remove(legacy)
+	}
+	if revision {
+		return nil
 	}
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
 }
