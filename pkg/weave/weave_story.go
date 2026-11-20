@@ -1740,18 +1740,23 @@ successor can take over.
 // ---- shared helpers -------------------------------------------------
 
 func weaveStoryAppend(s *weaveStory, author, kind, body string) {
-	body = strings.TrimSpace(body)
-	if s == nil || body == "" {
+	weaveStoryAppendEntry(s, weaveComment{Author: author, Kind: kind, Body: body})
+}
+
+func weaveStoryAppendEntry(s *weaveStory, entry weaveComment) {
+	entry.Body = strings.TrimSpace(entry.Body)
+	if s == nil || entry.Body == "" {
 		return
 	}
-	if kind == "" {
-		kind = "note"
+	if entry.Kind == "" {
+		entry.Kind = "note"
 	}
-	if author == "" {
-		author = "conductor"
+	if entry.Author == "" {
+		entry.Author = "conductor"
 	}
-	s.Thread = append(s.Thread, weaveComment{At: time.Now().UTC(), Author: author, Kind: kind, Body: body})
-	s.UpdatedAt = time.Now().UTC()
+	entry.At = time.Now().UTC()
+	s.Thread = append(s.Thread, entry)
+	s.UpdatedAt = entry.At
 	// THE ONE HOOK. Announcing is a projection of this log rather than a post
 	// call in each verb, so a stage verb added later is announced for free and
 	// the board can never disagree with the thread. See sprint_stage_announce.go
@@ -1760,9 +1765,9 @@ func weaveStoryAppend(s *weaveStory, author, kind, body string) {
 	// The host event log (bashy events) is the same projection, wider: it takes
 	// EVERY thread kind, since a comment or a verdict is as much a fact to a
 	// watcher as a stage change.
-	room.Record(room.EventSprint, author, fmt.Sprintf("sprint:#%d", s.ID), kind, body)
-	if kind == kindStage {
-		announceStage(s, author, body)
+	room.Record(room.EventSprint, entry.Author, fmt.Sprintf("sprint:#%d", s.ID), entry.Kind, entry.Body)
+	if entry.Kind == kindStage {
+		announceStage(s, entry.Author, entry.Body)
 	}
 }
 
