@@ -49,3 +49,5 @@ a) the human does not know which browser/tab the agent opened — tabs an agent 
 b) the agent's browser has no saved passwords — solved by the human choosing the browser/tab and pinging it;
 c) associating an error or page content with the agent's request is awkward — the ping's note carries pasted error/content for that tab.
 Step 1 = ONE tab per ping + optional note (multi-line, up to ~8 KB; full note stored in a ping file, short board post with a reference since posts cap at 1024 bytes). Multi-tab selection: dropped as overkill.
+
+Popup (operator decision, 2026-11-20): ONE "Shape" button covers all cases — ping-back (look at this tab; here is the error/content) and shaping the content, for producers and consumers alike; the receiving agent interprets the note. No separate verbs, no multi-tab selection.
