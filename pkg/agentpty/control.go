@@ -54,9 +54,9 @@ func writePTYControlLine(ptmx io.Writer, line string) error {
 	if line == "" {
 		return nil
 	}
-	// Verbatim frame: \x00R<base64> — decoded bytes written
-	// to PTY exactly as-is (no trailing \r).
-	if strings.HasPrefix(line, "\x00R") {
+	// Verbatim frame: \x00R<base64> (or forced \x00F<base64>) — decoded bytes
+	// written to PTY exactly as-is (no trailing \r).
+	if strings.HasPrefix(line, "\x00R") || strings.HasPrefix(line, "\x00F") {
 		decoded, err := base64.StdEncoding.DecodeString(line[2:])
 		if err != nil {
 			return err
