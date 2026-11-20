@@ -277,7 +277,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		delivered = make(chan error, 1)
 		runDone = make(chan struct{})
 		go func() {
-			err := deliverInteractivePrompt(runCtx, card.Nick, sock, promptText, ready, runDone,
+			err := deliverInteractivePrompt(runCtx, card.Nick, sock, promptText, ready, runDone, status,
 				func(text string) error { return agentctl.Say(sock, text) })
 			if err != nil {
 				cancel() // do not leave a session running after silently losing its instruction
@@ -412,17 +412,17 @@ var defaultInteractiveDeliveryTiming = interactiveDeliveryTiming{
 }
 
 func deliverInteractivePrompt(ctx context.Context, nick, sock, prompt string, ready *interactiveReady,
-	runDone <-chan struct{}, send func(string) error) error {
-	return deliverInteractivePromptWithTiming(ctx, nick, sock, prompt, ready, runDone, send,
+	runDone <-chan struct{}, status io.Writer, send func(string) error) error {
+	return deliverInteractivePromptWithTiming(ctx, nick, sock, prompt, ready, runDone, status, send,
 		defaultInteractiveDeliveryTiming)
 }
 
 func deliverInteractivePromptWithTiming(ctx context.Context, nick, sock, prompt string, ready *interactiveReady,
-	runDone <-chan struct{}, send func(string) error, timing interactiveDeliveryTiming) error {
-	wait := func(deadline time.Time, condition func() bool, failure string) error {
+	runDone <-chan struct{}, status io.Writer, send func(string) error, timing interactiveDeliveryTiming) error {
+	wait := func(deadline time.Time, condition func() bool, timeoutErr error) error {
 		for !condition() {
 			if time.Now().After(deadline) {
-				return fmt.Errorf("chat: %s %s", nick, failure)
+				return timeoutErr
 			}
 			select {
 			case <-ctx.Done():
@@ -437,13 +437,25 @@ func deliverInteractivePromptWithTiming(ctx context.Context, nick, sock, prompt 
 	if err := wait(time.Now().Add(timing.socketTimeout), func() bool {
 		_, err := os.Stat(sock)
 		return err == nil
-	}, "never opened a control channel for its instruction"); err != nil {
+	}, fmt.Errorf("chat: %s never opened a control channel for its instruction", nick)); err != nil {
 		return err
 	}
-	if err := wait(time.Now().Add(timing.readyTimeout), func() bool {
+	readyTimeout := errors.New("TUI did not settle")
+	err := wait(time.Now().Add(timing.readyTimeout), func() bool {
 		return ready.settled(timing.settle)
-	}, "TUI never became ready for its instruction"); err != nil {
+	}, readyTimeout)
+	if err != nil && err != readyTimeout {
 		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-runDone:
+		return fmt.Errorf("chat: %s exited before its instruction was delivered", nick)
+	default:
+	}
+	if err == readyTimeout {
+		fmt.Fprintf(status, "chat: warning: %s TUI did not settle within %s; delivering the instruction anyway\n", nick, timing.readyTimeout)
 	}
 	if err := send(prompt); err != nil {
 		return fmt.Errorf("chat: could not deliver the instruction to %s: %w", nick, err)
