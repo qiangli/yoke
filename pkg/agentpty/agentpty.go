@@ -95,6 +95,9 @@ type Options struct {
 	// TUI reflowed to another width is garbage. nil means nobody asked.
 	OnResize func(rows, cols uint16)
 
+	// Dialogs monitors an interactive screen and guards automated input.
+	Dialogs *DialogGuard
+
 	// OnGateRouted is called after the trust tap answers a gate on the live
 	// output (action is RouteGate's, e.g. "say_trust"). A caller that waits for
 	// the screen to be ready uses it to forget the dialog it was waiting out: the

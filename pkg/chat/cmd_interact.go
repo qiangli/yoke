@@ -237,14 +237,18 @@ var steerInterruptSettle = 2 * time.Second
 // after the work it was meant to stop — agent-bench l4/t3-stop scored 0/3 that
 // way, and 2 with an ESC first — so such a session is interrupted first.
 func deliverSteer(c room.Card, text string) error {
+	return deliverSteerWith(c, text, func(frame string) error { return steerSend(c.CtlSock, frame) })
+}
+
+func deliverSteerWith(c room.Card, text string, send func(string) error) error {
 	if steerInterruptFirst(c.Tool) {
-		if err := steerSend(c.CtlSock, agentpty.VerbatimFrame([]byte{0x1b})); err != nil {
+		if err := send(agentpty.VerbatimFrame([]byte{0x1b})); err != nil {
 			return fmt.Errorf("chat: could not interrupt %s before the steer: %w", c.ID, err)
 		}
 		_ = room.Emit(room.Event{Type: room.EventInterrupt, Actor: principalName(), Target: c.ID})
 		time.Sleep(steerInterruptSettle)
 	}
-	if err := steerSend(c.CtlSock, agentpty.TextFrame(text)); err != nil {
+	if err := send(agentpty.TextFrame(text)); err != nil {
 		return fmt.Errorf("chat: could not steer %s: %w", c.ID, err)
 	}
 	return nil

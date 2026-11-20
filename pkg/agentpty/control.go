@@ -50,17 +50,19 @@ var steerEnterDelay = 150 * time.Millisecond
 // so the second Enter is harmless when the first one was taken.
 var steerResubmitDelay = 3 * time.Second
 
-func writePTYControlLine(ptmx io.Writer, line string) {
+func writePTYControlLine(ptmx io.Writer, line string) error {
 	if line == "" {
-		return
+		return nil
 	}
 	// Verbatim frame: \x00R<base64> — decoded bytes written
 	// to PTY exactly as-is (no trailing \r).
 	if strings.HasPrefix(line, "\x00R") {
-		if decoded, err := base64.StdEncoding.DecodeString(line[2:]); err == nil {
-			_, _ = ptmx.Write(decoded)
+		decoded, err := base64.StdEncoding.DecodeString(line[2:])
+		if err != nil {
+			return err
 		}
-		return
+		_, err = ptmx.Write(decoded)
+		return err
 	}
 
 	// Text first, THEN Enter, as two writes with a pause between them.
@@ -87,14 +89,19 @@ func writePTYControlLine(ptmx io.Writer, line string) {
 	// conductor prompt is 4 KB, so opening a session on any tool that does not take
 	// its prompt on argv (opencode, codex) was structurally broken — and it failed
 	// as "deepseek did nothing", which is a lie about the model.
-	writePTYChunked(ptmx, line)
+	if err := writePTYChunked(ptmx, line); err != nil {
+		return err
+	}
 	time.Sleep(steerEnterDelay)
-	_, _ = io.WriteString(ptmx, "\r")
+	if _, err := io.WriteString(ptmx, "\r"); err != nil {
+		return err
+	}
 	// Again, for a TUI that dropped the first Enter while busy (see
 	// steerResubmitDelay). Synchronous on purpose: frames are written in order,
 	// so the next steer's text can never be split by a late Enter.
 	time.Sleep(steerResubmitDelay)
 	_, _ = io.WriteString(ptmx, "\r")
+	return nil
 }
 
 // ptyChunkBytes is comfortably under MAX_CANON (4096) so a chunk can never sit at
@@ -106,7 +113,7 @@ const ptyChunkBytes = 512
 const ptyChunkDelay = 25 * time.Millisecond
 
 // writePTYChunked feeds text to the terminal in pieces, the way typing does.
-func writePTYChunked(ptmx io.Writer, s string) {
+func writePTYChunked(ptmx io.Writer, s string) error {
 	b := []byte(s)
 	for len(b) > 0 {
 		n := min(ptyChunkBytes, len(b))
@@ -119,16 +126,17 @@ func writePTYChunked(ptmx io.Writer, s string) {
 			n = min(ptyChunkBytes, len(b))
 		}
 		if _, err := ptmx.Write(b[:n]); err != nil {
-			return
+			return err
 		}
 		b = b[n:]
 		if len(b) > 0 {
 			time.Sleep(ptyChunkDelay)
 		}
 	}
+	return nil
 }
 
-func tailPTYControlFile(path string, ptmx io.Writer) {
+func tailPTYControlFile(path string, send func(string) error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -141,7 +149,7 @@ func tailPTYControlFile(path string, ptmx io.Writer) {
 		if line != "" {
 			line = strings.TrimSuffix(line, "\n")
 			line = strings.TrimSuffix(line, "\r")
-			writePTYControlLine(ptmx, line)
+			_ = send(line)
 		}
 		if err == nil {
 			continue
