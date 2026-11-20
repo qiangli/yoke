@@ -59,6 +59,9 @@ type InteractOptions struct {
 	// Unattended (--yolo) keeps the agent's approval gate OFF for a session
 	// supervised remotely via steer — no one sits at the terminal to approve.
 	Unattended bool
+	// DenyUnsafe (--no-yolo) keeps the approval gate ON wherever the session
+	// runs; the command-line flag outranks containment and the environment.
+	DenyUnsafe bool
 	// NoTrust leaves the vendor trust dialog to the terminal operator.
 	NoTrust bool
 	// AllowPremium explicitly bypasses LLM budget/subscription gates for urgent
@@ -118,6 +121,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		ReadOnly:    opt.ReadOnly,
 		Attended:    !opt.ReadOnly,
 		AllowUnsafe: opt.Unattended,
+		DenyUnsafe:  opt.DenyUnsafe,
 		Steer:       true,
 	})
 	if err != nil {
@@ -128,6 +132,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		ReadOnly:     opt.ReadOnly,
 		Attended:     !opt.ReadOnly,
 		AllowUnsafe:  opt.Unattended,
+		DenyUnsafe:   opt.DenyUnsafe,
 		AllowPremium: opt.AllowPremium,
 		Steer:        true,
 	})

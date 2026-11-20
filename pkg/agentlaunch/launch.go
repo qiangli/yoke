@@ -42,7 +42,15 @@ type Options struct {
 	// uncontained-host guard, for a session supervised remotely via steer rather
 	// than at the agent's terminal.
 	AllowUnsafe bool
-	DryRun      bool
+	// DenyUnsafe is the operator's explicit refusal on the command line
+	// (--no-yolo). Override precedence, most specific wins (operator rule
+	// 2026-11-20): system defaults (containment, a tool's default) < shell
+	// env/config < the command's env/config ($BASHY_ALLOW_UNSAFE_AGENT_LAUNCH)
+	// < the command-line flag. So DenyUnsafe beats containment, the env and a
+	// tool default: the kill-switches are stripped and the approval gate stays
+	// ON. --yolo and --no-yolo together are a usage error at the CLI.
+	DenyUnsafe bool
+	DryRun     bool
 
 	// Steer resolves the tool's INTERACTIVE launch (steer_exec) instead of its
 	// headless one-shot, because a one-shot has nothing to interrupt: it runs the
@@ -755,9 +763,14 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 	if !allowed {
 		allowed, _ = UnsafeLaunchAllowedFor(opt)
 	}
+	if opt.DenyUnsafe && !opt.AllowUnsafe {
+		allowed = false // the command-line refusal outranks containment, env and tool defaults
+	}
 	switch {
 	case opt.ReadOnly:
 		args = readOnlyArgsWith(opt.Unsafe, tool, args) // a reviewer must never write — always strip
+	case opt.DenyUnsafe && !opt.AllowUnsafe:
+		args = stripKillSwitchesWith(opt.Unsafe, args) // --no-yolo: approval gate ON, wherever it runs
 	case opt.Attended && !allowed:
 		args = stripKillSwitchesWith(opt.Unsafe, args) // a human is at the terminal → approval ON
 	}
@@ -856,6 +869,10 @@ func ApplySandbox(agent string, args []string, opt Options) []string {
 		switch {
 		case sb == "danger-full-access":
 			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
+		case sb == "" && opt.DenyUnsafe && !opt.AllowUnsafe:
+			// --no-yolo outranks codex's full-access default: leave codex its
+			// own approval gate and sandbox (the bypass was already stripped).
+			return args
 		case sb != "":
 			// An explicit safe sandbox override also removes a stale bypass
 			// flag from a host-local profile. Supplying both makes the bypass

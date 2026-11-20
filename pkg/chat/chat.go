@@ -103,6 +103,10 @@ type Options struct {
 	// guard — for a session supervised REMOTELY via steer, where no one sits at the
 	// agent's terminal to answer an approval prompt.
 	AllowUnsafe bool
+	// DenyUnsafe is the explicit --no-yolo refusal: the most specific setting,
+	// so it outranks containment, the environment and a tool's own default
+	// (agentlaunch.Options.DenyUnsafe).
+	DenyUnsafe bool
 	// AllowPremium is the explicit human override for urgent work that may cross
 	// LLM budget or subscription exhaustion bounds.
 	AllowPremium bool
@@ -249,6 +253,7 @@ func toAgentLaunchOptions(opt Options) agentlaunch.Options {
 		ReadOnly:      opt.ReadOnly,
 		Attended:      opt.Attended,
 		AllowUnsafe:   opt.AllowUnsafe,
+		DenyUnsafe:    opt.DenyUnsafe,
 		DryRun:        opt.DryRun,
 		Steer:         opt.Steer,
 		Fork:          opt.Fork,
@@ -1309,6 +1314,7 @@ func NewChatCmd() *cobra.Command {
 					Timeout:      opt.Timeout,
 					ReadOnly:     opt.ReadOnly,
 					Unattended:   opt.AllowUnsafe,
+					DenyUnsafe:   opt.DenyUnsafe,
 					NoTrust:      noTrust,
 					AllowPremium: opt.AllowPremium,
 					Status:       cmd.ErrOrStderr(),
@@ -1363,6 +1369,11 @@ func NewChatCmd() *cobra.Command {
 		"disable the agent's approval gate (keep --dangerously-skip-permissions) and accept the "+
 			"uncontained-host risk — for a session you SUPERVISE REMOTELY via `chat steer`, where no one "+
 			"sits at the agent's terminal to answer an approval prompt. The steer loop is the oversight")
+	cmd.Flags().BoolVar(&opt.DenyUnsafe, "no-yolo", false,
+		"keep the agent's approval gate ON even where bashy would otherwise allow full access "+
+			"(inside a container, $BASHY_ALLOW_UNSAFE_AGENT_LAUNCH, a tool's own default): the command-line "+
+			"flag is the most specific setting and wins")
+	cmd.MarkFlagsMutuallyExclusive("yolo", "no-yolo")
 	cmd.Flags().BoolVar(&opt.AllowPremium, "allow-premium", false, "explicitly bypass LLM budget/subscription gates for urgent human-authorized work")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
 	cmd.Flags().StringVar(&opt.Task, "task", "", "safe one-line assignment label shown in the live agent roster")
