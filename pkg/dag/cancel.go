@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/term"
 	"github.com/qiangli/bash/interp"
+	"golang.org/x/term"
 )
 
 // signalCause is the context.Cause of a run cancelled by SIGINT/SIGTERM.

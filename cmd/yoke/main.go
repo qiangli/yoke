@@ -15,13 +15,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/qiangli/bash/interp/ownedexec"
 	"github.com/qiangli/coreutils/multicall"
 	"github.com/qiangli/coreutils/tool"
 	dbcmd "github.com/qiangli/yoke/cmds/db"
 	lenscmd "github.com/qiangli/yoke/cmds/lens"
 	"github.com/qiangli/yoke/mcp"
 	"github.com/qiangli/yoke/pkg/weave"
-	"github.com/qiangli/bash/interp/ownedexec"
 
 	_ "github.com/qiangli/yoke/cmds/all"
 	// Side effect: every built-in account adapter joins the default

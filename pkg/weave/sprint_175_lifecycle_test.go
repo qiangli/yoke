@@ -2,6 +2,8 @@ package weave
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +107,13 @@ func TestSprintManagerAcceptIsTheOnlyClosePath(t *testing.T) {
 	if err := submit.Execute(); err != nil {
 		t.Fatalf("submit with evidence: %v\n%s", err, submitOut.String())
 	}
+	q, err := loadWeaveQueue(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread := q.Stories[0].Thread; len(thread) != 1 || thread[0].Kind != "submit" || thread[0].StoryID != it.ID || thread[0].EvidenceRef != "unit gate passed" {
+		t.Fatalf("submission entry = %+v", thread)
+	}
 
 	cmd := NewSprintCmd()
 	var out bytes.Buffer
@@ -118,7 +127,7 @@ func TestSprintManagerAcceptIsTheOnlyClosePath(t *testing.T) {
 	if got.Status != todopkg.StatusDone || got.Closed == nil || got.ClosedBy != "manager" {
 		t.Fatalf("accepted story = %+v", got)
 	}
-	q, err := loadWeaveQueue(home)
+	q, err = loadWeaveQueue(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,13 +157,28 @@ func TestSubmitDefaultsToTheStoryHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := NewSprintCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"submit", "1", it.ID, "--repo", repo, "-m", "commit abc; tests pass"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("submit defaulting to holder failed: %v\n%s", err, out.String())
+	blockedRoom := filepath.Join(t.TempDir(), "room")
+	if err := os.WriteFile(blockedRoom, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_ROOM_DIR", blockedRoom)
+	submit := func() string {
+		t.Helper()
+		cmd := NewSprintCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{"submit", "1", shortSprintStoryID(it.ID), "--repo", repo, "-m", "  commit abc; tests pass  "})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("submit defaulting to holder failed: %v\n%s", err, out.String())
+		}
+		return out.String()
+	}
+	if out := submit(); !strings.Contains(out, "manager NOT notified") {
+		t.Fatalf("submit should report the notification failure: %s", out)
+	}
+	if out := submit(); !strings.Contains(out, "delivery already submitted") {
+		t.Fatalf("submit replay should reuse the persisted entry: %s", out)
 	}
 	q, err := loadWeaveQueue(home)
 	if err != nil {
@@ -163,8 +187,34 @@ func TestSubmitDefaultsToTheStoryHolder(t *testing.T) {
 	if !sprintSubmissionEvidence(q.Stories[0], it.ID) {
 		t.Fatal("submission evidence was not recorded")
 	}
-	if got := q.Stories[0].Thread[len(q.Stories[0].Thread)-1].Author; got != "worker" {
-		t.Fatalf("submission actor = %q, want worker", got)
+	thread := q.Stories[0].Thread
+	if len(thread) != 1 {
+		t.Fatalf("submission thread = %+v, want a single entry", thread)
+	}
+	entry := thread[0]
+	if entry.Kind != "submit" || entry.StoryID != it.ID || entry.Author != "worker" || entry.EvidenceRef != "commit abc; tests pass" || entry.At.IsZero() {
+		t.Fatalf("submission entry = %+v", entry)
+	}
+	if want := "worker submitted story " + shortSprintStoryID(it.ID) + " for merge/closure: commit abc; tests pass"; entry.Body != want {
+		t.Fatalf("submission text = %q, want %q", entry.Body, want)
+	}
+}
+
+func TestSprintSubmissionEvidenceReadsTypedAndLegacyEntries(t *testing.T) {
+	const storyID = "48a92d652802"
+	s := &weaveStory{Thread: []weaveComment{{
+		Kind: "submit", StoryID: storyID, Body: "worker delivered",
+	}}}
+	if !sprintSubmissionEvidence(s, storyID) {
+		t.Fatal("typed submission should match by full story ID")
+	}
+	s.Thread[0].Body = "worker submitted story " + shortSprintStoryID(storyID) + " for merge/closure"
+	if sprintSubmissionEvidence(s, "48a92d653333") {
+		t.Fatal("typed submission should not match a different story with the same prefix")
+	}
+	s.Thread[0] = weaveComment{Kind: "decision", Body: s.Thread[0].Body}
+	if !sprintSubmissionEvidence(s, storyID) {
+		t.Fatal("legacy submission should still be recognized")
 	}
 }
 

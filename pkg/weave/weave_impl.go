@@ -417,14 +417,15 @@ type weaveItem struct {
 	QuotaImmune        *quotaImmuneRecord `json:"quota_immune,omitempty"`
 }
 
-// weaveComment is one entry in an issue's history thread. Append-only;
-// Author is the agent Owner name, "conductor", or "human"; Kind is one
-// of note|progress|blocker|decision|review|system.
+// weaveComment is one entry in an issue or sprint history thread. For a
+// sprint submission, Author is the submitter and StoryID is the full story ID.
 type weaveComment struct {
-	At     time.Time `json:"at"`
-	Author string    `json:"author,omitempty"`
-	Kind   string    `json:"kind,omitempty"`
-	Body   string    `json:"body"`
+	At          time.Time `json:"at"`
+	Author      string    `json:"author,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
+	Body        string    `json:"body"`
+	StoryID     string    `json:"story_id,omitempty"`
+	EvidenceRef string    `json:"evidence_ref,omitempty"`
 }
 
 type weaveLaunchSpec struct {

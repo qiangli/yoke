@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/bash/pathconv"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/telemetry"
-	"github.com/qiangli/bash/pathconv"
 )
 
 type Action string

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qiangli/yoke/pkg/websession"
 	"github.com/qiangli/yoke/pkg/shape/contain"
+	"github.com/qiangli/yoke/pkg/websession"
 )
 
 // TestOperatorSessionCloudCaller is the regression guard for todo

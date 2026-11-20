@@ -33,8 +33,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/bash/pathconv"
+	"github.com/qiangli/coreutils/tool"
 )
 
 func runTool(t *testing.T, cmd *tool.Tool, args ...string) (string, string, int) {
