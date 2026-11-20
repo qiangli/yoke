@@ -299,6 +299,9 @@ type CommitOptions struct {
 	All         bool
 	AuthorName  string
 	AuthorEmail string
+	// AllowEmpty permits a commit whose tree matches its parent,
+	// mirroring `git commit --allow-empty`.
+	AllowEmpty bool
 }
 
 // Commit records a new commit (or amends HEAD when Amend is set).
@@ -314,7 +317,7 @@ func Commit(opts CommitOptions) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
-	commitOpts := &gogit.CommitOptions{All: opts.All, Amend: opts.Amend}
+	commitOpts := &gogit.CommitOptions{All: opts.All, Amend: opts.Amend, AllowEmptyCommits: opts.AllowEmpty}
 	if mode := coreAutoCRLF(r); opts.All && (mode == "true" || mode == "input" || !coreFileMode(r)) {
 		// go-git's All stages raw worktree bytes; stage tracked changes
 		// here so core.autocrlf converts them as host git's -a would.
