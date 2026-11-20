@@ -326,6 +326,13 @@ var subcommands = map[string]subcommand{
 		One:  "drive a login flow and print the resulting token/cookie/url",
 		Mode: "solo, probe, live",
 		Out:  "the captured value on stdout; --json emits {done,reason,token,cookie,url}",
+		Body: []string{
+			"A browser bashy launches is a fresh profile: no password manager, so",
+			"the human often cannot sign in there. Prefer the human's own browser:",
+			"ask them to open and sign in to the site in Edge or Chrome (live-mode",
+			"extension installed), focus the tab and tell you to look; then act on",
+			"it with --mode live --active (e.g. cookies-get NAME DOMAIN).",
+		},
 	},
 }
 
