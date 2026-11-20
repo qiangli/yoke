@@ -264,8 +264,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	} else {
 		logSink = ready
 	}
-	relay := StartSteerRelay(card, 0, promptDelivered.Load)
-	defer relay.Close()
+	relay := startSteerRelay(card, 0, promptDelivered.Load, managedInboxPoll, defaultInteractiveDeliveryTiming.readyTimeout, status)
 	logSink = io.MultiWriter(logSink, relay)
 	inboxReady := func() bool {
 		return promptDelivered.Load() && ready.settled(defaultInteractiveDeliveryTiming.settle)
@@ -282,8 +281,8 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			if err != nil {
 				cancel() // do not leave a session running after silently losing its instruction
 			} else {
-				promptDelivered.Store(true)
 				fmt.Fprintf(status, "chat: instruction delivered to %s\n", card.Nick)
+				promptDelivered.Store(true)
 			}
 			delivered <- err
 		}()
@@ -326,6 +325,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			relay.GateAnswered(v, action)
 		},
 	})
+	relay.Close()
 	if runDone != nil {
 		close(runDone)
 		if err := <-delivered; err != nil {
