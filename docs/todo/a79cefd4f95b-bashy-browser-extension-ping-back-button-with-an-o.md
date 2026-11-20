@@ -59,3 +59,5 @@ Popup layout (operator decision, 2026-11-20): keep the existing popup content (h
 Popup (operator, final, 2026-11-20): just add a note textarea + one Shape button (+ one status line) to the existing popup; no restyling or reordering.
 
 Design (operator, 2026-11-20): the extension is just another chat input to bashy. Shape = an ordinary board message to the agent (as bashy mb send) with the tab attached (browser, tab id, url, title); read with bashy inbox; no separate ping store or listing verb. Step 2 replies are ordinary messages back, shown in the popup.
+
+Infra (operator, 2026-11-20): Shape uses the same bashy infrastructure as chat/meet — a live chat session gets it as a steer (pkg/chat), otherwise it goes into the meet DM with that agent (pkg/meet); replies are ordinary DM/chat replies. No new transport.
