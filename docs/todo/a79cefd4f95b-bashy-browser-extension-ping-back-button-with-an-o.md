@@ -42,3 +42,5 @@ Design constraints:
 Tests: Go unit tests for hub message -> bus post (recipient default, browser field, note verbatim); follow the extension's existing test pattern (extension_test.go / extension_e2e_test.go) for the popup/message. Targeted only: `GOWORK=off go test ./pkg/browser/... ./cmds/browser` and `scripts/fmtcheck.sh`. No heavy suites. Root cause before any fix if something pre-existing fails.
 
 Commit with the trailer `Story-ID: a79cefd4f95b`. Do not push; the conductor reviews and merges.
+
+Multi-tab (operator, 2026-11-20): a ping sends ALL tabs the human has selected (highlighted) in the window, each as its own entry {browser, tab id, url, title}, under one shared optional note; per-tab notes = separate pings. chrome.tabs.query({highlighted:true, currentWindow:true}) needs no new permission.
