@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [host/page] Playbook: run a multi-agent planning meeting with bashy meet — How to run a design review / decision / cross-agent planning session with 'bashy meet' instead of separate one-off agent sessions: the start -> round -> /decision + /action -> close loop, a dedicated notes-only secretary, and minutes filed to docs/meetin  (kb:playbook-run-a-multi-agent-planning-meeting-with-bashy-meet)
+- [repo/page] Real-engine probe tests need a test-only sibling package — WHEN testing yoke usage-probe seeds end to end (YAML -> fleet -> llmbudget.Quota through the REAL Bash# runner): llmbudget's internal tests snippet.SetRunner(nil) in cleanup and pkg/dag imports llmbudget, so neither pkg/llmbudget nor pkg/fleet tests can import  (kb:real-engine-probe-tests-need-a-test-only-sibling-package)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 
