@@ -29,6 +29,17 @@ func ConfiguredUpstream(home, repo string) (string, error) {
 	if _, err := remoteFor(repo); err != nil {
 		return "", err
 	}
+	return PromotionUpstream(home, repo)
+}
+
+// PromotionUpstream reads an explicitly configured app destination. Unlike
+// source acquisition, shaping may promote any registered app. This does not
+// add the app to the source-fetch allowlist.
+func PromotionUpstream(home, app string) (string, error) {
+	if err := promotionAppName(app); err != nil {
+		return "", err
+	}
+	repo := app
 	m, err := configuredUpstreams(home)
 	if err != nil {
 		return "", err
@@ -49,21 +60,33 @@ func ConfiguredUpstream(home, repo string) (string, error) {
 // ConfiguredTier returns a named promotion destination. The upstream tier
 // falls back to the installation seed or canonical origin.
 func ConfiguredTier(home, repo, tier string) (string, error) {
+	if _, err := remoteFor(repo); err != nil {
+		return "", err
+	}
+	return PromotionTier(home, repo, tier)
+}
+
+// PromotionTier resolves a shaped app destination. Only allowlisted source
+// repositories have a seed/canonical fallback; other apps must be explicit.
+func PromotionTier(home, repo, tier string) (string, error) {
+	if err := promotionAppName(repo); err != nil {
+		return "", err
+	}
 	if tier != "org" && tier != "upstream" {
 		return "", fmt.Errorf("src: unknown tier %q", tier)
 	}
 	if tier == "upstream" {
-		u, err := ConfiguredUpstream(home, repo)
+		u, err := PromotionUpstream(home, repo)
 		if err != nil || u != "" {
 			return u, err
+		}
+		if _, err := remoteFor(repo); err != nil {
+			return "", nil
 		}
 		if u = seedOrigin(home, repo); u != "" {
 			return u, nil
 		}
 		return remoteFor(repo)
-	}
-	if _, err := remoteFor(repo); err != nil {
-		return "", err
 	}
 	m, err := configuredUpstreams(home)
 	if err != nil {
@@ -79,6 +102,15 @@ func ConfiguredTier(home, repo, tier string) (string, error) {
 func SetUpstream(home, repo, origin string) error { return SetTier(home, repo, "upstream", origin) }
 func SetTier(home, repo, tier, origin string) error {
 	if _, err := remoteFor(repo); err != nil {
+		return err
+	}
+	return SetPromotionTier(home, repo, tier, origin)
+}
+
+// SetPromotionTier configures a shaped app's explicit Git destination using
+// the existing tier store. It grants no permission to src fetch that app.
+func SetPromotionTier(home, repo, tier, origin string) error {
+	if err := promotionAppName(repo); err != nil {
 		return err
 	}
 	if tier != "org" && tier != "upstream" {
@@ -133,6 +165,14 @@ func SetTier(home, repo, tier, origin string) error {
 	}
 	return os.Rename(tmp, upstreamPath(home))
 }
+
+func promotionAppName(app string) error {
+	if app == "" || app == "." || app == ".." || strings.ContainsAny(app, "/\\\x00") {
+		return fmt.Errorf("src: invalid promotion app name %q", app)
+	}
+	return nil
+}
+
 func originFor(home, repo string) (string, error) {
 	u, err := ConfiguredUpstream(home, repo)
 	if err != nil {

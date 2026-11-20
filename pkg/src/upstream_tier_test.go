@@ -51,3 +51,38 @@ func TestUpstreamTierCompatibility(t *testing.T) {
 		t.Fatalf("org after legacy setter: %q %v", u, err)
 	}
 }
+
+func TestCustomAppPromotionDoesNotPermitSourceFetch(t *testing.T) {
+	home := t.TempDir()
+	for _, tier := range []string{"org", "upstream"} {
+		if got, err := src.PromotionTier(home, "hello-world", tier); err != nil || got != "" {
+			t.Fatalf("unconfigured app %s = %q, %v", tier, got, err)
+		}
+		remote := filepath.Join(home, tier+".git")
+		if err := src.SetPromotionTier(home, "hello-world", tier, remote); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := src.PromotionTier(home, "hello-world", tier); err != nil || got != remote {
+			t.Fatalf("configured app %s = %q, %v", tier, got, err)
+		}
+	}
+	if got, err := src.PromotionUpstream(home, "hello-world"); err != nil || got != filepath.Join(home, "upstream.git") {
+		t.Fatalf("explicit upstream = %q, %v", got, err)
+	}
+	// Promotion configuration must never widen source acquisition. Even an
+	// explicitly configured custom app remains refused before fetching.
+	if _, err := src.Fetch(home, "hello-world"); err == nil || !strings.Contains(err.Error(), "refusing proprietary or unknown repo") {
+		t.Fatalf("source fetch refusal = %v", err)
+	}
+	if err := src.SetUpstream(home, "hello-world", filepath.Join(home, "other.git")); err == nil {
+		t.Fatal("source upstream setter accepted a custom app")
+	}
+	if _, err := src.ConfiguredTier(home, "hello-world", "org"); err == nil {
+		t.Fatal("source tier reader accepted a custom app")
+	}
+	for _, app := range []string{"", ".", "..", "../escape", `a\b`, "bad\x00name"} {
+		if err := src.SetPromotionTier(home, app, "org", "somewhere"); err == nil {
+			t.Fatalf("accepted invalid app name %q", app)
+		}
+	}
+}

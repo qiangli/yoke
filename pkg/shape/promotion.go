@@ -224,7 +224,7 @@ func (s Service) incomingRemote(ctx context.Context, tier string) (*gogit.Reposi
 	if err != nil {
 		return nil, nil, nil, plumbing.ZeroHash, err
 	}
-	raw, err := src.ConfiguredTier(home, s.App.Name, tier)
+	raw, err := src.PromotionTier(home, s.App.Name, tier)
 	if err != nil {
 		return nil, nil, nil, plumbing.ZeroHash, err
 	}
@@ -489,7 +489,7 @@ func (s Service) Outgoing(ctx context.Context, tier string) ([]OutgoingChange, e
 	if err != nil {
 		return nil, err
 	}
-	url, err := src.ConfiguredTier(home, s.App.Name, tier)
+	url, err := src.PromotionTier(home, s.App.Name, tier)
 	if err != nil {
 		return nil, err
 	}
@@ -577,11 +577,11 @@ func (s Service) Push(ctx context.Context, tier, id string, createPR bool) (Push
 	if err != nil {
 		return PushResult{}, err
 	}
-	url, err := src.ConfiguredTier(home, s.App.Name, tier)
+	url, err := src.PromotionTier(home, s.App.Name, tier)
 	if err != nil {
 		return PushResult{}, err
 	}
-	explicit, err := src.ConfiguredUpstream(home, s.App.Name)
+	explicit, err := src.PromotionUpstream(home, s.App.Name)
 	if err != nil {
 		return PushResult{}, err
 	}

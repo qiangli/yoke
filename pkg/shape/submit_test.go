@@ -37,11 +37,13 @@ func submitFixtureNamed(t *testing.T, actor, name string) (Service, Caller, Cand
 	t.Helper()
 	s, caller, from, _, _ := testService(t)
 	s.App.Name = name
-	if name == "yoke" {
+	// testService seeds src/hello. Renaming its app must preserve the source
+	// lookup used by OpenShapePR for every fixture name, not only OSS repos.
+	if name != "hello" {
 		if err := os.MkdirAll(src.SrcDir(s.Options.Home), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(s.App.SourceDir, filepath.Join(src.SrcDir(s.Options.Home), "yoke")); err != nil {
+		if err := os.Symlink(s.App.SourceDir, filepath.Join(src.SrcDir(s.Options.Home), name)); err != nil {
 			t.Fatal(err)
 		}
 	}

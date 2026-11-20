@@ -111,7 +111,7 @@ func TestCompareURL(t *testing.T) {
 
 func TestPromotionIncomingPull(t *testing.T) {
 	t.Setenv("WEAVE_ISSUE", "")
-	s, caller, c, _ := submitFixtureNamed(t, "tester", "yoke")
+	s, caller, c, _ := submitFixtureNamed(t, "tester", "hello-world")
 	v, err := s.Submit(context.Background(), caller, c.Rev, SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestPromotionIncomingPull(t *testing.T) {
 	if err := pushBranch(context.Background(), local, bare, v.Branch); err != nil {
 		t.Fatal(err)
 	}
-	if err := src.SetTier(s.Options.Home, s.App.Name, "upstream", bare); err != nil {
+	if err := src.SetPromotionTier(s.Options.Home, s.App.Name, "upstream", bare); err != nil {
 		t.Fatal(err)
 	}
 	if err := remote.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1.1.0"), base)); err != nil {
@@ -222,7 +222,7 @@ func TestPromotionIncomingPull(t *testing.T) {
 }
 func TestPromotionOutgoingMasterAndPush(t *testing.T) {
 	t.Setenv("WEAVE_ISSUE", "")
-	s, caller, c, _ := submitFixtureNamed(t, "tester", "yoke")
+	s, caller, c, _ := submitFixtureNamed(t, "tester", "hello-world")
 	v, err := s.Submit(context.Background(), caller, c.Rev, SubmitOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +250,7 @@ func TestPromotionOutgoingMasterAndPush(t *testing.T) {
 	if _, err := s.Push(context.Background(), "upstream", v.ID, false); err == nil || !strings.Contains(err.Error(), "shape remote set upstream <url>") {
 		t.Fatalf("unconfigured push: %v", err)
 	}
-	if err := src.SetTier(s.Options.Home, s.App.Name, "upstream", bare); err != nil {
+	if err := src.SetPromotionTier(s.Options.Home, s.App.Name, "upstream", bare); err != nil {
 		t.Fatal(err)
 	}
 	changes, err := s.Outgoing(context.Background(), "upstream")
