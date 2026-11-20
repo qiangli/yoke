@@ -31,7 +31,14 @@ func permReq() PermissionRequest {
 // `bashy approve allow|deny` would from a human's terminal.
 func decideSoon(t *testing.T, d ask.Decision) {
 	t.Helper()
+	// ask.Decide writes into the isolated queue dir; the test can return as
+	// soon as it sees the decision, so join this goroutine before the TempDir
+	// cleanup (registered earlier, so it runs later) removes that dir.
+	// Without the join a busy host saw "unlinkat …: directory not empty".
+	done := make(chan struct{})
+	t.Cleanup(func() { <-done })
 	go func() {
+		defer close(done)
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			if p, _ := ask.PendingApprovals(); len(p) > 0 {
