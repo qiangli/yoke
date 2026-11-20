@@ -126,6 +126,7 @@ func run(rc *tool.RunContext, args []string) int {
 	tabURL := fs.String("url", "", "address an action to a tab by URL substring")
 	tabTitle := fs.String("title", "", "address an action to a tab by title substring")
 	tabByID := fs.Int("id", 0, "address an action to a browser tab id")
+	tabActive := fs.Bool("active", false, "live mode: address an action to the tab you are looking at (the active tab)")
 	// wait / events
 	timeoutMs := fs.Int("timeout-ms", 0, "click/type/wait-for-selector: budget in ms (default 5000)")
 	state := fs.String("state", "", "wait-for-selector: visible|attached|detached (default visible)")
@@ -235,11 +236,35 @@ func run(rc *tool.RunContext, args []string) int {
 	if err := requireLiveForTabAddress(*mode, action); err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}
+	if *tabActive {
+		switch {
+		case *mode != "live":
+			return tool.UsageError(rc, cmd, "--active addresses a tab and needs --mode live; %s mode cannot address tabs", *mode)
+		case action.Type == wire.ActionTabs:
+			return tool.UsageError(rc, cmd, "--active addresses an action's tab; `tabs` lists them (the active one is marked)")
+		case action.MatchURL != "" || action.MatchTitle != "" || action.TabID > 0:
+			return tool.UsageError(rc, cmd, "--active cannot be combined with --url, --title or --id")
+		}
+	}
 	client, err := clientForMode(ctx, *mode, *probeURL, *livePort, soloCfg)
 	if err != nil {
 		return printNoBrowser(rc, *asJSON, *mode, err)
 	}
 	defer client.Close()
+	if *tabActive {
+		list, err := client.Execute(ctx, wire.Action{Type: wire.ActionTabs, TabAction: "list"})
+		if err != nil {
+			return printNoBrowser(rc, *asJSON, *mode, err)
+		}
+		if !list.Success {
+			return printResult(rc, list, *asJSON)
+		}
+		id, err := activeTabID(list.Data)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "%s", err)
+		}
+		action.TabID = id
+	}
 	res, err := client.Execute(ctx, action)
 	cause := ""
 	if err != nil {
@@ -622,6 +647,37 @@ func actionFromArgs(args []string, f actionFlags) (wire.Action, error) {
 		}
 	}
 	return a, nil
+}
+
+// activeTabID picks the tab the human is looking at from a live `tabs` list:
+// the one tab marked active. Several (one per window) is ambiguous and is
+// refused with the candidates, never guessed.
+func activeTabID(data string) (int, error) {
+	var tabs []struct {
+		ID     int    `json:"id"`
+		Active bool   `json:"active"`
+		Title  string `json:"title"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(data), &tabs); err != nil {
+		return 0, fmt.Errorf("--active: cannot read the tab list: %w", err)
+	}
+	var active []string
+	id := 0
+	for _, t := range tabs {
+		if t.Active {
+			id = t.ID
+			active = append(active, fmt.Sprintf("--id %d (%s %s)", t.ID, t.Title, t.URL))
+		}
+	}
+	switch len(active) {
+	case 0:
+		return 0, fmt.Errorf("--active: no tab is active; focus the tab in the browser, or address one with --url, --title or --id")
+	case 1:
+		return id, nil
+	default:
+		return 0, fmt.Errorf("--active: %d tabs are active (one per window); address one: %s", len(active), strings.Join(active, "; "))
+	}
 }
 
 // requireLiveForTabAddress refuses --url/--title/--id outside live mode:
