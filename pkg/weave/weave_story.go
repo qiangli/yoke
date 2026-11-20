@@ -64,9 +64,11 @@ type weaveStory struct {
 	QuotaImmune *quotaImmuneRecord `json:"quota_immune,omitempty"`
 	// Capabilities are the impacted capability IDs `sprint end` gates on —
 	// see sprint_capability_gate.go. Empty means no capability gate.
-	Capabilities []sprintCapability `json:"capabilities,omitempty"`
-	Created      time.Time          `json:"created"`
-	UpdatedAt    time.Time          `json:"updated_at,omitempty"`
+	Capabilities    []sprintCapability `json:"capabilities,omitempty"`
+	Directives      []SprintDirective  `json:"directives,omitempty"`
+	NextDirectiveID int64              `json:"next_directive_id,omitempty"`
+	Created         time.Time          `json:"created"`
+	UpdatedAt       time.Time          `json:"updated_at,omitempty"`
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
@@ -654,6 +656,7 @@ branches, worktrees, and weave workspaces owned by this sprint.`,
 		newSprintStopCmd(),
 		newSprintEndCmd(),
 		newSprintCapabilityCmd(),
+		newSprintDirectiveCmd(),
 		newSprintExtendCmd(),
 		newWeaveStoryTakeCmd(),
 		newWeaveStoryHandoffCmd(),
@@ -877,7 +880,8 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 		}
 		payload := map[string]any{
 			"sprint": s, "ref": sprintRefOf(s), "goal_progress": progress, "next_story": next,
-			"resources": sprintResources(cmd, id), "outcome_cost": sprintOutcomeCost(s, time.Now().UTC()),
+			"directives": activeSprintDirectives(s),
+			"resources":  sprintResources(cmd, id), "outcome_cost": sprintOutcomeCost(s, time.Now().UTC()),
 		}
 		if links {
 			payload["links"] = resolveSprintLinks(s)
@@ -944,6 +948,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags, li
 		}
 		fmt.Fprintf(out, "  runs:       %s\n", strings.Join(strs, " "))
 	}
+	renderSprintShowDirectives(out, s)
 	fmt.Fprintln(out, "  ── continuity (resume brief) ──")
 	if strings.TrimSpace(s.Continuity) == "" {
 		fmt.Fprintln(out, "  (none yet — conductor: `sprint checkpoint` after each step)")
@@ -1807,6 +1812,7 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 		return err
 	}
 	var line string
+	var activeDirectives []SprintDirective
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		s := findWeaveStory(q, id)
 		if s == nil {
@@ -1823,6 +1829,9 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 			return merr
 		}
 		line = msg
+		if len(s.Directives) > 0 && (op == "sprint take" || op == "sprint start") {
+			activeDirectives = activeSprintDirectives(s)
+		}
 		return nil
 	})
 	if lockErr != nil {
@@ -1834,7 +1843,11 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, code, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprint": id, "ok": true}))
+		res := map[string]any{"sprint": id, "ok": true}
+		if len(activeDirectives) > 0 {
+			res["directives"] = activeDirectives
+		}
+		return ec(emitOK(cmd.OutOrStdout(), mode, op, res))
 	}
 	reportAnnounceFailure(cmd.ErrOrStderr(), op)
 	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", op, line)

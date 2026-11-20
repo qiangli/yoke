@@ -84,6 +84,7 @@ func ensureSprintOwnerSession(ctx context.Context, id int64, owner, brief, cwd s
 		if q, e := readWeaveQueue(dir); e == nil {
 			if s := findWeaveStory(q, id); s != nil {
 				req.Env["BASHY_MINT_SPRINT"] = s.UUID
+				req.Brief = applySprintDirectives(req.Brief, s.ID, s.Directives)
 			}
 		}
 	}

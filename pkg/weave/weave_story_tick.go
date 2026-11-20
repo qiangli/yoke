@@ -107,14 +107,15 @@ type sprintTick struct {
 
 	Mail sprintTickMail `json:"mail"`
 	// Board is the story census plus what demonstrably moved since Since.
-	Board     sprintTickBoard       `json:"board"`
-	Fleet     sprintTickFleet       `json:"fleet"`
-	Silent    []sprintTickRun       `json:"silent,omitempty"`
-	Review    []sprintTickRun       `json:"review,omitempty"`
-	Brief     sprintTickBrief       `json:"brief"`
-	Gate      sprintTickGate        `json:"gate"`
-	Seat      sprintTickSeat        `json:"seat"`
-	Resources SprintResourceSummary `json:"resources"`
+	Board      sprintTickBoard       `json:"board"`
+	Fleet      sprintTickFleet       `json:"fleet"`
+	Silent     []sprintTickRun       `json:"silent,omitempty"`
+	Review     []sprintTickRun       `json:"review,omitempty"`
+	Brief      sprintTickBrief       `json:"brief"`
+	Gate       sprintTickGate        `json:"gate"`
+	Seat       sprintTickSeat        `json:"seat"`
+	Directives []SprintDirective     `json:"directives,omitempty"`
+	Resources  SprintResourceSummary `json:"resources"`
 }
 
 type sprintTickMail struct {
@@ -320,6 +321,9 @@ func collectSprintTick(dir string, id int64, as string) (sprintTick, error) {
 	t.Brief = sprintTickReadBrief(s)
 	t.Gate = sprintTickReadGate(s)
 	t.Seat = sprintTickReadSeat(s)
+	if len(s.Directives) > 0 {
+		t.Directives = activeSprintDirectives(s)
+	}
 	return t, nil
 }
 
@@ -593,6 +597,8 @@ func renderSprintTick(w io.Writer, t sprintTick) {
 	default:
 		fmt.Fprintf(w, "  brief:   %s old\n", t.Brief.Age)
 	}
+
+	renderSprintTickDirectives(w, t.Directives)
 
 	fmt.Fprintf(w, "  gate:    %s\n", t.Gate.Verdict)
 	if len(t.Gate.Unchecked) > 0 {

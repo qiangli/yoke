@@ -2403,6 +2403,7 @@ func runWeaveAddFullTiered(cmd *cobra.Command, title, body, priority, verify, su
 	if prio == "" {
 		prio = "p2"
 	}
+	body = applySprintDirectivesForWeaveAdd(root, body, nil)
 	var it *weaveItem
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it = &weaveItem{
@@ -3570,6 +3571,21 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// the registry with the issue body as the prompt. This is resolved here,
 	// after the issue is known, because the body IS the prompt.
 	var steerReplayedThrough int64
+	syncedDirectiveBody := ""
+	hasSyncedDirectiveBody := false
+	if it.ScriptAssignment == nil && !opts.blind && !it.Blind {
+		if sp := sprintForWeaveRun(root, dir, it); sp != nil {
+			baseBody := it.Body
+			if strings.TrimSpace(baseBody) == "" && len(sp.Directives) > 0 {
+				baseBody = it.Title
+			}
+			if updated := applySprintDirectives(baseBody, sp.ID, sp.Directives); updated != it.Body {
+				it.Body = updated
+				syncedDirectiveBody = updated
+				hasSyncedDirectiveBody = true
+			}
+		}
+	}
 	promptBody := it.Body
 	if opts.resume && !opts.blind && !it.Blind && it.ArenaSprint == 0 {
 		promptBody, steerReplayedThrough, err = weaveResumePrompt(it)
@@ -3957,6 +3973,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				freshIt.WorkerStories = handoffWorkerStories
 			}
 			prevOwner := freshIt.Owner
+			if hasSyncedDirectiveBody {
+				freshIt.Body = syncedDirectiveBody
+			}
 			freshIt.WrapperPid = os.Getpid()
 			weaveRecordAdmission(freshIt, admission)
 			// Flip back to working and clear the stale terminal
@@ -4036,6 +4055,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					it.ID, freshIt.WrapperPid, errWeaveWrapperLive)
 			}
 			freshIt.State = "allocated"
+			if hasSyncedDirectiveBody {
+				freshIt.Body = syncedDirectiveBody
+			}
 			freshIt.Workspace = workspace
 			freshIt.Branch = branch
 			freshIt.BaseSHA = baseSHA

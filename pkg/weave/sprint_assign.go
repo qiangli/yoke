@@ -266,6 +266,7 @@ func sprintAssignSeed(cmd *cobra.Command, sprint int64, root string, story *issu
 	}
 	body += fmt.Sprintf("\n\nDelivery commit trailers:\nSprint: #%d\nStory: #%d\nStory-ID: %s\n", sprint, story.Seq, story.ID)
 	body += sprintAssignCollaborationPreamble
+	body = applySprintDirectivesForID(body, sprint)
 	if len(scriptBody) > 0 {
 		body = scriptBody[0].Body
 	}
