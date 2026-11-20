@@ -6,8 +6,11 @@ seq: 3140
 status: assigned
 priority: p1
 created: 2026-11-20T13:44:14.501114Z
-weave: 93
+weave: 94
 assignee: qiangli
+sprint: 680
+sprint_id: af559546-24b2-5355-8565-b4f41449486e
+sprint_title: 'Human-in-the-loop browser: ping-back and remote headless web-app testing'
 ---
 
 Operator 2026-11-20: in the live-mode extension popup, a 'Send this tab to the agent' button plus an OPTIONAL text box for an additional message. Sends {tab id, url, title, message} to the agent's inbox (bashy mb), so a running session sees it like a steer and can act with --id (or --active). Needs: which agent (default: the live chat session / last addressed agent, selectable), the extension change, and a store re-submission (CWS/Edge). Pairs with --active.

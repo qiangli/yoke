@@ -6,6 +6,9 @@ seq: 3139
 status: todo
 priority: p2
 created: 2026-11-20T13:44:13.987386Z
+sprint: 680
+sprint_id: af559546-24b2-5355-8565-b4f41449486e
+sprint_title: 'Human-in-the-loop browser: ping-back and remote headless web-app testing'
 ---
 
 Operator 2026-11-20: agents should act on the tab in focus. --active (live mode) resolves the one active tab from the tabs list and addresses the action by id; several active tabs (one per window) is an error listing them; refused outside live mode and with --url/--title/--id.
