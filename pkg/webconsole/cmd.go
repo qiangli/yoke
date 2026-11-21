@@ -47,7 +47,12 @@ func NewAppsCmd() *cobra.Command {
 		newPairCmd(), newDevicesCmd(), newRevokeCmd(), newTidyCmd())
 	// Registered apps: the operator's own tiles (add · show · set · rm · edit
 	// · schema), persisted in the fleet ring beside the stock panels.
-	cmd.AddCommand(fleet.NewAppCmds(fleet.WithAppValidate(ValidateRegisteredApp))...)
+	for _, sub := range fleet.NewAppCmds(fleet.WithAppValidate(ValidateRegisteredApp)) {
+		if sub.Name() == "show" {
+			addAppRuntimeFlag(sub)
+		}
+		cmd.AddCommand(sub)
+	}
 	// Bare `bashy app` serves — the common case should not need a subcommand.
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		serve, _, err := c.Find([]string{"serve"})

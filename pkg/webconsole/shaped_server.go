@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -84,6 +85,11 @@ type serverProc struct {
 	cancel  context.CancelFunc
 	scratch string // removed on stop: an anonymous caller's data directory
 	stderr  *tailBuffer
+
+	runtimeMu      sync.Mutex
+	runtimeStore   *shape.Store
+	runtimeRecord  shape.Runtime
+	runtimeStopped bool
 
 	mu       sync.Mutex
 	last     time.Time
@@ -207,6 +213,18 @@ func (a *shapedApp) serveServer(w http.ResponseWriter, r *http.Request, c *objec
 		return
 	}
 	defer p.touch(-1)
+	if publicURL, ok := r.Context().Value(appRuntimeURLKey{}).(string); ok {
+		st, err := a.store(principal)
+		if err == nil {
+			err = p.publishRuntime(st, shape.Runtime{
+				Addr: p.addr, Data: dataDir, URL: publicURL,
+				PID: os.Getpid(), Revision: c.Hash.String(),
+			})
+		}
+		if err != nil {
+			slog.Warn("shaped app: cannot publish runtime", "app", a.name, "err", err)
+		}
+	}
 	tree, _ := c.Tree()
 	shapedServerProxy(p, func(page string) genieTag {
 		return genieTagFor(r, a.name, a.mount, tree, page, "")
@@ -422,6 +440,7 @@ func (s *shapedServers) launch(a *shapedApp, p *serverProc, bin string, srv *app
 	argv := append([]string{bin}, srv.Argv(p.addr, port, dataDir)...)
 	go func() {
 		defer close(p.exited)
+		defer p.removeRuntime()
 		defer p.cleanup()
 		_, err := contain.Run(ctx, contain.Spec{
 			Dir: dataDir, Argv: argv, Level: contain.LevelProcess, Cap: "read,write",
