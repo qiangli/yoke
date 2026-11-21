@@ -1221,11 +1221,13 @@ func ClaimPost(seq int64, reader string) (holder string, granted bool) {
 		_, _ = f.WriteString(reader + " " + time.Now().UTC().Format(time.RFC3339) + "\n")
 		return reader, true
 	}
-	b, rerr := os.ReadFile(p)
-	if rerr != nil {
-		return "", false
+	for attempt := 0; attempt < 20; attempt++ {
+		if holder = ClaimHolder(seq); holder != "" {
+			return holder, false
+		}
+		time.Sleep(time.Millisecond)
 	}
-	return strings.Fields(strings.TrimSpace(string(b)))[0], false
+	return "", false
 }
 
 // ClaimHolder reports who holds an ModeAny post, or "" when it is unclaimed.
