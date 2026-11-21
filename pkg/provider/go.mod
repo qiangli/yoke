@@ -4,4 +4,4 @@ module github.com/qiangli/yoke/pkg/provider
 // this contract, the dispatcher and the DigitalOcean adapter directly.
 go 1.26
 
-toolchain go1.26.9
+toolchain go1.27.4
