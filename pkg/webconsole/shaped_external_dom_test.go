@@ -243,7 +243,7 @@ func (d chromedpExternalDriver) CheckActiveUI(ctx context.Context) (string, erro
 
 func (d chromedpExternalDriver) CaptureScreenshot(ctx context.Context) ([]byte, error) {
 	var image []byte
-	if err := chromedp.FullScreenshot(&image, 90).Do(ctx); err != nil {
+	if err := chromedp.Run(ctx, chromedp.FullScreenshot(&image, 90)); err != nil {
 		return nil, err
 	}
 	return image, nil
