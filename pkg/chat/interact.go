@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -205,9 +206,17 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 				}
 				return 0, nil
 			}
-			return 1, errAgentLive(live.ID, live.PID, prior.Cwd)
+			// A human starting an agent that is already live gets the next free
+			// instance of it (name+2, name+3, …) with its own context, inbox and
+			// socket — never a second session inside the first one's identity.
+			if err := joinNextInstance(&card); err != nil {
+				return 1, err
+			}
+			fmt.Fprintf(status, "chat: %s is already live (pid %d) — starting instance %s\n", live.ID, live.PID, card.ID)
+			id, sock, name = card.ID, card.CtlSock, card.ID
+		} else {
+			return 1, err
 		}
-		return 1, err
 	}
 	defer room.Leave(card.ID)
 	releaseInbox, err := bus.BindInstance(name, card.ID)
@@ -267,9 +276,9 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	if card.Binding != "" {
 		who += " (" + card.Binding + ")"
 	}
-	fmt.Fprintf(status, "chat: %s — %s (id %s). Ctrl-C ends it; "+
+	fmt.Fprintf(status, "chat: %s — %s (id %s, %s). Ctrl-C ends it; "+
 		"from another terminal: `bashy chat steer %s \"...\"` / `attach %s`.\n",
-		who, posture, card.ID, card.ID, card.ID)
+		who, posture, card.ID, hostVersionLabel(), card.ID, card.ID)
 	fmt.Fprintln(status, startedLine(name, os.Getenv("BASHY_CHAT_INBOX") != "off"))
 
 	// An interactive instruction must go through the live terminal, after the TUI
@@ -601,4 +610,44 @@ func publishGeometry(card room.Card) func(rows, cols uint16) {
 		card.Rows, card.Cols = int(rows), int(cols)
 		_ = room.Join(card) // update: this process holds the id
 	}
+}
+
+// HostVersion reports the running bashy release ("1.0.0-rc.39"); bashy wires
+// it at startup. Printed in the session banner so a human sees which build
+// they are on.
+var HostVersion = func() string { return "" }
+
+func hostVersionLabel() string {
+	if v := strings.TrimSpace(HostVersion()); v != "" {
+		return "bashy v" + strings.TrimPrefix(v, "v")
+	}
+	return "bashy dev"
+}
+
+// joinNextInstance claims the first free name+N room key (N from 2) for card,
+// moving its control socket with it. A live holder of a candidate is skipped.
+func joinNextInstance(card *room.Card) error {
+	base := card.ID
+	for n := 2; n < 100; n++ {
+		id := room.AgentClaimID(base + "+" + strconv.Itoa(n))
+		sock, err := sessionSock(id)
+		if err != nil {
+			return err
+		}
+		next := *card
+		next.ID, next.CtlSock = id, sock
+		if next.Nick == "" {
+			next.Nick = id
+		}
+		err = room.Join(next)
+		if err == nil {
+			*card = next
+			return nil
+		}
+		var live *room.ErrLive
+		if !errors.As(err, &live) {
+			return err
+		}
+	}
+	return fmt.Errorf("chat: %s has no free instance up to %s+99", base, base)
 }

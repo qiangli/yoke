@@ -236,6 +236,8 @@ var appendMu sync.Mutex
 
 var agentClaimUnsafe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
+var agentInstanceSuffix = regexp.MustCompile(`^(.*[a-zA-Z0-9].*)\+([0-9]+)$`)
+
 // AgentClaimID maps a registered fleet agent name to the room key used by
 // every singleton session surface. It deliberately preserves chat's original
 // host identity spelling so existing conversation stores, sockets, and command
@@ -245,6 +247,12 @@ var agentClaimUnsafe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 // room/storage key, not a replacement for the human-facing identity.
 func AgentClaimID(name string) string {
 	claim := strings.TrimSpace(name)
+	// name+N is instance N of the same identity (the plus-address convention),
+	// started when name is already live; the suffix survives as written so the
+	// printed id is the one steer/attach resolve.
+	if m := agentInstanceSuffix.FindStringSubmatch(claim); m != nil {
+		return AgentClaimID(m[1]) + "+" + m[2]
+	}
 	claim = strings.Trim(agentClaimUnsafe.ReplaceAllString(claim, "-"), "-")
 	if claim == "" {
 		return "agent"
