@@ -200,6 +200,9 @@ func TestMainLine_SelfSendCallerIDAndCrossGenerationRefusal(t *testing.T) {
 	t.Cleanup(func() { IsMainLineTool = nil })
 	DetectHarness = func() (string, bool) { return "claude", true }
 	t.Cleanup(func() { DetectHarness = nil })
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("BASHY_INSTANCE", "")
+	t.Setenv("BASHY_INSTANCE_UUID", "")
 	t.Setenv("BASHY_SESSION_CLAIM", "")
 
 	store := InstanceStoreFn()
@@ -257,5 +260,122 @@ func TestMainLine_SelfSendCallerIDAndCrossGenerationRefusal(t *testing.T) {
 	t.Setenv("BASHY_SESSION_CLAIM", HashSessionClaim("wrong-session"))
 	if _, _, err := runMBCmd(t, "send", "--as", "claude+3", "claude+2", "hijack plus3"); err == nil {
 		t.Fatal("expected refusal for wrong session claim authoring as claude+3")
+	}
+}
+
+func TestMainLine_UUIDMatchedCardFencingAndInheritedSessionClaim(t *testing.T) {
+	boardInTempHome(t)
+	IsMainLineTool = func(name string) bool { return strings.EqualFold(name, "claude") }
+	t.Cleanup(func() { IsMainLineTool = nil })
+	DetectHarness = func() (string, bool) { return "claude", true }
+	t.Cleanup(func() { DetectHarness = nil })
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("BASHY_INSTANCE", "")
+	t.Setenv("BASHY_INSTANCE_UUID", "")
+	t.Setenv("BASHY_SESSION_CLAIM", "")
+
+	store := InstanceStoreFn()
+	// Generation 1: claude+2 with live card, then retired leaving stale label card
+	// and stale BASHY_INSTANCE trace.
+	gen1 := testOpenMainLineInstance(t, store, "claude+2", "sess-gen1", 0)
+	if _, err := store.Retire(gen1.UUID, InstanceMail); err != nil {
+		t.Fatal(err)
+	}
+	room.Leave(gen1.ClaimID())
+
+	// Join a label-only card with NO UUID and a label card carrying gen1's stale UUID.
+	if err := room.Join(room.Card{
+		ID: room.AgentClaimID("claude+2"), Nick: "claude+2", Tool: "claude",
+		PID: os.Getpid(), OwnerPID: os.Getpid(),
+		SessionClaim: HashSessionClaim("label-only-no-uuid"),
+		Principal:    "operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Join(room.Card{
+		ID: "claude+2", Nick: "claude+2", Tool: "claude",
+		PID: os.Getpid(), OwnerPID: os.Getpid(),
+		SessionClaim: HashSessionClaim("sess-gen1"),
+		Principal:    principal.InstanceURN(gen1.UUID),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Retired gen1 UUID and retired extension label must NOT be considered live.
+	if ReaderHasLiveSession(gen1.MailAddress(), "claude") {
+		t.Fatal("retired UUID satisfied ReaderHasLiveSession via label fallback")
+	}
+	if ReaderHasLiveSession("claude+2", "claude") {
+		t.Fatal("retired/stale label satisfied ReaderHasLiveSession via label-only card")
+	}
+
+	// Generation 2 opens claude+2 with NO instance:<gen2> card yet:
+	// neither the label-only card nor gen1's stale-UUID label card may satisfy gen2.
+	gen2 := testOpenMainLineInstance(t, store, "claude+2", "", BoardHeadSeq()+1)
+	if ReaderHasLiveSession(gen2.MailAddress(), "claude") || ReaderHasLiveSession("claude+2", "claude") {
+		t.Fatal("gen2 appeared live from label-only or stale-UUID room card")
+	}
+
+	// Stale generation trace in BASHY_INSTANCE (even with empty BASHY_PRINCIPAL)
+	// must be refused on both bare send and --as claude+2.
+	gen3 := testOpenMainLineInstance(t, store, "claude+3", "sess-gen3", BoardHeadSeq()+1)
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("BASHY_INSTANCE", gen1.UUID)
+	t.Setenv("BASHY_SESSION_CLAIM", HashSessionClaim("sess-gen1"))
+	if _, _, err := runMBCmd(t, "send", "claude+3", "from retired gen1"); err == nil {
+		t.Fatal("expected refusal for stale BASHY_INSTANCE on bare mb send")
+	}
+	if _, _, err := runMBCmd(t, "send", "--as", "claude+2", "claude+3", "spoof gen2"); err == nil {
+		t.Fatal("expected refusal for stale BASHY_INSTANCE authoring as reused claude+2")
+	}
+
+	// Old generation with BASHY_AGENT=claude+2 and stale BASHY_INSTANCE=gen1.UUID
+	// must also be refused even before gen2 joins a room card.
+	t.Setenv("BASHY_AGENT", "claude+2")
+	if _, _, err := runMBCmd(t, "send", "--as", "claude+2", "claude+3", "stale trace + BASHY_AGENT"); err == nil {
+		t.Fatal("expected refusal when stale BASHY_INSTANCE accompanies BASHY_AGENT=claude+2")
+	}
+	t.Setenv("BASHY_AGENT", "")
+
+	// Now gen2 joins a UUID-matched card under its label ID (with foreign OwnerPID
+	// to prove inherited BASHY_SESSION_CLAIM digest protocol without PID ancestry).
+	room.Leave(room.AgentClaimID("claude+2"))
+	room.Leave("claude+2")
+	foreignPID := foreignLivePID(t)
+	if err := room.Join(room.Card{
+		ID: "claude+2", Nick: "claude+2", Tool: "claude",
+		PID: foreignPID, OwnerPID: foreignPID,
+		SessionClaim: HashSessionClaim("sess-gen2"),
+		Principal:    principal.InstanceURN(gen2.UUID),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !ReaderHasLiveSession(gen2.MailAddress(), "claude") || !ReaderHasLiveSession("claude+2", "claude") {
+		t.Fatal("gen2 with UUID-matched live label card should satisfy ReaderHasLiveSession")
+	}
+
+	// Inherited BASHY_SESSION_CLAIM digest succeeds for gen2 even with foreign OwnerPID.
+	t.Setenv("BASHY_INSTANCE", "")
+	t.Setenv("BASHY_SESSION_CLAIM", HashSessionClaim("sess-gen2"))
+	if _, _, err := runMBCmd(t, "send", "--as", "claude+2", "claude+3", "gen2 inherited digest"); err != nil {
+		t.Fatalf("inherited BASHY_SESSION_CLAIM digest for UUID-matched gen2 failed: %v", err)
+	}
+
+	// Competing --as refusal: another live extension session (claude+3) and a
+	// wrong-digest session must both be refused when passing --as claude+2 or gen2 UUID.
+	t.Setenv("BASHY_PRINCIPAL", principal.InstanceURN(gen3.UUID))
+	t.Setenv("BASHY_INSTANCE", gen3.UUID)
+	t.Setenv("BASHY_SESSION_CLAIM", HashSessionClaim("sess-gen3"))
+	if _, _, err := runMBCmd(t, "send", "--as", "claude+2", "claude+3", "competing gen3"); err == nil {
+		t.Fatal("expected competing --as claude+2 refusal from claude+3 session")
+	}
+	if _, _, err := runMBCmd(t, "send", "--as", gen2.UUID, "claude+3", "competing gen3 by uuid"); err == nil {
+		t.Fatal("expected competing --as <gen2.UUID> refusal from claude+3 session")
+	}
+	t.Setenv("BASHY_PRINCIPAL", "")
+	t.Setenv("BASHY_INSTANCE", "")
+	t.Setenv("BASHY_SESSION_CLAIM", HashSessionClaim("competing-wrong-digest"))
+	if _, _, err := runMBCmd(t, "send", "--as", "claude+2", "claude+3", "competing digest"); err == nil {
+		t.Fatal("expected competing digest --as claude+2 refusal")
 	}
 }

@@ -321,3 +321,59 @@ func TestPrependIsInertWithoutNotifications(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareAdmissionClaimsOnlyAdmittedAndDropsRejected(t *testing.T) {
+	isolate(t)
+	oldItems := PrepareTurnItems
+	t.Cleanup(func() { PrepareTurnItems = oldItems })
+
+	claimed := map[string]bool{}
+	PrepareTurnItems = func(agent string) ([]admission.Item, error) {
+		return []admission.Item{
+			{
+				Source: "mb", ID: "1", Sequence: 3, To: "claude",
+				Priority: admission.PriorityUrgent, Body: "lost hunt item",
+				ArtifactRef: "bashy inbox --id mb:1 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Claim:       func() bool { return false },
+			},
+			{
+				Source: "mb", ID: "2", Sequence: 2, To: "claude",
+				Priority: admission.PriorityDirected, Body: "won hunt item",
+				ArtifactRef: "bashy inbox --id mb:2 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Claim: func() bool {
+					claimed["mb:2"] = true
+					return true
+				},
+			},
+			{
+				Source: "mb", ID: "3", Sequence: 1, To: "claude",
+				Priority: admission.PriorityInformational, Body: "withheld hunt item",
+				ArtifactRef: "bashy inbox --id mb:3 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Claim: func() bool {
+					claimed["mb:3"] = true
+					return true
+				},
+			},
+		}, nil
+	}
+
+	p := PrepareLaunchPreamble("claude+2")
+	if err := p.Err(); err != nil {
+		t.Fatalf("PrepareLaunchPreamble: %v", err)
+	}
+	if strings.Contains(p.Text, "lost hunt item") {
+		t.Fatalf("rejected claim body was exposed:\n%s", p.Text)
+	}
+	if !strings.Contains(p.Text, "won hunt item") {
+		t.Fatalf("fallback admitted item was not exposed:\n%s", p.Text)
+	}
+	if !claimed["mb:2"] {
+		t.Fatal("admitted item mb:2 was not claimed before Commit")
+	}
+	if claimed["mb:3"] {
+		t.Fatal("withheld item mb:3 was claimed despite not being admitted")
+	}
+}

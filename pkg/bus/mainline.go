@@ -87,11 +87,16 @@ func ReaderHasLiveSession(reader, line string) bool {
 		}
 		return instanceCardLive(inst)
 	}
-	if inst, found, err := ResolveLiveInstanceByLabel(reader); err == nil && found {
+	if inst, found, err := ResolveLiveInstanceByLabel(reader); err != nil {
+		return false
+	} else if found {
 		if !instanceBelongsToLine(inst, line) {
 			return false
 		}
 		return instanceCardLive(inst)
+	}
+	if _, _, isExt := ParseExtensionLabel(reader); isExt {
+		return false
 	}
 	if !strings.EqualFold(MainLineBase(reader), line) && !strings.EqualFold(resolveBoardName(reader), line) {
 		return false
@@ -119,25 +124,43 @@ func instanceBelongsToLine(inst fleet.Instance, line string) bool {
 }
 
 func instanceCardLive(inst fleet.Instance) bool {
-	if _, live, err := room.Find(inst.ClaimID()); err == nil && live {
+	if card, live, err := room.Find(inst.ClaimID()); err == nil && live {
+		if pID, ok := ExplicitInstanceID(card.Principal); ok {
+			return strings.EqualFold(pID, inst.UUID)
+		}
 		return true
 	}
 	if label := strings.TrimSpace(inst.Label); label != "" {
-		if _, live, err := room.Find(room.AgentClaimID(label)); err == nil && live {
-			return true
-		}
-		if _, live, err := room.Find(label); err == nil && live {
-			return true
+		for _, cid := range []string{room.AgentClaimID(label), label} {
+			if card, live, err := room.Find(cid); err == nil && live && cardMatchesInstanceUUID(card, inst.UUID) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+func cardMatchesInstanceUUID(card room.Card, uuid string) bool {
+	pID, ok := ExplicitInstanceID(card.Principal)
+	return ok && strings.EqualFold(pID, strings.TrimSpace(uuid))
+}
+
 func namedCardLive(name string) bool {
-	if _, live, err := room.Find(room.AgentClaimID(name)); err == nil && live {
-		return true
-	}
-	if _, live, err := room.Find(name); err == nil && live {
+	for _, cid := range []string{room.AgentClaimID(name), name} {
+		card, live, err := room.Find(cid)
+		if err != nil || !live {
+			continue
+		}
+		if pID, ok := ExplicitInstanceID(card.Principal); ok {
+			inst, ierr := InstanceStoreFn().Get(pID)
+			if ierr != nil || !inst.Active() {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(inst.Label), name) &&
+				!(inst.Handle != "" && strings.EqualFold(strings.TrimSpace(inst.Handle), name)) {
+				continue
+			}
+		}
 		return true
 	}
 	return false

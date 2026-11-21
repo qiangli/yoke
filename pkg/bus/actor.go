@@ -161,7 +161,7 @@ func selfInstanceIDFromEnv(stamp string) string {
 	}
 	if id, ok := principal.SelfInstanceUUID(); ok {
 		inst, err := InstanceStoreFn().Get(id)
-		if err != nil || !inst.Active() {
+		if err != nil {
 			return ""
 		}
 		if stamp == "" {
@@ -198,12 +198,24 @@ func resolveInstanceActor(id, requested string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("authored communication: inspect session claim for instance %s: %w", inst.UUID, err)
 	}
+	if live {
+		if pID, pOk := ExplicitInstanceID(card.Principal); pOk && !strings.EqualFold(pID, inst.UUID) {
+			return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; claim %s is held by instance %s",
+				inst.UUID, inst.ClaimID(), pID)
+		}
+	}
 	if !live && strings.TrimSpace(inst.Label) != "" {
-		if labelCard, lLive, lerr := room.Find(room.AgentClaimID(inst.Label)); lerr == nil && lLive {
-			card, live = labelCard, true
-			if pID, pOk := ExplicitInstanceID(labelCard.Principal); pOk && !strings.EqualFold(pID, inst.UUID) {
-				return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; label %q is held by instance %s",
-					inst.UUID, inst.Label, pID)
+		for _, cid := range []string{room.AgentClaimID(inst.Label), inst.Label} {
+			if labelCard, lLive, lerr := room.Find(cid); lerr == nil && lLive {
+				pID, pOk := ExplicitInstanceID(labelCard.Principal)
+				if pOk && !strings.EqualFold(pID, inst.UUID) {
+					return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; label %q is held by instance %s",
+						inst.UUID, inst.Label, pID)
+				}
+				if pOk && strings.EqualFold(pID, inst.UUID) {
+					card, live = labelCard, true
+					break
+				}
 			}
 		}
 	}
@@ -237,9 +249,11 @@ func resolveInstanceActor(id, requested string) (string, error) {
 	if DetectHarness != nil {
 		if _, detected := DetectHarness(); detected {
 			selfID := selfInstanceIDFromEnv(strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL")))
+			callerID, hasCaller := principal.SelfInstanceUUID()
 			declared, hasDeclared := declaredAgentIdentity()
 			selfMatches := selfID != "" && strings.EqualFold(selfID, inst.UUID)
-			declaredMatches := hasDeclared && (strings.EqualFold(declared, inst.Label) || strings.EqualFold(declared, inst.UUID))
+			declaredMatches := hasDeclared && selfID == "" && (!hasCaller || strings.EqualFold(callerID, inst.UUID)) &&
+				(strings.EqualFold(declared, inst.Label) || strings.EqualFold(declared, inst.UUID))
 			if !selfMatches && !declaredMatches {
 				return "", fmt.Errorf("authored communication: instance %s (%s) has no matching live session claim — export BASHY_AGENT=%s or run `bashy inbox --as %s --peek` in its session",
 					inst.UUID, inst.Label, inst.Label, inst.Label)
