@@ -324,10 +324,31 @@ func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
 	report.OmittedBytes += inboxBytes(withheld)
 	report.UnrepresentedItems += len(withheld)
 	report.UnrepresentedBytes += inboxBytes(withheld)
+	// When the host adapter tracks turn delivery separately from explicit
+	// acknowledgement (MarkDelivered != nil), commit only the items actually
+	// rendered inline so withheld items stay unread and retrievable via
+	// `bashy inbox`. Legacy adapters without MarkDelivered keep advancing all
+	// host items alongside the bus snapshot.
 	acks := []func() error{func() error { return snapshot.Commit() }}
+	hasSeparateDelivery := false
 	for _, h := range host {
-		if h.Acknowledge != nil {
-			acks = append(acks, h.Acknowledge)
+		if h.MarkDelivered != nil {
+			hasSeparateDelivery = true
+			break
+		}
+	}
+	if hasSeparateDelivery {
+		acks = append(acks, rendered.Commit)
+		for _, h := range host {
+			if h.MarkDelivered == nil && h.Acknowledge != nil {
+				acks = append(acks, h.Acknowledge)
+			}
+		}
+	} else {
+		for _, h := range host {
+			if h.Acknowledge != nil {
+				acks = append(acks, h.Acknowledge)
+			}
 		}
 	}
 	prepared := PreparedPreamble{Text: text, ack: acks, report: report}

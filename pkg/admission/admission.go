@@ -53,7 +53,12 @@ type Item struct {
 	// OverflowRef opens the source's unread view when this item cannot receive
 	// even an individual header. It may be shared by every item from a source.
 	OverflowRef string
-	Acknowledge func() error
+	// MarkDelivered, when non-nil, records turn-boundary delivery separately
+	// from explicit acknowledgement so withheld items remain unread and
+	// inline-shown items are not marked acknowledged. When nil, Render falls
+	// back to Acknowledge.
+	MarkDelivered func() error
+	Acknowledge   func() error
 }
 
 // Options controls one composition boundary.
@@ -316,8 +321,14 @@ func Render(items []Item, opt Options) (Prepared, error) {
 	}
 	prepared := Prepared{Text: text, Report: report}
 	for _, c := range candidates {
-		if c.mode > 0 && c.item.Acknowledge != nil {
-			prepared.ack = append(prepared.ack, c.item.Acknowledge)
+		if c.mode > 0 {
+			ack := c.item.MarkDelivered
+			if ack == nil {
+				ack = c.item.Acknowledge
+			}
+			if ack != nil {
+				prepared.ack = append(prepared.ack, ack)
+			}
 		}
 	}
 	return prepared, nil

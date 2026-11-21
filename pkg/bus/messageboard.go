@@ -248,10 +248,29 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		// state change that depends on a pipe staying open is not one.
 		concerns := DeclaredConcerns(who)
 		labels := make(map[int64]string, len(posts))
+		var holdCursorSeq int64
 		if !history && !peek {
+			kept := make([]Post, 0, len(posts))
 			for _, p := range posts {
+				if p.IsHuntGroup() {
+					if !ReaderHasLiveSession(who, p.To) {
+						if ClaimHolder(p.Seq) == "" && (holdCursorSeq == 0 || p.Seq < holdCursorSeq) {
+							holdCursorSeq = p.Seq
+						}
+						continue
+					}
+					holder, granted := ClaimPost(p.Seq, who)
+					if !granted && !ClaimMatchesReader(holder, who) {
+						continue
+					}
+					labels[p.Seq] = "you (claimed)"
+					kept = append(kept, p)
+					continue
+				}
 				labels[p.Seq] = resolveLabel(p, who, concerns, audiences)
+				kept = append(kept, p)
 			}
+			posts = kept
 		}
 		w := cmd.OutOrStdout()
 		if jsonOut {
@@ -283,7 +302,7 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 						to += " [" + strings.Join(v, ", ") + "]"
 					}
 				}
-				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s`%s → %s\n  %s\n", p.Seq, p.Topic, p.From, formatFromSeats(p.FromSeats), to, p.Body)
+				fmt.Fprintf(w, "- [mb:%d] **%s** from `%s`%s → %s\n  %s\n", p.Seq, p.Topic, formatPostFrom(p), formatFromSeats(p.FromSeats), to, p.Body)
 				if line := refsLine(MessageLocators(p.Body, p.From)); line != "" {
 					fmt.Fprintf(w, "  %s\n", line)
 				}
@@ -303,7 +322,14 @@ func readBoard(cmd *cobra.Command, o boardRead) error {
 		if peek || history || len(posts) == 0 {
 			return nil
 		}
-		return MarkSeen(who, posts[len(posts)-1].Seq)
+		through := posts[len(posts)-1].Seq
+		if holdCursorSeq > 0 && through >= holdCursorSeq {
+			through = holdCursorSeq - 1
+		}
+		if through <= 0 {
+			return nil
+		}
+		return MarkSeen(who, through)
 	}
 }
 
@@ -317,6 +343,13 @@ func formatFromSeats(seats []string) string {
 		return ""
 	}
 	return " [" + strings.Join(seats, ", ") + "]"
+}
+
+func formatPostFrom(p Post) string {
+	if _, ok := ExplicitInstanceID(p.From); ok && p.FromParty != nil && strings.TrimSpace(p.FromParty.Label) != "" {
+		return p.FromParty.Label
+	}
+	return p.From
 }
 
 // newMBSendCmd posts to one agent, or to everyone a selector matches.
@@ -363,7 +396,7 @@ func newMBShowCmd() *cobra.Command {
 				enc.SetIndent("", "  ")
 				return enc.Encode(out)
 			}
-			fmt.Fprintf(w, "mb:%d  %s from %s%s -> %s\n", p.Seq, p.Topic, p.From, formatFromSeats(p.FromSeats), p.Audiences())
+			fmt.Fprintf(w, "mb:%d  %s from %s%s -> %s\n", p.Seq, p.Topic, formatPostFrom(p), formatFromSeats(p.FromSeats), p.Audiences())
 			if p.Seat != "" {
 				fmt.Fprintf(w, "seat   %s\n", p.Seat)
 			}
@@ -625,6 +658,15 @@ func resolveLabel(p Post, who string, concerns []string, audiences audienceSnaps
 
 // describeFor labels a post WITHOUT side effects, for --history and --peek.
 func describeFor(p Post, who string, concerns []string, audiences audienceSnapshot) string {
+	if p.IsHuntGroup() {
+		if h := ClaimHolder(p.Seq); h != "" {
+			if ClaimMatchesReader(h, who) {
+				return "you (claimed)"
+			}
+			return p.Audiences() + " — taken by " + formatClaimHolder(h)
+		}
+		return p.Audiences() + " — unclaimed"
+	}
 	if p.directed(who, audiences) {
 		return "you"
 	}
@@ -657,6 +699,15 @@ func describeFor(p Post, who string, concerns []string, audiences audienceSnapsh
 		}
 	}
 	return base
+}
+
+func formatClaimHolder(holder string) string {
+	if id, ok := ExplicitInstanceID(holder); ok {
+		if inst, err := InstanceStoreFn().Get(id); err == nil && strings.TrimSpace(inst.Label) != "" {
+			return inst.Label
+		}
+	}
+	return holder
 }
 
 // nextSteps tells a reader what the board expects of it, in the OUTPUT rather

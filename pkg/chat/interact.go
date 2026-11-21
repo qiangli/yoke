@@ -20,6 +20,7 @@ import (
 	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmbudget"
+	"github.com/qiangli/yoke/pkg/principal"
 	"github.com/qiangli/yoke/pkg/room"
 )
 
@@ -214,12 +215,24 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 			}
 			fmt.Fprintf(status, "chat: %s is already live (pid %d) — starting instance %s\n", live.ID, live.PID, card.ID)
 			id, sock, name = card.ID, card.CtlSock, card.ID
+			l.Nick = card.Nick
 		} else {
 			return 1, err
 		}
 	}
 	defer room.Leave(card.ID)
-	releaseInbox, err := bus.BindInstance(name, card.ID)
+	instCtx, sessionClaim, releaseSessionInst := openInteractiveInstance(&card, l, cwd)
+	if releaseSessionInst != nil {
+		defer releaseSessionInst()
+	}
+	inboxAddr := name
+	if instCtx.Instance.UUID != "" {
+		inboxAddr = instCtx.Instance.MailAddress()
+		card.Principal = instCtx.Instance.URN()
+		card.SessionClaim = sessionClaim
+		_ = room.Join(card)
+	}
+	releaseInbox, err := bus.BindInstance(inboxAddr, card.ID)
 	if err != nil {
 		return 1, fmt.Errorf("chat: bind %s inbox to live session: %w", name, err)
 	}
@@ -262,6 +275,11 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		// shell to bashy, and stamps its principal identity. Built anywhere else, all
 		// four silently drop.
 		cmd.Env = agentChildEnv(withLaunch(ctx, l))
+	}
+	if instCtx.Instance.UUID != "" {
+		cmd.Env = agentlaunch.ContextEnv(cmd.Env, instCtx)
+		cmd.Env = agentlaunch.SessionEnv(cmd.Env, sessionClaim)
+		cmd.Env = withChildEnvKV(cmd.Env, "BASHY_AGENT", card.ID)
 	}
 	dialogs := interactiveTrust(cmd, l.ToolName, opt, status)
 
@@ -336,9 +354,9 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// bench needs it: every run must see the same input, and board traffic is
 	// neither fixed nor part of any task.
 	if os.Getenv("BASHY_CHAT_INBOX") != "off" {
-		mail := newPTYInbox(name)
+		mail := newPTYInbox(inboxAddr)
 		go runInboxRelay(ctx, sessionDone, inboxReady,
-			func() bus.PreparedPreamble { return bus.PrepareForAgent(name, "") },
+			func() bus.PreparedPreamble { return bus.PrepareForAgent(inboxAddr, "") },
 			func(p bus.PreparedPreamble) error {
 				complete, err := mail.deliver(p.Text, func(text string) error { return dialogs.Send(agentpty.TextFrame(text)) })
 				if err != nil || !complete {
@@ -346,7 +364,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 				}
 				recordPreambleAdmission(context.Background(), p)
 				return p.Commit()
-			}, bus.NewInboxPollGate(name))
+			}, bus.NewInboxPollGate(inboxAddr))
 	}
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
@@ -636,9 +654,7 @@ func joinNextInstance(card *room.Card) error {
 		}
 		next := *card
 		next.ID, next.CtlSock = id, sock
-		if next.Nick == "" {
-			next.Nick = id
-		}
+		next.Nick = id
 		err = room.Join(next)
 		if err == nil {
 			*card = next
@@ -650,4 +666,55 @@ func joinNextInstance(card *room.Card) error {
 		}
 	}
 	return fmt.Errorf("chat: %s has no free instance up to %s+99", base, base)
+}
+
+// openInteractiveInstance opens a fresh UUID-keyed fleet.Instance for an
+// interactive session so NAME and NAME+N each own an isolated mailbox, cursor,
+// and sender snapshot, and retires it on exit.
+func openInteractiveInstance(card *room.Card, l Launch, cwd string) (agentlaunch.InstanceContext, string, func()) {
+	store := bus.InstanceStoreFn()
+	if store == nil {
+		return agentlaunch.InstanceContext{}, "", nil
+	}
+	fam, err := agentlaunch.FamilyForLaunch(toAgentLaunch(l), nil)
+	if err != nil {
+		tool := strings.TrimSpace(l.ToolName)
+		if tool == "" {
+			tool = strings.TrimSpace(card.Tool)
+		}
+		if tool == "" {
+			return agentlaunch.InstanceContext{}, "", nil
+		}
+		fam = fleet.Family{
+			Name:     tool,
+			Display:  tool,
+			Policy:   fleet.PolicySingle,
+			Bindings: []string{tool},
+		}
+	}
+	mailFrom := bus.BoardHeadSeq() + 1
+	inst, err := store.Open(fam, fleet.OpenOptions{
+		Label:    card.ID,
+		MailFrom: mailFrom,
+	})
+	if err != nil {
+		return agentlaunch.InstanceContext{}, "", nil
+	}
+	sessionClaim := agentlaunch.CurrentSessionClaim()
+	if sessionClaim == "" {
+		sessionClaim = bus.HashSessionClaim(card.ID + ":" + inst.UUID)
+	}
+	_, _ = principal.ClaimInstanceIn(store, inst, principal.InstanceClaim{
+		Session:  sessionClaim,
+		OwnerPID: os.Getpid(),
+		Cwd:      cwd,
+		Mode:     "interactive",
+		Task:     "interactive session " + card.ID,
+	}, true)
+	ctx := agentlaunch.InstanceContext{Instance: inst, Family: fam, Binding: l.Binding()}
+	cleanup := func() {
+		_, _ = store.Retire(inst.UUID, bus.InstanceMail)
+		principal.ReleaseInstance(inst, sessionClaim)
+	}
+	return ctx, sessionClaim, cleanup
 }

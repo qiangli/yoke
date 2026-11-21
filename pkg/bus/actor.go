@@ -48,7 +48,7 @@ func ResolveAuthoredActor(explicit string) (string, error) {
 	if id, ok, err := authoredInstanceID(requested, stamp); err != nil {
 		return "", err
 	} else if ok {
-		return resolveInstanceActor(id)
+		return resolveInstanceActor(id, requested)
 	}
 	if self, ok := agentNameFromPrincipal(stamp); ok {
 		if requested != "" {
@@ -104,27 +104,77 @@ func ResolveAuthoredActor(explicit string) (string, error) {
 }
 
 // authoredInstanceID reports the instance an authored command speaks as: the
-// one the principal is stamped with, or one named by --as. A stamped instance
-// cannot author as anyone else.
+// one the principal/environment is stamped with, or one named by --as (UUID or
+// NAME+N extension). A stamped instance cannot author as any other instance or
+// generation.
 func authoredInstanceID(requested, stamp string) (string, bool, error) {
-	var self string
-	if kind, name, _, err := principal.ParseURN(stamp); err == nil && kind == principal.KindAgent {
-		if id, err := fleet.ParseInstanceUUID(name); err == nil {
-			self = id
-		}
-	}
+	self := selfInstanceIDFromEnv(stamp)
 	if requested == "" {
 		return self, self != "", nil
 	}
-	asID, asInstance := ExplicitInstanceID(requested)
-	switch {
-	case self == "" && !asInstance:
-		return "", false, nil
-	case self != "" && (!asInstance || !strings.EqualFold(self, asID)):
+	if asID, asInstance := ExplicitInstanceID(requested); asInstance {
+		if self != "" && !strings.EqualFold(self, asID) {
+			return "", false, authoredActorRefusal(requested, self,
+				fmt.Sprintf("instance %q cannot author as %q", self, requested))
+		}
+		return asID, true, nil
+	}
+	if _, _, isExt := ParseExtensionLabel(requested); isExt {
+		inst, found, err := ResolveLiveInstanceByLabel(requested)
+		if err != nil {
+			return "", true, err
+		}
+		if !found {
+			if self != "" {
+				return "", true, authoredActorRefusal(requested, self,
+					fmt.Sprintf("instance %q cannot author as %q", self, requested))
+			}
+			return "", true, fmt.Errorf("authored communication: --as %q names no live extension instance", requested)
+		}
+		if self != "" && !strings.EqualFold(self, inst.UUID) {
+			return "", true, authoredActorRefusal(requested, self,
+				fmt.Sprintf("instance %q cannot author as %q", self, requested))
+		}
+		return inst.UUID, true, nil
+	}
+	if self != "" {
+		if selfInst, err := InstanceStoreFn().Get(self); err == nil && selfInst.Active() {
+			r := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(requested), "@"))
+			if strings.EqualFold(r, strings.TrimSpace(selfInst.Label)) ||
+				(selfInst.Handle != "" && strings.EqualFold(r, strings.TrimSpace(selfInst.Handle))) {
+				if liveInst, found, _ := ResolveLiveInstanceByLabel(r); !found || strings.EqualFold(liveInst.UUID, selfInst.UUID) {
+					return self, true, nil
+				}
+			}
+		}
 		return "", false, authoredActorRefusal(requested, self,
 			fmt.Sprintf("instance %q cannot author as %q", self, requested))
 	}
-	return asID, true, nil
+	return "", false, nil
+}
+
+func selfInstanceIDFromEnv(stamp string) string {
+	if kind, name, _, err := principal.ParseURN(stamp); err == nil && kind == principal.KindAgent {
+		if id, err := fleet.ParseInstanceUUID(name); err == nil {
+			return id
+		}
+	}
+	if id, ok := principal.SelfInstanceUUID(); ok {
+		inst, err := InstanceStoreFn().Get(id)
+		if err != nil || !inst.Active() {
+			return ""
+		}
+		if stamp == "" {
+			return id
+		}
+		if name, ok := agentNameFromPrincipal(stamp); ok {
+			if strings.EqualFold(name, inst.Label) || strings.EqualFold(name, inst.Family) ||
+				strings.EqualFold(name, MainLineBase(inst.Label)) {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 // resolveInstanceActor admits an authored command as an instance whose
@@ -132,7 +182,7 @@ func authoredInstanceID(requested, stamp string) (string, bool, error) {
 // name. An unowned instance the process declares (by its stamped principal) is
 // taken on first use, as an unclaimed agent seat is; a seat held by another
 // session is refused.
-func resolveInstanceActor(id string) (string, error) {
+func resolveInstanceActor(id, requested string) (string, error) {
 	inst, err := InstanceStoreFn().Get(id)
 	if err != nil {
 		return "", fmt.Errorf("authored communication: instance %s: %w", id, err)
@@ -141,15 +191,38 @@ func resolveInstanceActor(id string) (string, error) {
 		return "", fmt.Errorf("authored communication: instance %s is retired; open a new one with `bashy instance open`", inst.UUID)
 	}
 	addr := inst.MailAddress()
+	if _, _, isExt := ParseExtensionLabel(inst.Label); isExt {
+		addr = inst.Label
+	}
 	card, live, err := room.Find(inst.ClaimID())
 	if err != nil {
 		return "", fmt.Errorf("authored communication: inspect session claim for instance %s: %w", inst.UUID, err)
 	}
-	session := HashSessionClaim(currentInstanceSession(inst))
+	if !live && strings.TrimSpace(inst.Label) != "" {
+		if labelCard, lLive, lerr := room.Find(room.AgentClaimID(inst.Label)); lerr == nil && lLive {
+			card, live = labelCard, true
+			if pID, pOk := ExplicitInstanceID(labelCard.Principal); pOk && !strings.EqualFold(pID, inst.UUID) {
+				return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; label %q is held by instance %s",
+					inst.UUID, inst.Label, pID)
+			}
+		}
+	}
+	envClaim := strings.TrimSpace(os.Getenv("BASHY_SESSION_CLAIM"))
+	hashed := HashSessionClaim(currentInstanceSession(inst))
+	session := hashed
+	if session == "" {
+		session = envClaim
+	}
 	if live {
-		if session != "" && card.SessionClaim != "" &&
-			subtle.ConstantTimeCompare([]byte(card.SessionClaim), []byte(session)) == 1 {
-			return addr, nil
+		if card.SessionClaim != "" {
+			if (hashed != "" && subtle.ConstantTimeCompare([]byte(card.SessionClaim), []byte(hashed)) == 1) ||
+				(envClaim != "" && subtle.ConstantTimeCompare([]byte(card.SessionClaim), []byte(envClaim)) == 1) {
+				return addr, nil
+			}
+			if session != "" {
+				return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; it is driven by a live session in %s — hand off or open a new instance",
+					inst.UUID, orUnreported(card.Cwd))
+			}
 		}
 		anchor := card.OwnerPID
 		if anchor <= 0 {
@@ -160,6 +233,18 @@ func resolveInstanceActor(id string) (string, error) {
 		}
 		return "", fmt.Errorf("authored communication: instance %s has no matching live session claim; it is driven by a live session in %s — hand off or open a new instance",
 			inst.UUID, orUnreported(card.Cwd))
+	}
+	if DetectHarness != nil {
+		if _, detected := DetectHarness(); detected {
+			selfID := selfInstanceIDFromEnv(strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL")))
+			declared, hasDeclared := declaredAgentIdentity()
+			selfMatches := selfID != "" && strings.EqualFold(selfID, inst.UUID)
+			declaredMatches := hasDeclared && (strings.EqualFold(declared, inst.Label) || strings.EqualFold(declared, inst.UUID))
+			if !selfMatches && !declaredMatches {
+				return "", fmt.Errorf("authored communication: instance %s (%s) has no matching live session claim — export BASHY_AGENT=%s or run `bashy inbox --as %s --peek` in its session",
+					inst.UUID, inst.Label, inst.Label, inst.Label)
+			}
+		}
 	}
 	anchor := os.Getppid()
 	if anchor <= 1 {
