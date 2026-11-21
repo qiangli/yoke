@@ -418,6 +418,9 @@ func NewPairedHostCmd() *cobra.Command {
 	invite.Flags().BoolVar(&noInput, "no-input", false, "never prompt")
 	_ = noInput
 	c.AddCommand(invite)
+	c.AddCommand(newReachabilityCmd(func(ctx context.Context) (PairedHostsClient, error) {
+		return newPairedHostsClientFor(ctx, &acct, master, token)
+	}, &asJSON))
 	return c
 }
 
