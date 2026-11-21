@@ -209,7 +209,10 @@ One issue per independent task. Every body carries, in order:
    25% improvement that did not reproduce.)
 6. **Commit discipline** — `git add` files BY NAME; commit to the
    current branch; DO NOT push; DO NOT switch branches; end the
-   instructions with `COMMIT YOUR WORK`.
+   instructions with `COMMIT YOUR WORK`. Also: "commit work-in-progress
+   at every green step". A worker whose vendor quota runs out mid-task
+   then loses at most the last increment, and the exhaustion handoff
+   only has to describe that increment.
 7. **Blockers escape** — "if stuck after 3 serious attempts, commit
    what works plus <TOPIC>-BLOCKERS.md with your diagnosis — include
    a verified patch if the fix lies outside your scope — then exit
