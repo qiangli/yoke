@@ -124,6 +124,9 @@ type Claim struct {
 
 	Holder principal.Ref `json:"holder"`
 	Intent string        `json:"intent,omitempty"`
+	// Story optionally links this claim (`[sprint/]story-id`) to the story it
+	// serves; closing that story or ending its sprint reclaims the hold.
+	Story string `json:"story,omitempty"`
 
 	AcquiredAt time.Time `json:"acquired_at"`
 	Heartbeat  time.Time `json:"heartbeat"`

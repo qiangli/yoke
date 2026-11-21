@@ -39,10 +39,60 @@ type sprintGradeEvent struct {
 	Verdict         string        `json:"verdict"`
 	Duration        time.Duration `json:"duration"`
 	Checkout        string        `json:"checkout"`
+	Retained        bool          `json:"retained,omitempty"`
+	RetainOwner     string        `json:"retain_owner,omitempty"`
+	RetainReason    string        `json:"retain_reason,omitempty"`
 	Output          string        `json:"output,omitempty"`
 	Reviewer        string        `json:"reviewer,omitempty"`
 	Agent           string        `json:"agent,omitempty"`
 	MergeCommit     string        `json:"merge_commit,omitempty"`
+}
+
+func sprintGradeHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("BASHY_HOME")); home != "" {
+		return home, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".bashy"), nil
+}
+
+func sprintGradeRootDir() (string, error) {
+	home, err := sprintGradeHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "sprint", "grade"), nil
+}
+
+func sprintGradeSprintDir(sprint int64) (string, error) {
+	root, err := sprintGradeRootDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, strconv.FormatInt(sprint, 10)), nil
+}
+
+func sprintGradeRunDir(sprint int64, run string) (string, error) {
+	sprintDir, err := sprintGradeSprintDir(sprint)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(sprintDir, sprintLeaseTokenHash(run)[:16]), nil
+}
+
+// cleanupGradeCheckout removes one temporary grade attempt directory and trims
+// its run-hash and sprint parent directories when empty.
+func cleanupGradeCheckout(checkout string) {
+	if checkout == "" {
+		return
+	}
+	_ = os.RemoveAll(checkout)
+	runDir := filepath.Dir(checkout)
+	_ = os.Remove(runDir)
+	_ = os.Remove(filepath.Dir(runDir))
 }
 
 // Credentials stay in memory and are never placed in the checkout or event.
@@ -217,8 +267,28 @@ func sprintGradeTamper(base, attempt *object.Commit, globs []string, allow ...st
 	return tamper, err
 }
 
+type sprintGradeAttemptOptions struct {
+	retain       bool
+	retainOwner  string
+	retainReason string
+}
+
 func sprintGradeAttempt(ctx context.Context, sprint int64, run string, it *weaveItem, queue, base, gate string, globs []string, timeout time.Duration, allow ...string) (sprintGradeEvent, error) {
-	ev := sprintGradeEvent{AllowTestChange: append([]string(nil), allow...), Run: run, Base: base, Gate: gate, GateExit: -1, Verdict: "fail"}
+	return sprintGradeAttemptWithOptions(ctx, sprint, run, it, queue, base, gate, globs, timeout, sprintGradeAttemptOptions{}, allow...)
+}
+
+func sprintGradeAttemptWithOptions(ctx context.Context, sprint int64, run string, it *weaveItem, queue, base, gate string, globs []string, timeout time.Duration, opts sprintGradeAttemptOptions, allow ...string) (sprintGradeEvent, error) {
+	ev := sprintGradeEvent{
+		AllowTestChange: append([]string(nil), allow...),
+		Run:             run,
+		Base:            base,
+		Gate:            gate,
+		GateExit:        -1,
+		Verdict:         "fail",
+		Retained:        opts.retain,
+		RetainOwner:     opts.retainOwner,
+		RetainReason:    opts.retainReason,
+	}
 	if strings.TrimSpace(gate) == "" || timeout <= 0 {
 		return ev, fmt.Errorf("nonempty --gate and positive --timeout required")
 	}
@@ -227,48 +297,63 @@ func sprintGradeAttempt(ctx context.Context, sprint int64, run string, it *weave
 	if err != nil {
 		return ev, err
 	}
-	home := os.Getenv("BASHY_HOME")
-	if home == "" {
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return ev, err
-		}
-		home = filepath.Join(home, ".bashy")
-	}
 	// Hash the run label so repository names cannot escape the grading root.
-	parent := filepath.Join(home, "sprint", "grade", strconv.FormatInt(sprint, 10), sprintLeaseTokenHash(run)[:16])
+	parent, err := sprintGradeRunDir(sprint, run)
+	if err != nil {
+		return ev, err
+	}
 	if err = os.MkdirAll(parent, 0700); err != nil {
 		return ev, err
 	}
 	parent, err = filepath.EvalSymlinks(parent)
 	if err != nil {
+		_ = os.Remove(parent)
+		_ = os.Remove(filepath.Dir(parent))
 		return ev, err
 	}
 	parent, err = filepath.Abs(parent)
 	if err != nil {
+		_ = os.Remove(parent)
+		_ = os.Remove(filepath.Dir(parent))
 		return ev, err
 	}
 	if it.Workspace != "" {
 		ws, e := filepath.EvalSymlinks(it.Workspace)
 		if e != nil {
+			_ = os.Remove(parent)
+			_ = os.Remove(filepath.Dir(parent))
 			return ev, e
 		}
 		ws, e = filepath.Abs(ws)
 		if e != nil {
+			_ = os.Remove(parent)
+			_ = os.Remove(filepath.Dir(parent))
 			return ev, e
 		}
 		rel, e := filepath.Rel(ws, parent)
 		if e != nil {
+			_ = os.Remove(parent)
+			_ = os.Remove(filepath.Dir(parent))
 			return ev, e
 		}
 		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			_ = os.Remove(parent)
+			_ = os.Remove(filepath.Dir(parent))
 			return ev, fmt.Errorf("grade directory must be outside the workspace")
 		}
 	}
 	ev.Checkout, err = os.MkdirTemp(parent, "attempt-")
 	if err != nil {
+		_ = os.Remove(parent)
+		_ = os.Remove(filepath.Dir(parent))
 		return ev, err
 	}
+	checkoutPath := ev.Checkout
+	defer func() {
+		if !opts.retain {
+			cleanupGradeCheckout(checkoutPath)
+		}
+	}()
 	r, err := gogit.PlainInit(ev.Checkout, false)
 	if err != nil {
 		return ev, err
@@ -554,7 +639,8 @@ func newSprintGradeCommands() []*cobra.Command {
 	for _, verb := range []string{"grade", "merge"} {
 		var run, gate, into, reviewer string
 		var globs, allow []string
-		var jsonOut bool
+		var jsonOut, retain bool
+		var retainReason string
 		var timeout time.Duration
 		short := "Merge a graded run attempt into a real repository checkout"
 		if verb == "grade" {
@@ -568,6 +654,8 @@ func newSprintGradeCommands() []*cobra.Command {
 			cmd.Flags().StringVar(&gate, "gate", "", "gate command (bash -c)")
 			cmd.Flags().StringArrayVar(&globs, "tests-glob", nil, "protected test glob (repeatable)")
 			cmd.Flags().StringArrayVar(&allow, "allow-test-change", nil, "accepted test change glob (repeatable; recorded in grade)")
+			cmd.Flags().BoolVar(&retain, "retain", false, "keep the temporary grade checkout until the story closes or the sprint ends")
+			cmd.Flags().StringVar(&retainReason, "retain-reason", "", "required reason when --retain is set")
 		} else {
 			cmd.Flags().StringVar(&into, "into", "", "real repository checkout")
 			cmd.Flags().StringVar(&reviewer, "reviewer", "", "reviewer subject to code dominance")
@@ -576,6 +664,11 @@ func newSprintGradeCommands() []*cobra.Command {
 			id, err := sprintArg(cmd, (&weaveOutputFlags{}).mode(), "sprint "+verb, args[0])
 			if err != nil {
 				return err
+			}
+			if verb == "grade" {
+				if _, _, err := validateRetainFlags(retain, retainReason, ""); err != nil {
+					return err
+				}
 			}
 			dir, err := sprintStoreDir()
 			if err != nil {
@@ -644,9 +737,20 @@ func newSprintGradeCommands() []*cobra.Command {
 				var reviewFallback *seatFallbackEvent
 				var reviewStory string
 				if verb == "grade" {
-					ev, e = sprintGradeAttempt(cmd.Context(), id, run, it, queue, base, gate, globs, timeout, allow...)
+					retainOwner, trimmedReason, rerr := validateRetainFlags(retain, retainReason, weaveStoryConductorName(s, ""))
+					if rerr != nil {
+						return rerr
+					}
+					ev, e = sprintGradeAttemptWithOptions(cmd.Context(), id, run, it, queue, base, gate, globs, timeout, sprintGradeAttemptOptions{
+						retain:       retain,
+						retainOwner:  retainOwner,
+						retainReason: trimmedReason,
+					}, allow...)
 					if e != nil {
 						return e
+					}
+					if !retain {
+						ev.Checkout = ""
 					}
 					ev.Generation = generation
 				} else {

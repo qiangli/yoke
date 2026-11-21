@@ -549,7 +549,25 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 								id, len(undisposed), strings.Join(undisposed, "\n  "))
 							return
 						}
-						reclaimed, reclaimFailures = sprintReclaimSummary(sprintPruneRunArtifacts(s))
+						if aerr := preflightAttachedStoryClaims(s, s.ID, "", false); aerr != nil {
+							refusal = fmt.Errorf("sprint #%d cannot end — %w", id, aerr)
+							return
+						}
+						maxEpochs := snapshotMatchingClaimEpochs(s, s.ID, "", false)
+						acts, rerr := reclaimStoryResources(storyReclaimOptions{
+							Sprint:        s,
+							SprintID:      s.ID,
+							SprintUUID:    s.UUID,
+							Actor:         weaveStoryConductorName(s, ""),
+							ClosingVerb:   "sprint end",
+							MaxEpochByKey: maxEpochs,
+						})
+						if rerr != nil {
+							reclaimFailures = append(reclaimFailures, "claims: "+rerr.Error())
+						}
+						var failures []string
+						reclaimed, failures = sprintReclaimSummary(acts)
+						reclaimFailures = append(reclaimFailures, failures...)
 					}); err != nil {
 						return err
 					}

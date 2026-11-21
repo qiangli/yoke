@@ -93,7 +93,16 @@ func preflightStoryClaimLedger() error {
 // releaseStoryClaim drops who's claim; the caller has already proven who holds
 // the story, so a record for another holder is left alone and reported.
 func releaseStoryClaim(sprint int64, storyID, who string) error {
-	return coord.ReleaseRef(context.Background(), storyClaimRef(sprint, storyID), principal.Ref{Name: who}, 0)
+	ref := storyClaimRef(sprint, storyID)
+	err := coord.ReleaseRef(context.Background(), ref, principal.Ref{Name: who}, 0)
+	var conflict *coord.Conflict
+	if errors.As(err, &conflict) && conflict.Claim != nil && strings.EqualFold(conflict.Claim.Holder.Name, who) {
+		_, rerr := coord.ReclaimClaims(coord.DefaultDir(), func(c *coord.Claim) (string, bool) {
+			return "sprint story transition", c.Kind == ref.Kind && c.Resource == ref.Name && strings.EqualFold(c.Holder.Name, who)
+		})
+		return rerr
+	}
+	return err
 }
 
 // notifySprintOwner tells the manager that its picture of the sprint changed.
@@ -494,6 +503,9 @@ func sprintAcceptanceEvidence(s *weaveStory, storyID string) bool {
 func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence string, flags *weaveOutputFlags) error {
 	var event *ladder.Event
 	var ratingErr error
+	var acceptedRoot, acceptedStoryID, acceptedSprintUUID, acceptedActor string
+	var acceptedStoryWeave int64
+	var acceptedMaxEpochs map[string]uint64
 	skip, _ := cmd.Flags().GetBool("no-rating")
 	rework, _ := cmd.Flags().GetInt("rework")
 	if rework < 0 {
@@ -518,6 +530,17 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 		if todopkg.IsClosed(it.Status) {
 			return "", fmt.Errorf("story %s is already closed", it.ID)
 		}
+		if undisposed := storyUndisposedRuns(s, root, it.ID, it.Weave); len(undisposed) > 0 {
+			return "", fmt.Errorf("story %s cannot be accepted — %d linked run(s) still hold unsettled work:\n  %s",
+				shortSprintStoryID(it.ID), len(undisposed), strings.Join(undisposed, "\n  "))
+		}
+		if err := preflightAttachedStoryClaims(s, id, it.ID, false); err != nil {
+			return "", fmt.Errorf("story %s cannot be accepted — %w", shortSprintStoryID(it.ID), err)
+		}
+		if err := preflightStoryClaimLedger(); err != nil {
+			return "", err
+		}
+		acceptedMaxEpochs = snapshotMatchingClaimEpochs(s, id, it.ID, false)
 		it.Status = todopkg.StatusDone
 		now := time.Now().UTC()
 		it.Closed = &now
@@ -525,6 +548,11 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 		if _, err := todopkg.RepoStore(root).Save(it); err != nil {
 			return "", err
 		}
+		acceptedRoot = root
+		acceptedStoryID = it.ID
+		acceptedSprintUUID = s.UUID
+		acceptedActor = actor
+		acceptedStoryWeave = it.Weave
 		note := fmt.Sprintf("%s accepted story %s", actor, shortSprintStoryID(it.ID))
 		if message := strings.TrimSpace(evidence); message != "" {
 			note += ": " + message
@@ -537,6 +565,24 @@ func runSprintStoryAccept(cmd *cobra.Command, id int64, ref, repo, evidence stri
 	})
 	if err != nil {
 		return err
+	}
+	if acceptedStoryID != "" {
+		acts, rerr := reclaimStoryResources(storyReclaimOptions{
+			SprintID:      id,
+			SprintUUID:    acceptedSprintUUID,
+			StoryRoot:     acceptedRoot,
+			StoryID:       acceptedStoryID,
+			StoryWeaveID:  acceptedStoryWeave,
+			Actor:         acceptedActor,
+			ClosingVerb:   "sprint accept",
+			MaxEpochByKey: acceptedMaxEpochs,
+		})
+		if rerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "sprint accept: claim reclaim warning: %v\n", rerr)
+		}
+		if _, failures := sprintReclaimSummary(acts); len(failures) > 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "sprint accept: cleanup warning: %s\n", strings.Join(failures, "; "))
+		}
 	}
 	if skip {
 		fmt.Fprintln(cmd.OutOrStdout(), "ladder: unrated by manager")

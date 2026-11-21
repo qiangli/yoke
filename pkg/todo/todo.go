@@ -345,7 +345,16 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	// indistinguishable from the first. Reaching a success state through the
 	// absence of evidence is the one thing the fleet-evidence invariant
 	// forbids, so a sprint story closes honestly and `advance` reopens it.
-	if status == StatusDone && it.Recurring != "" && it.Sprint == 0 {
+	wasClosed := IsClosed(it.Status)
+	reopeningRecurring := status == StatusDone && it.Recurring != "" && it.Sprint == 0
+	closing := !wasClosed && !reopeningRecurring && IsClosed(status)
+	verb := "todo " + status
+	if closing && StoryClosePreflight != nil {
+		if err := StoryClosePreflight(st, it, verb); err != nil {
+			return nil, err
+		}
+	}
+	if reopeningRecurring {
 		it.Status = StatusTodo
 		base := time.Now().UTC()
 		if it.Due != nil {
@@ -365,6 +374,11 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	}
 	if _, err := st.Save(it); err != nil {
 		return nil, err
+	}
+	if closing && StoryClosed != nil {
+		if err := StoryClosed(st, it, verb); err != nil {
+			return it, err
+		}
 	}
 	return it, nil
 }
@@ -426,6 +440,23 @@ var SprintHandles func(seq int64) (uuid, title string, ok bool)
 // SprintChanged reconciles the former sprint after a story edit is saved.
 // Plain todo binaries leave it nil; sprint-aware binaries retire moved goals.
 var SprintChanged func(previous *issue.Issue) error
+
+// StoryClosePreflight runs before SetStatus persists a transition into a closed
+// status (done or wontfix), allowing sprint/weave to refuse closure when a
+// linked run still holds unpushed unique commits.
+var StoryClosePreflight func(st *issue.Store, it *issue.Issue, verb string) error
+
+// StoryClosed runs after SetStatus persists a transition into a closed status,
+// releasing claims and tearing down settled run/grade copies for the story.
+var StoryClosed func(st *issue.Store, it *issue.Issue, verb string) error
+
+// StorySprintMovePreflight runs before `todo edit --sprint` moves a story off
+// its current sprint, refusing if an owned run on that sprint holds unsettled work.
+var StorySprintMovePreflight func(st *issue.Store, previous, next *issue.Issue) error
+
+// StorySprintMoved runs after `todo edit --sprint` moves a story off its
+// former sprint, reclaiming claims and settled run/grade copies on that sprint.
+var StorySprintMoved func(st *issue.Store, previous, current *issue.Issue) error
 
 // SprintPreflight proves the sprint board is writable BEFORE a story edit
 // that moves it is saved. A confined manager session (sandbox denies the

@@ -46,6 +46,112 @@ func init() {
 			return nil
 		})
 	}
+	todopkg.StoryClosePreflight = preflightTodoStoryClose
+	todopkg.StoryClosed = reclaimOnTodoStoryClose
+	todopkg.StorySprintMovePreflight = preflightTodoStorySprintMove
+	todopkg.StorySprintMoved = reclaimOnTodoStorySprintMove
+}
+
+func resolveStoryRootFromStore(st *issue.Store) string {
+	if st == nil || st.Sub != todopkg.RepoSub {
+		return ""
+	}
+	if root, err := normalizeStoryRoot(st.Root); err == nil {
+		return root
+	}
+	return st.Root
+}
+
+func lookupSprintForIssue(it *issue.Issue) *weaveStory {
+	if it == nil || (it.Sprint == 0 && it.SprintID == "") {
+		return nil
+	}
+	dir, err := sprintStoreDir()
+	if err != nil {
+		return nil
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return nil
+	}
+	for _, s := range q.Stories {
+		if storyBelongsToSprint(it, s) {
+			return s
+		}
+	}
+	return nil
+}
+
+func preflightTodoStoryClose(st *issue.Store, it *issue.Issue, verb string) error {
+	if it == nil {
+		return nil
+	}
+	s := lookupSprintForIssue(it)
+	root := resolveStoryRootFromStore(st)
+	if undisposed := storyUndisposedRuns(s, root, it.ID, it.Weave); len(undisposed) > 0 {
+		return fmt.Errorf("%s refused for %s — %d linked run(s) still hold unsettled work:\n  %s",
+			verb, shortSprintStoryID(it.ID), len(undisposed), strings.Join(undisposed, "\n  "))
+	}
+	if err := preflightAttachedStoryClaims(s, it.Sprint, it.ID, false); err != nil {
+		return fmt.Errorf("%s refused for %s — %w", verb, shortSprintStoryID(it.ID), err)
+	}
+	return nil
+}
+
+func reclaimOnTodoStoryClose(st *issue.Store, it *issue.Issue, verb string) error {
+	if it == nil {
+		return nil
+	}
+	s := lookupSprintForIssue(it)
+	root := resolveStoryRootFromStore(st)
+	_, err := reclaimStoryResources(storyReclaimOptions{
+		Sprint:       s,
+		SprintID:     it.Sprint,
+		SprintUUID:   it.SprintID,
+		StoryRoot:    root,
+		StoryID:      it.ID,
+		StoryWeaveID: it.Weave,
+		Actor:        weaveConductorName(""),
+		ClosingVerb:  verb,
+	})
+	return err
+}
+
+func preflightTodoStorySprintMove(st *issue.Store, previous, _ *issue.Issue) error {
+	if previous == nil || (previous.Sprint == 0 && previous.SprintID == "") {
+		return nil
+	}
+	s := lookupSprintForIssue(previous)
+	root := resolveStoryRootFromStore(st)
+	if undisposed := storyUndisposedRuns(s, root, previous.ID, previous.Weave); len(undisposed) > 0 {
+		return fmt.Errorf("moving story %s off sprint #%d refused — %d linked run(s) still hold unsettled work:\n  %s",
+			shortSprintStoryID(previous.ID), previous.Sprint, len(undisposed), strings.Join(undisposed, "\n  "))
+	}
+	if err := preflightAttachedStoryClaims(s, previous.Sprint, previous.ID, true); err != nil {
+		return fmt.Errorf("moving story %s off sprint #%d refused — %w",
+			shortSprintStoryID(previous.ID), previous.Sprint, err)
+	}
+	return nil
+}
+
+func reclaimOnTodoStorySprintMove(st *issue.Store, previous, _ *issue.Issue) error {
+	if previous == nil || (previous.Sprint == 0 && previous.SprintID == "") {
+		return nil
+	}
+	s := lookupSprintForIssue(previous)
+	root := resolveStoryRootFromStore(st)
+	_, err := reclaimStoryResources(storyReclaimOptions{
+		Sprint:           s,
+		SprintID:         previous.Sprint,
+		SprintUUID:       previous.SprintID,
+		SprintScopedOnly: true,
+		StoryRoot:        root,
+		StoryID:          previous.ID,
+		StoryWeaveID:     previous.Weave,
+		Actor:            weaveConductorName(""),
+		ClosingVerb:      "todo move-sprint",
+	})
+	return err
 }
 
 // prepareTodoSprint gives all existing cards the same repository registration

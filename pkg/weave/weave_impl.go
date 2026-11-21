@@ -308,6 +308,11 @@ type weaveItem struct {
 	Disposition       string `json:"disposition,omitempty"`
 	DispositionReason string `json:"disposition_reason,omitempty"`
 	SalvageRef        string `json:"salvage_ref,omitempty"`
+	// Retain keeps a settled workspace on disk until its story closes or sprint
+	// ends; delete-by-default applies whenever Retain is false.
+	Retain       bool   `json:"retain,omitempty"`
+	RetainOwner  string `json:"retain_owner,omitempty"`
+	RetainReason string `json:"retain_reason,omitempty"`
 	ExitCode          *int   `json:"exit_code,omitempty"`
 	KilledBy          string `json:"killed_by,omitempty"`
 	// Completion records an explicit terminalization that did not come from the
@@ -3414,7 +3419,9 @@ type weaveStartOptions struct {
 	// base, when non-empty, starts the isolated workspace at this commit
 	// instead of the source HEAD (preview). It must name a commit present
 	// in the source repo; it never moves the active revision.
-	base string
+	base         string
+	retain       bool
+	retainReason string
 }
 
 // weaveBaseSHAForStart resolves an explicit --base commit for an isolated
@@ -3540,6 +3547,10 @@ func weaveResultTurns(s string) int64 {
 
 func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs []string, opts weaveStartOptions, flags *weaveOutputFlags) error {
 	mode := flags.mode()
+	retainOwner, retainReason, rerr := validateRetainFlags(opts.retain, opts.retainReason, "")
+	if rerr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start", weavecli.ExitInvalidArg, rerr))
+	}
 	if err := weaveHandoffOptions(issueID, toolFlag, toolArgs, opts); err != nil {
 		return err
 	}
@@ -4092,6 +4103,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.Branch = branch
 			freshIt.BaseSHA = baseSHA
 			freshIt.ArenaSprint, freshIt.BoothUser, freshIt.BoothForkURL, freshIt.Blind = boothSprint, boothUser, boothFork, opts.blind
+			if opts.retain {
+				freshIt.Retain = true
+				freshIt.RetainOwner = retainOwner
+				freshIt.RetainReason = retainReason
+			}
 			freshIt.LaunchPhase = "provisioning workspace"
 			freshIt.StartedAt = time.Now().UTC()
 			// Record the provisioning launcher before clone/hydration. If it
@@ -4866,6 +4882,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: story submission failed (work preserved): %v\n", err)
 		}
 		weaveReleaseManagedGOCache(cmd.ErrOrStderr(), "weave start", dir, it)
+		if !it.Retain && it.State == "no-op" {
+			_ = weavePruneOwnedRun(dir, it.ID, filepath.Base(root))
+		}
 		// Say it out loud at the moment it is found. A flag only `weave
 		// status` would show is a flag nobody reads until after the merge.
 		if w := weaveIsolationWarning(it); w != "" {
@@ -5552,6 +5571,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
 			weavecli.ExitPrecondFail, err))
 	}
+	pullRetain, _ := cmd.Flags().GetBool("retain")
+	pullRetainReasonFlag, _ := cmd.Flags().GetString("retain-reason")
+	pullRetainOwner, pullRetainReason, rerr := validateRetainFlags(pullRetain, pullRetainReasonFlag, "")
+	if rerr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
+			weavecli.ExitInvalidArg, rerr))
+	}
 	dir, _ := weaveQueueDir(root)
 	base := weaveBaseBranch(root)
 	type result struct {
@@ -6030,9 +6056,14 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			if !merged {
 				continue
 			}
+			if pullRetain {
+				it.Retain = true
+				it.RetainOwner = pullRetainOwner
+				it.RetainReason = pullRetainReason
+			}
 			// Workspace is a full clone (not a worktree) — use safeRemoveAll with
 			// containment check to prevent accidental deletion outside the queue dir.
-			if it.Workspace != "" {
+			if it.Workspace != "" && !it.Retain {
 				if err := safeRemoveWorkspace(dir, it.Workspace); err != nil {
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "cleanup-failed", Detail: err.Error()})
 					continue
@@ -6041,7 +6072,9 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			reportIt := *it
 			it.State = "done"
 			it.Disposition = weaveDispositionMerged
-			it.Workspace = ""
+			if !it.Retain {
+				it.Workspace = ""
+			}
 			reportIt.State = "done"
 			// The work landed, so the register entry it implements is settled. A
 			// register that stays open after its fix merges is worse than none —
@@ -6218,6 +6251,13 @@ func weaveTestPauseAfterPullLoad() {
 }
 
 func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, yes, force bool, flags *weaveOutputFlags) error {
+	retain, _ := cmd.Flags().GetBool("retain")
+	retainReasonFlag, _ := cmd.Flags().GetString("retain-reason")
+	retainOwner, retainReason, rerr := validateRetainFlags(retain, retainReasonFlag, "")
+	if rerr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave abandon",
+			weavecli.ExitInvalidArg, rerr))
+	}
 	if disposition != "" {
 		if !weaveValidDisposition(disposition) || disposition == weaveDispositionMerged {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave abandon",
@@ -6367,6 +6407,11 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason, disposition string, y
 			}
 		}
 		it.DispositionReason = reason
+		if retain {
+			it.Retain = true
+			it.RetainOwner = retainOwner
+			it.RetainReason = retainReason
+		}
 		// The operator has resolved the outstanding decision, after the
 		// preservation guard above succeeded. These are pending-work flags,
 		// not history: keep Head, CommitsAhead and SalvageRef as evidence.
@@ -8294,6 +8339,17 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			// user-repo branch lookup that's a no-op for unfetched
 			// agent branches. Read before the workspace is removed.
 			merged := weaveItemMerged(root, base, it)
+			if !force && it.Retain {
+				owner := it.RetainOwner
+				if owner == "" {
+					owner = "operator"
+				}
+				results = append(results, pruneResult{
+					Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: merged,
+					Action: fmt.Sprintf("skipped: retained by %s (%s) until story close", owner, it.RetainReason),
+				})
+				continue
+			}
 
 			// REFUSE TO DELETE WORK THAT HAS NOWHERE ELSE TO LIVE.
 			//
