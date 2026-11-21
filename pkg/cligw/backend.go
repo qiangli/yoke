@@ -129,11 +129,18 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 	}
 
 	text, finish := FinishChat(req, result.Text)
+	deltasForStream := deltas
+	if text != result.Text {
+		// Recovery or stop trimming rewrote the worker output; emit the
+		// rewritten body directly so SSEToolCallTransformer sees the canonical
+		// envelope without prefix-mismatch truncation in streamBody.
+		deltasForStream = nil
+	}
 	id := NewCompletionID()
 	if result.Usage.Estimated {
 		w.Header().Set("X-Bashy-Usage-Estimated", "true")
 	}
-	contentType, payload := EncodeChat(req, text, finish, id, deltas, result.Usage)
+	contentType, payload := EncodeChat(req, text, finish, id, deltasForStream, result.Usage)
 	return b.writeResponse(w, r, http.StatusOK, contentType, payload, modify)
 }
 
@@ -147,7 +154,7 @@ func NewCompletionID() string {
 func FinishChat(req openai.ChatRequest, text string) (string, string) {
 	text, stopped := applyStops(text, rawJSON(req.Stop))
 	if len(req.Tools) > 0 {
-		text = recoverToolAnswer(text, req.Tools)
+		text = recoverToolAnswerWithChoice(text, req.Tools, rawJSON(req.ToolChoice))
 	}
 	finish := "stop"
 	if stopped {
@@ -376,7 +383,17 @@ func toolEnvelopeTail(text string) string {
 // offered tool schemas identify one callable tool. The envelope path keeps
 // its existing behavior for model replies that already name their tool.
 func recoverToolAnswer(answer string, tools []openai.Tool) string {
+	return recoverToolAnswerWithChoice(answer, tools, nil)
+}
+
+func recoverToolAnswerWithChoice(answer string, tools []openai.Tool, toolChoice json.RawMessage) string {
+	if toolChoiceIsNone(toolChoice) {
+		return answer
+	}
 	if env := toolEnvelopeTail(answer); env != answer {
+		return env
+	}
+	if env, ok := recoverXMLToolCalls(answer, tools, toolChoice); ok {
 		return env
 	}
 	start := strings.TrimSpace(answer)
