@@ -80,19 +80,17 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 			t.Fatal("checkpoint artifact already exists or cannot be inspected")
 		}
 	}
-	type observation struct {
-		Greeting         string   `json:"greeting"`
-		ExpectedGreeting string   `json:"expected_greeting"`
-		ActiveUI         string   `json:"active_ui"`
-		ExpectedRevision string   `json:"expected_revision"`
-		Errors           []string `json:"browser_errors"`
-		Failure          string   `json:"failure,omitempty"`
-		Passed           bool     `json:"passed"`
+	shotTimeout, shotRequired, err := parseExternalScreenshotConfig(
+		os.Getenv("BASHY_E2E_SCREENSHOT_TIMEOUT"),
+		os.Getenv("BASHY_E2E_SCREENSHOT_REQUIRED"),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	result := observation{ExpectedGreeting: greeting, ExpectedRevision: revision}
+	result := externalCheckpointObservation{ExpectedGreeting: greeting, ExpectedRevision: revision}
 	var mu sync.Mutex
 	failCheckpoint := func(stage string, err error) {
-		message := strings.ReplaceAll(stage+": "+err.Error(), cookie, "[session redacted]")
+		message := redactCheckpointSecret(stage+": "+err.Error(), cookie)
 		mu.Lock()
 		result.Failure = message
 		mu.Unlock()
@@ -101,7 +99,7 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 	defer func() {
 		mu.Lock()
 		defer mu.Unlock()
-		result.Passed = !t.Failed()
+		result.Passed = !t.Failed() && result.Failure == ""
 		data, _ := json.MarshalIndent(result, "", "  ")
 		if err := os.WriteFile(filepath.Join(dir, "checkpoint.json"), data, 0600); err != nil {
 			t.Error("cannot write checkpoint observation")
@@ -181,44 +179,72 @@ func TestDOMExternalShapeCheckpoint(t *testing.T) {
 		}
 	})
 	base := strings.TrimRight(u.String(), "/")
-	saveScreenshot := func(name string) chromedp.Action {
-		return chromedp.ActionFunc(func(ctx context.Context) error {
-			var image []byte
-			if err := chromedp.FullScreenshot(&image, 90).Do(ctx); err != nil {
-				return err
-			}
-			return os.WriteFile(filepath.Join(dir, name), image, 0600)
-		})
+	quoted, _ := json.Marshal(revision[:10])
+	drv := chromedpExternalDriver{
+		base:   base,
+		page:   page,
+		app:    app,
+		cookie: cookie,
+		secure: u.Scheme == "https",
+		quoted: string(quoted),
 	}
-	if err := chromedp.Run(ctx,
+	obs, failures := runExternalShapeCheckpoint(ctx, externalCheckpointConfig{
+		App:                app,
+		PagePath:           page,
+		ExpectedGreeting:   greeting,
+		ExpectedRevision:   revision,
+		ArtifactDir:        dir,
+		Cookie:             cookie,
+		ScreenshotTimeout:  shotTimeout,
+		ScreenshotRequired: shotRequired,
+	}, drv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), result.Errors...)
+	})
+	mu.Lock()
+	obs.Errors = append([]string(nil), result.Errors...)
+	result = obs
+	mu.Unlock()
+	for _, failure := range failures {
+		t.Error(failure)
+	}
+}
+
+type chromedpExternalDriver struct {
+	base, page, app, cookie, quoted string
+	secure                          bool
+}
+
+func (d chromedpExternalDriver) CheckGreeting(ctx context.Context) (string, error) {
+	var greeting string
+	err := chromedp.Run(ctx,
 		network.Enable(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.SetCookie("bashy_console", cookie).WithURL(base + "/").WithHTTPOnly(true).WithSecure(u.Scheme == "https").Do(ctx)
+			return network.SetCookie("bashy_console", d.cookie).WithURL(d.base + "/").WithHTTPOnly(true).WithSecure(d.secure).Do(ctx)
 		}),
-		chromedp.Navigate(base+page),
+		chromedp.Navigate(d.base+d.page),
 		chromedp.WaitVisible("#greeting", chromedp.ByQuery),
-		chromedp.Text("#greeting", &result.Greeting, chromedp.ByQuery),
-		saveScreenshot("page.png"),
-	); err != nil {
-		failCheckpoint("external greeting checkpoint failed", err)
-	}
-	if result.Greeting != greeting {
-		t.Error("rendered greeting differs from expected")
-	}
-	quoted, _ := json.Marshal(revision[:10])
-	if err := chromedp.Run(ctx,
-		chromedp.Navigate(base+"/shape/"+app+"/"),
+		chromedp.Text("#greeting", &greeting, chromedp.ByQuery),
+	)
+	return greeting, err
+}
+
+func (d chromedpExternalDriver) CheckActiveUI(ctx context.Context) (string, error) {
+	var activeUI string
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(d.base+"/shape/"+d.app+"/"),
 		chromedp.WaitVisible("#shape-active", chromedp.ByQuery),
-		chromedp.Poll(`document.getElementById("shape-active").textContent.includes(`+string(quoted)+`)`, nil, chromedp.WithPollingTimeout(15*time.Second)),
-		chromedp.Text("#shape-active", &result.ActiveUI, chromedp.ByQuery),
-		saveScreenshot("shape.png"),
-	); err != nil {
-		failCheckpoint("external active-version UI checkpoint failed", err)
+		chromedp.Poll(`document.getElementById("shape-active").textContent.includes(`+d.quoted+`)`, nil, chromedp.WithPollingTimeout(15*time.Second)),
+		chromedp.Text("#shape-active", &activeUI, chromedp.ByQuery),
+	)
+	return activeUI, err
+}
+
+func (d chromedpExternalDriver) CaptureScreenshot(ctx context.Context) ([]byte, error) {
+	var image []byte
+	if err := chromedp.FullScreenshot(&image, 90).Do(ctx); err != nil {
+		return nil, err
 	}
-	mu.Lock()
-	errors := len(result.Errors)
-	mu.Unlock()
-	if errors != 0 {
-		t.Error("browser reported errors; inspect private checkpoint observation")
-	}
+	return image, nil
 }
