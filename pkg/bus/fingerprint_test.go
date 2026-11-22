@@ -114,3 +114,43 @@ func TestStoreFingerprintTracksTimelineAndPending(t *testing.T) {
 		t.Fatal("a removed timeline is a change (rewrite/archive) and must read")
 	}
 }
+
+// Standalone chat has no host fingerprint hook. A second queued steer must
+// wake its relay immediately, even after the first delivery's timeline event
+// and cursor have been sampled. Waiting for the full rescan delays live input.
+func TestInboxPollGateTracksQueuedSteers(t *testing.T) {
+	t.Setenv("BASHY_ROOM_DIR", filepath.Join(t.TempDir(), "room"))
+	t.Setenv("BASHY_MB_DIR", filepath.Join(t.TempDir(), "board"))
+	previous := InboxFingerprint
+	InboxFingerprint = nil
+	t.Cleanup(func() { InboxFingerprint = previous })
+	const inbox = "chat-steer-fingerprint-test"
+	if err := InitializeReaderAtHead(inbox); err != nil {
+		t.Fatal(err)
+	}
+	gate := NewInboxPollGate(inbox)
+	now := time.Now()
+	for _, text := range []string{"PING", "quit"} {
+		_, sum, ok := gate.Due(now)
+		gate.Commit(sum, ok, now)
+		if read, _, _ := gate.Due(now); read {
+			t.Fatal("idle relay should not rescan")
+		}
+		if err := PostMessage(Post{From: "sender", To: inbox, Body: text}); err != nil {
+			t.Fatal(err)
+		}
+		if read, _, _ := gate.Due(now); !read {
+			t.Fatalf("queued %q did not wake the relay before the full rescan", text)
+		}
+		posts, _, _, err := Unseen(inbox, 1)
+		if err != nil || len(posts) != 1 || posts[0].Body != text {
+			t.Fatalf("queued steer: posts=%v err=%v", posts, err)
+		}
+		if err := MarkSeen(inbox, posts[0].Seq); err != nil {
+			t.Fatal(err)
+		}
+		if err := room.Emit(room.Event{Type: room.EventSteer, Target: "tool", Body: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

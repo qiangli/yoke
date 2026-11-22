@@ -40,14 +40,17 @@ func inboxFingerprint(agent string) (uint64, bool) {
 }
 
 // StoreFingerprint hashes the metadata (size and mtime) of every bus store an
-// agent's inbox read touches: the room timeline, the agent's pending buffer,
-// cursor and subscription. Constant cost — a handful of stats, no reads.
+// agent's inbox read touches: the message board, room timeline, the agent's
+// pending buffer, cursor and subscription. Constant cost — a handful of stats,
+// no reads. Standalone chat relays use this default too: queued steers append
+// only to the board, before any delivery event reaches the room timeline.
 //
 // It fails OPEN: a stat error other than not-exist reports ok=false, and a
 // gate treats that as "read fully". A missing file is a known state (the agent
 // has no pending buffer yet), not an error.
 func StoreFingerprint(agent string) (uint64, bool) {
 	f := storeFingerprinter{h: fnv.New64a(), ok: true}
+	f.file(postsPath())
 	f.file(filepath.Join(room.Dir(), "timeline.jsonl"))
 	for _, path := range []func(string) (string, error){pendingPath, cursorPath, subsPath} {
 		p, err := path(agent)
