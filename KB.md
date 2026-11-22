@@ -2,7 +2,7 @@
 
 Check these before you start — they may save you a failed approach:
 
-- [repo/page] secrets-by-handle-and-stdin-keyed-reveal-gate — Give every programmatic secret consumer a handle route; key the reveal gate on stdin (WHAT + WHEN: adopting TTY-gated secret reveal verbs in yoke/bashy) Reveal verbs (secret show/env) refuse non-interactive and agent callers, so every programmatic credential consumer needs a HANDLE  (kb:secrets-by-handle-and-stdin-keyed-reveal-gate)
+- [repo/page] Account observation hook: where it can and cannot live — WHEN wiring an automatic account-collection hook (pkg/accounts) into a provider or budget path in yoke — pkg/provider is a stdlib-only nested module and pkg/llmbudget is imported BY accounts, so neither can call the hook directly pkg/accounts.ObserveSuccess cannot  (kb:account-observation-hook-where-it-can-and-cannot-live)
 
 More: `bashy kb search <query>` (or `bashy kb show <slug>`).
 

@@ -3,6 +3,7 @@
 package chat
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,5 +133,124 @@ func TestEnsureShimsPreservesAgentOSEntryPoint(t *testing.T) {
 		if err != nil || string(out) != want {
 			t.Errorf("%s: got %q, err %v; want %q", name, out, err, want)
 		}
+	}
+}
+
+func TestAdapterProcessUsesBashyLauncher(t *testing.T) {
+	if os.Getenv("CHAT_SHIM_ADAPTER_CHILD") == "1" {
+		executable, err := os.Executable()
+		if err != nil || !adapterCacheTarget(executable) {
+			t.Fatalf("adapter executable = %q, %v", executable, err)
+		}
+		launcher, err := agentShellLauncher()
+		if err != nil || launcher != os.Getenv("BASHY_SELF") {
+			t.Fatalf("launcher = %q, %v", launcher, err)
+		}
+		dir := ensureShims(launcher)
+		if dir == "" {
+			t.Fatal("shims not installed")
+		}
+		for _, name := range []string{"sh", "bash", "zsh"} {
+			out, err := exec.Command(filepath.Join(dir, name), "hello").CombinedOutput()
+			if err != nil || string(out) != "launcher:hello\n" {
+				t.Fatalf("%s: %q, %v", name, out, err)
+			}
+		}
+		if got := ensureShims(executable); got != "" {
+			t.Fatalf("accepted adapter: %q", got)
+		}
+		return
+	}
+	cache := t.TempDir()
+	adapter := filepath.Join(cache, "foreman")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.Open(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(adapter, os.O_CREATE|os.O_WRONLY, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	if copyErr != nil || closeErr != nil {
+		t.Fatalf("copy adapter: %v, %v", copyErr, closeErr)
+	}
+	launcher := filepath.Join(t.TempDir(), "bashy")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nprintf 'launcher:%s\n' \"$1\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAT_SHIM_ADAPTER_CHILD", "1")
+	t.Setenv("BASHY_ADAPTER_CACHE", cache)
+	t.Setenv("BASHY_SELF", launcher)
+	out, err := exec.Command(adapter, "-test.run=^TestAdapterProcessUsesBashyLauncher$", "-test.v").CombinedOutput()
+	if err != nil {
+		t.Fatalf("adapter child: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
+func TestShellShimRejectsAdapterCaches(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	override := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", xdg)
+	t.Setenv("BASHY_ADAPTER_CACHE", override)
+	shim := filepath.Join(t.TempDir(), "sh")
+	for _, root := range []string{override, filepath.Join(xdg, "bashy", "adapters"), filepath.Join(home, ".cache", "bashy", "adapters")} {
+		target := filepath.Join(root, "hash", "foreman")
+		if err := WriteShellShim(shim, target); err == nil {
+			t.Errorf("accepted %q", target)
+		}
+		if _, err := os.Stat(shim); !os.IsNotExist(err) {
+			t.Fatalf("rejected target wrote shim: %v", err)
+		}
+	}
+	target := filepath.Join(override, "foreman")
+	if err := os.WriteFile(target, nil, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "bashy")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteShellShim(shim, alias); err == nil {
+		t.Fatal("accepted symlink to adapter")
+	}
+	if err := WriteShellShim(shim, override+"-outside/bashy"); err != nil {
+		t.Fatalf("rejected sibling: %v", err)
+	}
+}
+
+func TestAgentShellLauncherPATH(t *testing.T) {
+	dir := t.TempDir()
+	launcher := filepath.Join(dir, "bashy")
+	if err := os.WriteFile(launcher, nil, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("BASHY_SELF", "")
+	got, err := agentShellLauncher()
+	if err != nil || got != launcher {
+		t.Fatalf("launcher = %q, %v", got, err)
+	}
+	t.Setenv("BASHY_ADAPTER_CACHE", dir)
+	if _, err := agentShellLauncher(); err == nil {
+		t.Fatal("accepted PATH adapter")
+	}
+	t.Setenv("BASHY_SELF", launcher)
+	if _, err := agentShellLauncher(); err == nil {
+		t.Fatal("accepted BASHY_SELF adapter")
+	}
+	t.Setenv("BASHY_SELF", "")
+	t.Setenv("PATH", t.TempDir())
+	if _, err := agentShellLauncher(); err == nil {
+		t.Fatal("accepted missing launcher")
 	}
 }
