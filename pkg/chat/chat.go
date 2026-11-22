@@ -843,7 +843,7 @@ func agentChildEnv(ctx context.Context) []string {
 	// dir is prepended, so shell forcing keeps priority.
 	env = toolPathEnv(env)
 	if forceAgentShell() {
-		if bashy, err := os.Executable(); err == nil && bashy != "" {
+		if bashy, err := agentShellLauncher(); err == nil {
 			env = forcedShellEnv(env, bashy, ensureShims(bashy))
 		}
 	}
