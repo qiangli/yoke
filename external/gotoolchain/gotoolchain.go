@@ -28,7 +28,10 @@ import (
 // DefaultVersion is used when no version is requested. Keep in step with the
 // Bash# Go coordinate: fenced ~~~go islands and --source=go refuse a toolchain
 // below 1.27, so the toolchain bashy provisions for itself must satisfy them.
-const DefaultVersion = "1.27.2"
+// Keep in step with the product go.mod toolchain (go1.27.4): the official
+// build image pre-seeds exactly this version in its binmgr cache, and asking
+// for any other version misses that cache (story 389edc3a9dc8).
+const DefaultVersion = "1.27.4"
 
 const releaseIndexURL = "https://go.dev/dl/?mode=json&include=all"
 
@@ -55,9 +58,14 @@ func entrypoint() string {
 // Ensure makes the requested Go toolchain available and returns the path to its
 // `go` executable plus its GOROOT. Idempotent: a cache hit does no network I/O
 // (binmgr short-circuits on the cached entrypoint). version is a bare number
-// like "1.27.2" (a leading "go" is tolerated); empty means DefaultVersion.
+// like "1.27.4" (a leading "go" is tolerated); empty means $BASHY_GO_VERSION
+// when set (the same selection the `bashy go` front door makes), else
+// DefaultVersion.
 func Ensure(ctx context.Context, version string) (goBin, goroot string, err error) {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "go")
+	if version == "" {
+		version = strings.TrimPrefix(strings.TrimSpace(os.Getenv("BASHY_GO_VERSION")), "go")
+	}
 	if version == "" {
 		version = DefaultVersion
 	}
@@ -152,12 +160,29 @@ func NewGoCmd() *cobra.Command {
 	return cmd
 }
 
+// PinGOROOT returns env with a single GOROOT entry pinned to goroot: an
+// inherited GOROOT naming a different toolchain is replaced, never left as a
+// duplicate the child may resolve first (todo 54a667814e3c). An empty goroot
+// leaves env unchanged.
+func PinGOROOT(env []string, goroot string) []string {
+	if goroot == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "GOROOT=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "GOROOT="+goroot)
+}
+
 func goCommandEnv(goroot string) []string {
 	env := append([]string{}, os.Environ()...)
 	if runtime.GOOS == "windows" {
 		env = normalizeWindowsTempEnv(env)
 	}
-	env = append(env, "GOROOT="+goroot)
+	env = PinGOROOT(env, goroot)
 	return notrack.Env(env)
 }
 

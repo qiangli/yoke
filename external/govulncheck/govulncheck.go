@@ -93,9 +93,7 @@ func Ensure(ctx context.Context, version string) (string, error) {
 		"GOBIN="+targetDir,
 		"GOWORK=off",
 	)
-	if goroot != "" {
-		env = append(env, "GOROOT="+goroot)
-	}
+	env = gotoolchain.PinGOROOT(env, goroot)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("govulncheck: go install: %w (%s)", err, strings.TrimSpace(string(out)))
