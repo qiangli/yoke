@@ -18,6 +18,9 @@ func TestAddURLSkill(t *testing.T) {
 	for _, route := range []string{"/guide", skillIndexPath, "/skill.md", "/SKILL.md", "fallback", "bad-digest", "invalid-skill"} {
 		t.Run(route, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if ua := r.UserAgent(); !strings.HasPrefix(ua, "bashy-site") {
+					t.Errorf("User-Agent %q, want bashy-site/<version>", ua)
+				}
 				switch r.URL.Path {
 				case skillIndexPath:
 					if route == "fallback" {

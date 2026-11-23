@@ -15,6 +15,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/tool"
+
+	"github.com/qiangli/yoke/pkg/webbotauth"
 )
 
 const skillIndexPath = "/.well-known/agent-skills/index.json"
@@ -44,6 +48,7 @@ func stageURLSkill(ctx context.Context, raw string) (string, error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		req.Header.Set("User-Agent", webbotauth.UserAgent("bashy-site", tool.Version))
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, nil, err

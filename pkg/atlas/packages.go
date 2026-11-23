@@ -309,6 +309,8 @@ var packages = map[string]Package{
 	"coopauth": libPkg("login", "the ONE shared cloudbox/outpost cooperative-auth implementation. "+
 		"It has no surface of its own by design: auth that you can invoke directly is auth you can "+
 		"invoke around."),
+	"webbotauth": libPkg("fetch", "the Web Bot Auth request signer (RFC 9421, outpost host key) behind "+
+		"`fetch --sign` and `site --sign`; a site verifies it to recognise a bashy agent, never to gate content."),
 	"llmbudget": libPkg("chat", "the local-first meter and gate under every metered-inference "+
 		"verb (chat/judge/meet/coach/pair). Deliberately not a verb: a budget an agent can call "+
 		"is a budget an agent can raise. It is read through the verbs that declare EffSpend."),

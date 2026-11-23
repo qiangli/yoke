@@ -26,6 +26,7 @@ import (
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/cmds/fetch/agentwire"
 	"github.com/qiangli/yoke/pkg/lens"
+	"github.com/qiangli/yoke/pkg/webbotauth"
 )
 
 const fetchSchemaVersion = "bashy-fetch-v1"
@@ -33,7 +34,7 @@ const fetchSchemaVersion = "bashy-fetch-v1"
 var cmd = &tool.Tool{
 	Name:     "fetch",
 	Synopsis: "Fetch a URL (REST client) and print the body; --md to markdown, --json for an envelope.",
-	Usage:    "fetch [-X METHOD] [-H 'K: V']... [-d DATA] [-u USER:PASS] [-t TOKEN] [--md] [--json] URL",
+	Usage:    "fetch [-X METHOD] [-H 'K: V']... [-d DATA] [-u USER:PASS] [-t TOKEN] [-A UA] [--sign [--signature-agent URL]] [--md] [--json] URL",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -52,6 +53,9 @@ func run(rc *tool.RunContext, args []string) int {
 	include := fs.BoolP("include", "i", false, "prepend response status + headers to text output")
 	output := fs.StringP("output", "o", "", "write the body to FILE instead of stdout")
 	fail := fs.BoolP("fail", "f", false, "exit non-zero on HTTP status >= 400")
+	userAgent := fs.StringP("user-agent", "A", "", "User-Agent (default bashy-fetch/<version>)")
+	sign := fs.Bool("sign", false, "sign the request with the outpost identity (Web Bot Auth; default $"+webbotauth.EnvSign+")")
+	signatureAgent := fs.String("signature-agent", "", "https URL of this agent's key directory, sent as Signature-Agent (default $"+webbotauth.EnvAgent+")")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -74,7 +78,20 @@ func run(rc *tool.RunContext, args []string) int {
 	client := resty.New()
 	defer client.Close()
 	client.SetTimeout(*timeout)
+	if webbotauth.Enabled(*sign) {
+		signer, err := webbotauth.FromEnv(*signatureAgent)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "fetch: --sign: %v\n", err)
+			return 1
+		}
+		client.SetTransport(&webbotauth.Transport{Base: client.Transport(), Signer: signer})
+	}
 	req := client.R()
+	ua := *userAgent
+	if ua == "" {
+		ua = webbotauth.UserAgent("bashy-fetch", tool.Version)
+	}
+	req.SetHeader("User-Agent", ua)
 
 	for _, h := range *headers {
 		k, v, ok := strings.Cut(h, ":")

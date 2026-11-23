@@ -3,15 +3,23 @@ package fetchcmd
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/yoke/cmds/fetch/agentwire"
+	"github.com/qiangli/yoke/pkg/webbotauth"
 )
 
 func runFetch(t *testing.T, stdin string, args ...string) (out, errOut string, code int) {
@@ -173,5 +181,55 @@ func TestFetchAgentChannels(t *testing.T) {
 				t.Fatalf("JSON: %q %q %d", out, log, code)
 			}
 		})
+	}
+}
+
+func TestFetchUserAgentAndSign(t *testing.T) {
+	var seen http.Header
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		io.WriteString(w, "ok")
+	}))
+	t.Cleanup(s.Close)
+	t.Setenv(webbotauth.EnvSign, "")
+
+	if _, _, code := runFetch(t, "", s.URL); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if ua := seen.Get("User-Agent"); !strings.HasPrefix(ua, "bashy-fetch") {
+		t.Fatalf("default User-Agent %q", ua)
+	}
+	if seen.Get("Signature") != "" || seen.Get("Signature-Input") != "" {
+		t.Fatal("unsigned by default, yet signed")
+	}
+	if runFetch(t, "", "-A", "custom/1", s.URL); seen.Get("User-Agent") != "custom/1" {
+		t.Fatalf("--user-agent %q", seen.Get("User-Agent"))
+	}
+	if runFetch(t, "", "-H", "User-Agent: hdr/2", s.URL); seen.Get("User-Agent") != "hdr/2" {
+		t.Fatalf("-H User-Agent %q", seen.Get("User-Agent"))
+	}
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := ssh.MarshalPrivateKey(priv, "outpost@test")
+	keyPath := filepath.Join(t.TempDir(), "ssh_host_ed25519")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(webbotauth.EnvKey, keyPath)
+	agent := "https://agent.example" + webbotauth.DirectoryPath
+	if _, errOut, code := runFetch(t, "", "--sign", "--signature-agent", agent, s.URL); code != 0 {
+		t.Fatalf("--sign exit %d: %s", code, errOut)
+	}
+	kid := webbotauth.Thumbprint(priv.Public().(ed25519.PublicKey))
+	if in := seen.Get("Signature-Input"); !strings.Contains(in, `keyid="`+kid+`"`) || !strings.Contains(in, `tag="web-bot-auth"`) || !strings.Contains(in, `"signature-agent"`) {
+		t.Fatalf("Signature-Input %q", in)
+	}
+	if seen.Get("Signature-Agent") != `"`+agent+`"` || !strings.HasPrefix(seen.Get("Signature"), "sig1=:") {
+		t.Fatalf("signature headers %v", seen)
+	}
+
+	t.Setenv(webbotauth.EnvKey, filepath.Join(t.TempDir(), "absent"))
+	if _, errOut, code := runFetch(t, "", "--sign", s.URL); code == 0 || !strings.Contains(errOut, "no outpost identity") {
+		t.Fatalf("missing key: exit %d %q", code, errOut)
 	}
 }
