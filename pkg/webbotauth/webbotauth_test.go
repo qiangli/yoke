@@ -142,6 +142,53 @@ func TestTransportSignsEachRequest(t *testing.T) {
 	}
 }
 
+// A redirect hop is re-signed only while it stays on the first request's
+// origin; a cross-origin hop goes out unsigned.
+func TestTransportCrossOriginRedirectUnsigned(t *testing.T) {
+	_, priv := writeKey(t)
+	pub := priv.Public().(ed25519.PublicKey)
+	var other []*http.Request
+	away := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		other = append(other, r)
+	}))
+	defer away.Close()
+	var seen []*http.Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r)
+		switch r.URL.Path {
+		case "/start":
+			http.Redirect(w, r, "/next", http.StatusFound)
+		case "/next":
+			http.Redirect(w, r, away.URL+"/landing", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	signer, err := NewSigner(priv, "https://agent.example/.well-known/http-message-signatures-directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: &Transport{Signer: signer}}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/start", nil)
+	// Caller-set signature headers are copied to every hop by net/http.
+	req.Header.Set("Signature-Agent", `"https://stale.example/"`)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(seen) != 2 || len(other) != 1 {
+		t.Fatalf("saw %d same-origin and %d cross-origin requests", len(seen), len(other))
+	}
+	host := strings.TrimPrefix(srv.URL, "http://")
+	verify(t, seen[0], pub, host, srv.URL+"/start")
+	verify(t, seen[1], pub, host, srv.URL+"/next")
+	for _, h := range []string{"Signature", "Signature-Input", "Signature-Agent"} {
+		if v := other[0].Header.Get(h); v != "" {
+			t.Fatalf("cross-origin redirect carried %s: %q", h, v)
+		}
+	}
+}
+
 func TestAuthorityDropsDefaultPort(t *testing.T) {
 	for raw, want := range map[string]string{
 		"https://Example.COM:443/a": "example.com",

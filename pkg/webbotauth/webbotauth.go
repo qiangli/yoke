@@ -260,8 +260,11 @@ func TargetURI(req *http.Request) string {
 	return req.URL.Scheme + "://" + Authority(req) + req.URL.RequestURI()
 }
 
-// Transport signs every request (including each redirect hop) before
-// handing it to Base.
+// Transport signs every request, and each redirect hop that stays on the
+// first request's scheme and authority. Like net/http's Authorization
+// stripping, a cross-origin redirect hop is sent unsigned, with any copied
+// signature headers removed, so the identity is never presented to a site
+// the caller did not address.
 type Transport struct {
 	Base   http.RoundTripper
 	Signer *Signer
@@ -273,10 +276,28 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 	clone := req.Clone(req.Context())
-	if err := t.Signer.Sign(clone); err != nil {
-		return nil, err
+	if sameOrigin(clone, firstRequest(req)) {
+		if err := t.Signer.Sign(clone); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, h := range []string{"Signature", "Signature-Input", "Signature-Agent"} {
+			clone.Header.Del(h)
+		}
 	}
 	return base.RoundTrip(clone)
+}
+
+// firstRequest walks a redirect chain back to the request the caller made.
+func firstRequest(req *http.Request) *http.Request {
+	for req.Response != nil && req.Response.Request != nil {
+		req = req.Response.Request
+	}
+	return req
+}
+
+func sameOrigin(a, b *http.Request) bool {
+	return a == b || (strings.EqualFold(a.URL.Scheme, b.URL.Scheme) && Authority(a) == Authority(b))
 }
 
 // UserAgent is the stable bashy user agent: product/version, or product
