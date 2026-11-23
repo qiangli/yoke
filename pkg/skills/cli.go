@@ -2,6 +2,7 @@ package skills
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -145,13 +146,13 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	show.Flags().BoolVar(&showYAML, "yaml", false, "print the skill's record (the lossless projection of its whole folder) as YAML")
 	show.Flags().BoolVar(&showJSON, "json", false, "print the skill's record as JSON")
 
-	var force, addJSON bool
+	var force, addJSON, addDryRun bool
 	var addFile string
 	var create createFlags
 	add := &cobra.Command{
-		Use:   "add (-f FILE|- | <dir>|<file.yaml>|- | <name> --description TEXT)",
+		Use:   "add (-f FILE|- | <dir>|<file.yaml>|<url>|- | <name> --description TEXT)",
 		Short: "install a skill folder or record into the host-local store (verified admission)",
-		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt),\nor a `kind: skill` record (the projection `show --yaml` prints; a file, or -\nfor stdin) rebuilt into the same folder, into the host-local store after a\nverified-admission gate: frontmatter must parse with name+description,\nmetadata.requires must parse, and a skill.dhnt canonical face must be valid\n(transpilable, content-addressed). Inapplicable-here is reported, not\nrefused — a skill may be installed for a tool you have not provisioned yet.\n\nGiven a name and --description instead of a path, add writes a minimal\nSKILL.md — name, description, metadata.requires if given, and the --body\nverbatim — and installs it through the same gate. No template beyond that.",
+		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt),\nor a `kind: skill` record (the projection `show --yaml` prints; a file, or -\nfor stdin), or an HTTP(S) site, skill index, or SKILL.md URL. Each is staged\ninto the same folder and installed into the host-local store after a\nverified-admission gate: frontmatter must parse with name+description,\nmetadata.requires must parse, and a skill.dhnt canonical face must be valid\n(transpilable, content-addressed). Inapplicable-here is reported, not\nrefused — a skill may be installed for a tool you have not provisioned yet.\n\nGiven a name and --description instead of a path, add writes a minimal\nSKILL.md — name, description, metadata.requires if given, and the --body\nverbatim — and installs it through the same gate. No template beyond that.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("file") {
 				return cobra.NoArgs(cmd, args)
@@ -164,14 +165,15 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 				force = true // YAML import is an upsert so show | add -f - is idempotent.
 			}
 			if create.given(cmd) {
-				return runCreate(cmd, cfg, args[0], create, force, addJSON)
+				return runCreate(cmd, cfg, args[0], create, force, addJSON, addDryRun)
 			}
-			return runAdd(cmd, cfg, args[0], force, addJSON)
+			return runAdd(cmd, cfg, args[0], force, addJSON, addDryRun)
 		},
 	}
 	add.Flags().BoolVar(&force, "force", false, "replace an already-installed skill of the same name")
 	add.Flags().StringVarP(&addFile, "file", "f", "", "import a skill record or folder from FILE (- = stdin)")
 	add.Flags().BoolVar(&addJSON, "json", false, "machine-readable admission report")
+	add.Flags().BoolVar(&addDryRun, "dry-run", false, "check admission without installing")
 	create.bind(add)
 
 	rm := &cobra.Command{
@@ -317,7 +319,7 @@ func (f *createFlags) given(cmd *cobra.Command) bool {
 
 // runCreate is `add <name> --description …`: a minimal SKILL.md rendered into
 // a temp folder and admitted through the same gate as any other add.
-func runCreate(cmd *cobra.Command, cfg *config, name string, f createFlags, force, asJSON bool) error {
+func runCreate(cmd *cobra.Command, cfg *config, name string, f createFlags, force, asJSON, dryRun bool) error {
 	if cfg.cfgDir == "" {
 		return fmt.Errorf("skills: no host-local store directory configured")
 	}
@@ -358,7 +360,7 @@ func runCreate(cmd *cobra.Command, cfg *config, name string, f createFlags, forc
 	if err := os.WriteFile(filepath.Join(dir, skillMarker), md, 0o644); err != nil {
 		return err
 	}
-	return addFolder(cmd, cfg, dir, force, asJSON)
+	return addFolder(cmd, cfg, dir, force, asJSON, dryRun, false)
 }
 
 func runRm(cmd *cobra.Command, cfg *config, name string) error {
@@ -1069,19 +1071,26 @@ func validSkillName(name string) error {
 		return fmt.Errorf("skills: name %q must not start with a dot", name)
 	case strings.Contains(name, ".."):
 		return fmt.Errorf("skills: name %q must not contain %q", name, "..")
+	case !filepath.IsLocal(name):
+		return fmt.Errorf("skills: name %q is not a local path component", name)
 	}
 	return nil
 }
 
-func runAdd(cmd *cobra.Command, cfg *config, arg string, force, asJSON bool) error {
-	if strings.Contains(arg, "://") {
-		return fmt.Errorf("skills: url sources are not supported yet — pass a local skill directory")
-	}
+func runAdd(cmd *cobra.Command, cfg *config, arg string, force, asJSON, dryRun bool) error {
 	if cfg.cfgDir == "" {
 		return fmt.Errorf("skills: no host-local store directory configured")
 	}
 	dir := arg
-	if isRecordSource(arg) {
+	remote := strings.Contains(arg, "://")
+	if remote {
+		var err error
+		dir, err = stageURLSkill(cmd.Context(), arg)
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(dir)
+	} else if isRecordSource(arg) {
 		// A record is rebuilt into a folder first, so it walks through the
 		// SAME gate as `add <dir>` — a document must not have a softer
 		// admission than the folder it stands for.
@@ -1109,16 +1118,19 @@ func runAdd(cmd *cobra.Command, cfg *config, arg string, force, asJSON bool) err
 			return err
 		}
 	}
-	return addFolder(cmd, cfg, dir, force, asJSON)
+	return addFolder(cmd, cfg, dir, force, asJSON, dryRun, remote)
 }
 
 // addFolder is the admission gate + install for a skill folder on disk.
-func addFolder(cmd *cobra.Command, cfg *config, dir string, force, asJSON bool) error {
+func addFolder(cmd *cobra.Command, cfg *config, dir string, force, asJSON, dryRun, remote bool) error {
 	sk, err := loadSkillDir(dir)
 	if err != nil {
 		return err
 	}
-	ps, _ := cfg.probes(false)
+	if err := validSkillName(sk.Name); err != nil {
+		return err
+	}
+	ps, _ := cfg.probes(dryRun)
 	a := admit(sk, ps)
 	if asJSON {
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(a); err != nil {
@@ -1130,7 +1142,16 @@ func addFolder(cmd *cobra.Command, cfg *config, dir string, force, asJSON bool) 
 	if !a.Valid {
 		return fmt.Errorf("skills: %q failed the admission gate", sk.Name)
 	}
+	if dryRun {
+		return nil
+	}
 	dst, err := installSkill(dir, cfg.cfgDir, sk.Name, force)
+	if remote && errors.Is(err, errSkillExists) && installedURLSkillMatches(dir, filepath.Join(cfg.cfgDir, sk.Name)) {
+		if !asJSON {
+			fmt.Fprintf(cmd.OutOrStdout(), "already installed: %s\n", sk.Name)
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}

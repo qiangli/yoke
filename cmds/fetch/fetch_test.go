@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/cmds/fetch/agentwire"
 )
 
 func runFetch(t *testing.T, stdin string, args ...string) (out, errOut string, code int) {
@@ -134,5 +135,43 @@ func TestFetchDataFromStdin(t *testing.T) {
 	json.Unmarshal([]byte(out), &env)
 	if env["body"] != "from-stdin" {
 		t.Errorf("stdin body = %v, want from-stdin", env["body"])
+	}
+}
+
+func TestFetchAgentChannels(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Bashy-Shaped", `module="docs, west", revision="e1", agents="/agents.txt"`)
+		w.Header().Add("Link", `</a,b.md>; rel="alternate"; type="text/markdown", </mcp>; rel="service-desc help"`)
+		w.Header().Add("Link", `</llms.txt>; rel=describedby`)
+		switch r.URL.Path {
+		case "/html":
+			w.Header().Set("Content-Type", "text/html")
+			io.WriteString(w, `<h1>Title</h1><section id="agents"><h2>For agents</h2><p>Agent instructions</p></section>`)
+		case "/json":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"title":"Title","agents":{"instructions":"Agent instructions"}}`)
+		default:
+			w.Header().Set("Content-Type", "text/markdown")
+			io.WriteString(w, "---\nagent:\n  instructions: fallback\n---\n## For agents {#agents}\n\nAgent instructions\n\n## Title")
+		}
+	}))
+	defer s.Close()
+	for _, path := range []string{"/html", "/json", "/markdown"} {
+		t.Run(path, func(t *testing.T) {
+			out, log, code := runFetch(t, "", "--json=false", s.URL+path)
+			if i := strings.Index(out, "Agent instructions"); code != 0 || i < 0 || i > strings.Index(out, "Bashy-Shaped:") || !strings.Contains(out, "Link: </llms.txt>") {
+				t.Fatalf("text: %q %q %d", out, log, code)
+			}
+			out, log, code = runFetch(t, "", "--json", s.URL+path)
+			var got struct {
+				AgentBlock string                `json:"agent_block"`
+				Shaped     map[string]string     `json:"bashy_shaped"`
+				Links      []agentwire.AgentLink `json:"links"`
+			}
+			if code != 0 || json.Unmarshal([]byte(out), &got) != nil || !strings.Contains(got.AgentBlock, "Agent instructions") ||
+				got.Shaped["module"] != "docs, west" || len(got.Links) != 3 || got.Links[0].URL != "/a,b.md" || len(got.Links[1].Rel) != 2 {
+				t.Fatalf("JSON: %q %q %d", out, log, code)
+			}
+		})
 	}
 }

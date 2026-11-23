@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -87,20 +88,44 @@ func loadSkillDir(dir string) (Skill, error) {
 	return sk, nil
 }
 
+var errSkillExists = errors.New("already installed")
+
 // installSkill copies an admitted skill folder into the ring-1 store.
-// The admission gate must have passed before calling this.
 func installSkill(srcDir, storeDir, name string, force bool) (string, error) {
 	dst := filepath.Join(storeDir, name)
-	if _, err := os.Stat(dst); err == nil {
+	exists := func() error {
+		return fmt.Errorf("skills: %q %w (use --force to replace)", name, errSkillExists)
+	}
+	if _, err := os.Lstat(dst); err == nil {
 		if !force {
-			return "", fmt.Errorf("skills: %q already installed (use --force to replace)", name)
+			return "", exists()
 		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		return "", err
+	}
+	// Stage on the same filesystem, then publish the complete folder. A
+	// concurrent add can observe a previous install or win this rename.
+	staged, err := os.MkdirTemp(storeDir, ".skill-install-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(staged)
+	stagedSkill := filepath.Join(staged, name)
+	if err := copyDir(srcDir, stagedSkill); err != nil {
+		return "", err
+	}
+	if force {
 		if err := os.RemoveAll(dst); err != nil {
 			return "", err
 		}
 	}
-	if err := copyDir(srcDir, dst); err != nil {
-		_ = os.RemoveAll(dst) // never leave a half-installed skill
+	if err := os.Rename(stagedSkill, dst); err != nil {
+		if _, statErr := os.Lstat(dst); statErr == nil && !force {
+			return "", exists()
+		}
 		return "", err
 	}
 	return dst, nil

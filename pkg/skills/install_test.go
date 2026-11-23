@@ -203,8 +203,8 @@ func TestCLIAddVerify(t *testing.T) {
 		t.Fatalf("verify output: %q", out)
 	}
 
-	// URL sources are a loud not-yet.
-	if _, _, err := f.run("add", "https://host.invalid/skill"); err == nil || !strings.Contains(err.Error(), "not supported") {
+	// URLs accept only HTTP(S).
+	if _, _, err := f.run("add", "file:///not-a-remote-skill"); err == nil || !strings.Contains(err.Error(), "expected an HTTP(S) URL") {
 		t.Fatalf("url add: %v", err)
 	}
 }

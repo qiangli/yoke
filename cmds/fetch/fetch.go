@@ -24,6 +24,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/cmds/fetch/agentwire"
 	"github.com/qiangli/yoke/pkg/lens"
 )
 
@@ -108,9 +109,22 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	body := resp.String()
+	header := resp.Header()
+	block := agentwire.ResponseAgent(body, header.Get("Content-Type"))
+	shaped := strings.Join(header.Values("Bashy-Shaped"), ", ")
+	links := agentwire.AgentLinks(header)
+	agentReady := block != "" || shaped != ""
+	for _, link := range links {
+		agentReady = agentReady || link.AnnouncesAgent()
+	}
 	if *md {
 		if out, cerr := lens.HTMLToMarkdown(body); cerr == nil {
 			body = out
+			if block != "" && strings.Contains(header.Get("Content-Type"), "html") {
+				if converted, err := lens.HTMLToMarkdown(block); err == nil {
+					block = strings.TrimSpace(converted)
+				}
+			}
 		} else {
 			fmt.Fprintf(rc.Err, "fetch: --md: %v (printing raw body)\n", cerr)
 		}
@@ -137,6 +151,14 @@ func run(rc *tool.RunContext, args []string) int {
 			"body":           body,
 			"duration_ms":    resp.Duration().Milliseconds(),
 		}
+		if agentReady {
+			env["agent_block"] = block
+			env["bashy_shaped"] = agentwire.ShapedFields(shaped)
+			if links == nil {
+				links = []agentwire.AgentLink{}
+			}
+			env["links"] = links
+		}
 		b, _ := json.Marshal(env)
 		if werr := writeOut(rc, *output, string(b)+"\n"); werr != nil {
 			fmt.Fprintf(rc.Err, "fetch: %v\n", werr)
@@ -146,6 +168,19 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	var sb strings.Builder
+	if *output == "" && agentReady {
+		if block != "" {
+			fmt.Fprintln(&sb, strings.TrimRight(block, "\n"))
+		}
+		if !*include {
+			if shaped != "" {
+				fmt.Fprintln(&sb, "Bashy-Shaped:", shaped)
+			}
+			for _, value := range header.Values("Link") {
+				fmt.Fprintln(&sb, "Link:", value)
+			}
+		}
+	}
 	if *include {
 		fmt.Fprintf(&sb, "%s\n", resp.Status())
 		for k := range resp.Header() {

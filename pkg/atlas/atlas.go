@@ -318,6 +318,7 @@ func ResolveOutputShape(argv []string) OutputShape {
 var readOnlySubcommands = map[string]map[string]bool{
 	"desktop": {"schema": true, "get": true, "catalog": true, "history": true, "allowance": true, "pages": true, "result": true},
 	"shape":   {"show": true, "diff": true},
+	"site":    {"explore": true, "cite": true, "recipe": true},
 	"todo":    {"list": true, "show": true},
 	"sprint":  {"show": true, "board": true},
 }
@@ -1456,6 +1457,7 @@ func init() {
 	addVerb("src", Entry{Stage: StageCross, Group: GroupDiagnostics, Caps: []string{CapJSON, CapNeedsNetwork}})
 	// shape operates the installed application's scoped change lifecycle.
 	addVerb("shape", Entry{Stage: StageCross, Group: GroupPlatform, Tier: TierWorkplace, Caps: []string{CapJSON, CapSpawnsProcesses, CapNeedsNetwork}, Effects: []string{EffRead, EffWrite, EffDestroy, EffNet, EffExec, EffSpend, EffPersist, EffRemote}, Reversibility: RevIrreversible, Stability: StabilityExperimental})
+	addVerb("site", Entry{Stage: StageCross, Group: GroupNet, Tier: TierWorkplace, Caps: []string{CapJSON, CapDryRun, CapNeedsNetwork}, Effects: []string{EffRead, EffWrite, EffNet, EffPersist}, Reversibility: RevIrreversible, Stability: StabilityExperimental})
 	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
 	// nobody tested, but because the gate (the command that decides pass/fail)
 	// was spelled four incompatible ways across four packages: weave's
