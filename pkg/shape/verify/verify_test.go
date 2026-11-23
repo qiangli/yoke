@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	"github.com/qiangli/yoke/pkg/shape/evidence"
 )
@@ -255,5 +256,39 @@ func TestRunNeedsAPrincipal(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "principal") {
 		t.Fatalf("err = %v, want a principal refusal", err)
+	}
+}
+
+// A check builds the candidate inside its clone, so it reads shared modules
+// from the host's local module proxy exactly as a program candidate does;
+// the proxy is named by the verifier's environment, not the check's home.
+func TestTrustedRunnerChecksSeeTheModuleProxy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture check is POSIX shell")
+	}
+	proxy := t.TempDir()
+	t.Setenv(gomod.ProxyEnv, proxy)
+	t.Setenv("GOPROXY", "")
+	t.Setenv("GONOSUMDB", "")
+	dir := t.TempDir()
+	script := filepath.Join(dir, "check.sh")
+	if err := os.WriteFile(script, []byte(`printf '%s\n%s\n' "$GOPROXY" "$GONOSUMDB"`+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := TrustedRunner{
+		Bin: "sh", Effects: []string{"read"}, Level: contain.LevelProcess,
+	}.RunCheck(context.Background(), CheckRun{
+		Name: "env", Dir: dir, Script: script, Cap: "read",
+		CallLog: filepath.Join(dir, "calls.log"), Timeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != evidence.StatusPass {
+		t.Fatalf("status = %q (%s)", out.Status, out.Detail)
+	}
+	want := gomod.FileURL(proxy) + ",https://proxy.golang.org,direct\n" + gomod.LocalModulePrefix + "\n"
+	if out.Detail != want {
+		t.Fatalf("check env = %q, want %q", out.Detail, want)
 	}
 }

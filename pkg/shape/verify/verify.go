@@ -43,6 +43,7 @@ import (
 	"time"
 
 	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/policy/advice"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	"github.com/qiangli/yoke/pkg/shape/evidence"
@@ -584,7 +585,7 @@ func (r TrustedRunner) RunCheck(ctx context.Context, c CheckRun) (Outcome, error
 	res, err := contain.Run(ctx, contain.Spec{
 		Dir: c.Dir, Argv: argv, Level: level, OCI: r.OCI, Cap: c.Cap, Effects: effects,
 		EnvAllow: r.EnvAllow,
-		EnvSet:   map[string]string{CallLogEnv: c.CallLog},
+		EnvSet:   checkEnv(c.CallLog),
 		Timeout:  c.Timeout, MaxRSSBytes: r.MaxRSSBytes, MaxProcs: r.MaxProcs,
 		Stdout: out, Stderr: out,
 	})
@@ -610,6 +611,19 @@ func (r TrustedRunner) RunCheck(ctx context.Context, c CheckRun) (Outcome, error
 		return Outcome{Status: evidence.StatusSkip, Detail: detail}, nil
 	}
 	return Outcome{Status: evidence.StatusFail, Detail: detail}, nil
+}
+
+// checkEnv is what a check sees on top of the scrubbed floor: its call log
+// and, because a check builds the candidate inside the clone, the host's
+// local module proxy for shared modules, read from the verifier's own
+// environment before the isolated home replaces it.
+func checkEnv(callLog string) map[string]string {
+	env := map[string]string{CallLogEnv: callLog}
+	for _, kv := range gomod.BuildEnv(gomod.ProxyDir(), nil) {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	return env
 }
 
 // trim bounds a detail string stored in a record.
