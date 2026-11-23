@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -27,6 +28,8 @@ go.work; a sibling pin is the go.mod require (or versioned fork replace).
   mod dir   PATH@VERSION   download a pinned module and print its directory
   mod tools [GOMOD]        list tool directives and the version that provides each
   mod init  [DIR]          make a project a Go module: go.mod + doc-only pkg.go
+  mod proxy publish DIR    publish a module version into the local Go module proxy
+  mod proxy status         list the local proxy's modules and versions
 
 DIR defaults to the current directory; at the workspace root, drift and sync
 cover every module. Exit codes: 3 a pin is stale, 5 a pin cannot be compared.`,
@@ -209,6 +212,71 @@ cover every module. Exit codes: 3 a pin is stale, 5 a pin cannot be compared.`,
 	initCmd.Flags().StringVar(&modPath, "module", "", "module path (default: derived from the origin remote)")
 	initCmd.Flags().StringVar(&goVer, "go", "", "go directive version (default: the running toolchain's)")
 	root.AddCommand(initCmd)
+
+	proxyCmd := &cobra.Command{
+		Use:   "proxy",
+		Short: "The local Go module proxy: a GOPROXY-layout directory builds read with GOPROXY=file://DIR",
+		Long: `proxy publishes module versions into a directory in Go module proxy layout
+(<module>/@v/{list,V.info,V.mod,V.zip}). Builds read it with
+GOPROXY=file://DIR; no server runs. DIR defaults to $` + ProxyEnv + `, else
+$BASHY_HOME/gomod-proxy.`,
+	}
+	var proxyDir, version string
+	publishCmd := &cobra.Command{
+		Use:   "publish DIR",
+		Short: "Publish the module at DIR (default version: the pseudo-version of HEAD); a published version is immutable",
+		Long: `publish writes the module at DIR into the local proxy. Without --version
+the version is the pseudo-version of the git commit at HEAD and the content is
+that commit's tree under DIR. With --version the content is the working copy
+of the files git tracks under DIR (every file outside a git repository).
+Publishing identical content again is a no-op; different content under an
+existing version is refused (exit 3): publish a new version.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			dir := proxyDir
+			if dir == "" {
+				dir = ProxyDir()
+			}
+			pub, err := Publish(args[0], version, dir)
+			if err != nil {
+				return fail(c, "proxy publish", err)
+			}
+			return ok(c, "proxy publish", pub, func(w io.Writer) {
+				state := "published"
+				if !pub.Published {
+					state = "unchanged"
+				}
+				fmt.Fprintf(w, "%s %s@%s %s\n", state, pub.Module, pub.Version, pub.Hash)
+			})
+		},
+	}
+	publishCmd.Flags().StringVar(&version, "version", "", "version to publish (default: the pseudo-version of HEAD)")
+	statusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "List the modules in the local proxy and their versions",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			dir := proxyDir
+			if dir == "" {
+				dir = ProxyDir()
+			}
+			mods, err := ProxyStatus(dir)
+			if err != nil {
+				return fail(c, "proxy status", err)
+			}
+			return ok(c, "proxy status", map[string]any{"proxy": dir, "modules": mods}, func(w io.Writer) {
+				if len(mods) == 0 {
+					fmt.Fprintln(w, "mod proxy: no modules in", dir)
+				}
+				for _, m := range mods {
+					fmt.Fprintf(w, "%s %s\n", m.Module, strings.Join(m.Versions, " "))
+				}
+			})
+		},
+	}
+	proxyCmd.PersistentFlags().StringVar(&proxyDir, "dir", "", "proxy directory (default $"+ProxyEnv+" or $BASHY_HOME/gomod-proxy)")
+	proxyCmd.AddCommand(publishCmd, statusCmd)
+	root.AddCommand(proxyCmd)
 	return root
 }
 

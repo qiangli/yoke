@@ -17,6 +17,7 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	"github.com/qiangli/yoke/pkg/shape/evidence"
 )
@@ -114,6 +115,12 @@ func (runner ContainedProgramRunner) RunProgram(ctx context.Context, r ProgramRu
 		selected = r.Argv[0]
 	}
 	env["GOWORK"] = "off"
+	// Shared modules resolve from the host's local module proxy, read from
+	// the verifier's own environment before the isolated home replaces it.
+	for _, kv := range gomod.BuildEnv(gomod.ProxyDir(), nil) {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
 	env["BASHY_SHAPE_ENTRY"] = selected
 	if filepath.IsAbs(r.Artifact) {
 		env["BASHY_BIN"] = r.Artifact

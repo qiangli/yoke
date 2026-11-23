@@ -28,6 +28,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
+	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/shape/appserver"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
@@ -315,7 +316,9 @@ func (a *shapedApp) buildServer(c *object.Commit) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.opts.goTool(), "build", "-trimpath", "-o", out, "./"+srv.Main)
 	cmd.Dir = src
-	cmd.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")
+	// The tree builds alone: modules it shares with other apps come from the
+	// local module proxy (`bashy mod proxy publish`), never a sibling path.
+	cmd.Env = append(append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0"), gomod.BuildEnv(gomod.ProxyDir(), nil)...)
 	var log bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &log, &log
 	if err := cmd.Run(); err != nil {

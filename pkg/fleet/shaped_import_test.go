@@ -68,14 +68,11 @@ func TestShapedAppServerManifest(t *testing.T) {
 	}
 }
 
-// TestShapedAppServerCapturesOutOfTreeReplace: a server whose go.mod
-// replaces a sibling directory (the desk tools' `replace desk-kit =>
-// ../kit`) is imported with that module vendored into the managed
-// checkout, so a revision builds from its own tree alone.
-func TestShapedAppServerCapturesOutOfTreeReplace(t *testing.T) {
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("go toolchain not on PATH")
-	}
+// TestShapedAppRefusesOutOfTreeReplace: a source whose go.mod replaces a
+// sibling directory (the desk tools' former `replace desk-kit => ../kit`)
+// cannot build from its own tree, so `app add` refuses it, names the fix, and
+// installs nothing. A replace that stays inside the source is accepted.
+func TestShapedAppRefusesOutOfTreeReplace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)
 	root := t.TempDir()
@@ -96,16 +93,35 @@ func TestShapedAppServerCapturesOutOfTreeReplace(t *testing.T) {
 	write("tool/shaped.json", `{"server": {"args": ["-addr", "$ADDR"]}}`)
 
 	cat := New(WithRoot(filepath.Join(home, "registry")), WithoutCloudOverlay())
-	if err := cat.SaveApp(App{Name: "tool", Type: AppTypeShaped, Source: filepath.Join(root, "tool")}); err != nil {
-		t.Fatalf("import: %v", err)
+	err := cat.SaveApp(App{Name: "tool", Type: AppTypeShaped, Source: filepath.Join(root, "tool")})
+	if err == nil {
+		t.Fatal("a source with an out-of-tree replace was imported")
 	}
-	a, _ := cat.App("tool")
-	if _, err := os.Stat(filepath.Join(a.Source, "vendor", "desk-kit", "kit.go")); err != nil {
-		t.Fatalf("out-of-tree replace not captured: %v", err)
+	for _, want := range []string{"go.mod", "desk-kit => ../kit", "outside the app source", "bashy mod proxy publish", "require the published version"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q lacks %q", err, want)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "tool", "vendor")); !os.IsNotExist(err) {
-		t.Fatal("import wrote vendor/ into the operator's source")
+	if _, statErr := os.Stat(filepath.Join(home, "src", "tool")); !os.IsNotExist(statErr) {
+		t.Error("refused import left a managed checkout behind")
 	}
+	if _, statErr := os.Stat(filepath.Join(root, "tool", "vendor")); !os.IsNotExist(statErr) {
+		t.Error("import wrote vendor/ into the operator's source")
+	}
+
+	// A replace inside the source tree builds from that tree: accepted.
+	write("inner/go.mod", "module inner\n\ngo 1.22\n\nreplace desk-kit => ./kit\n\nrequire desk-kit v0.0.0-00010101000000-000000000000\n")
+	write("inner/kit/go.mod", "module desk-kit\n\ngo 1.22\n")
+	write("inner/kit/kit.go", "package kit\n\nconst Name = \"kit\"\n")
+	write("inner/main.go", "package main\n\nimport kit \"desk-kit\"\n\nfunc main() { println(kit.Name) }\n")
+	write("inner/shaped.json", `{"server": {"args": ["-addr", "$ADDR"]}}`)
+	if err := cat.SaveApp(App{Name: "inner", Type: AppTypeShaped, Source: filepath.Join(root, "inner")}); err != nil {
+		t.Fatalf("in-tree replace refused: %v", err)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		return
+	}
+	a, _ := cat.App("inner")
 	build := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "bin"), ".")
 	build.Dir = a.Source
 	build.Env = append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0")

@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -86,9 +85,6 @@ func importShapedApp(a *App) error {
 		if err := copyShapedTree(absSource, tmp); err != nil {
 			return fmt.Errorf("fleet: app %q: import %s: %w", a.Name, source, err)
 		}
-		if err := vendorOutOfTreeReplaces(absSource, tmp); err != nil {
-			return fmt.Errorf("fleet: app %q: import %s: %w", a.Name, source, err)
-		}
 		if _, err := ygit.Init(ygit.InitOptions{Path: tmp}); err != nil {
 			return fmt.Errorf("fleet: app %q: initialize managed checkout: %w", a.Name, err)
 		}
@@ -103,6 +99,9 @@ func importShapedApp(a *App) error {
 		}
 	}
 	if err := checkShapedManifest(tmp); err != nil {
+		return fmt.Errorf("fleet: app %q: %w", a.Name, err)
+	}
+	if err := checkOutOfTreeReplaces(tmp); err != nil {
 		return fmt.Errorf("fleet: app %q: %w", a.Name, err)
 	}
 	if err := ensureShapedBase(tmp); err != nil {
@@ -129,72 +128,53 @@ func checkShapedManifest(dir string) error {
 	return err
 }
 
-// vendorOutOfTreeReplaces makes a declared server buildable from its own
-// tree. A revision is built from that commit alone, so a go.mod replace
-// pointing outside the app (`replace desk-kit => ../kit`, the desk tools'
-// shape) would break every build. When the source has such a replace and no
-// vendor/ of its own, `go mod vendor` runs where the replace resolves and
-// writes into the managed checkout: the outside module is captured into the
-// base revision like any other source. An app without a server manifest, or
-// whose go.mod stays inside the tree, is copied untouched.
-func vendorOutOfTreeReplaces(source, dest string) error {
-	b, err := os.ReadFile(filepath.Join(source, appserver.File))
-	if err != nil {
-		return nil
-	}
-	m, err := appserver.Parse(b)
-	if err != nil || m.Server == nil {
-		return err
-	}
-	modDir := ""
-	for d := filepath.Join(source, filepath.FromSlash(m.Server.Main)); ; d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
-			modDir = d
-			break
+// checkOutOfTreeReplaces refuses a source whose go.mod replaces a module
+// with a directory outside the source (`replace desk-kit => ../kit`, the
+// desk tools' former shape). A revision is built from that commit's tree
+// alone, so such a build cannot work; copying or vendoring the outside module
+// in would fork it silently. The fix is to publish the module to the local
+// module proxy and require the published version.
+func checkOutOfTreeReplaces(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if samePath(d, source) || filepath.Dir(d) == d {
+		if d.IsDir() {
+			if p != dir && (d.Name() == ".git" || d.Name() == "vendor" || d.Name() == "testdata") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-	}
-	if _, err := os.Stat(filepath.Join(modDir, "vendor")); err == nil {
+		if d.Name() != "go.mod" {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		mf, err := modfile.Parse(p, data, nil)
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		for _, r := range mf.Replace {
+			if r.New.Version != "" || !modfile.IsDirectoryPath(r.New.Path) {
+				continue
+			}
+			target := filepath.FromSlash(r.New.Path)
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(p), target)
+			}
+			if in, err := filepath.Rel(dir, target); err == nil && in != ".." && !strings.HasPrefix(in, ".."+string(filepath.Separator)) && !filepath.IsAbs(in) {
+				continue
+			}
+			return fmt.Errorf("%s: replace %s => %s points outside the app source; a shaped app builds from its own tree alone. "+
+				"Fix: publish that module to the local Go module proxy (bashy mod proxy publish %s --version vX.Y.Z), "+
+				"require the published version in go.mod and drop the replace (GOPROXY=file://<proxy>,direct GONOSUMDB=<module> go mod tidy)",
+				filepath.ToSlash(rel), r.Old.Path, r.New.Path, r.New.Path)
+		}
 		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(modDir, "go.mod"))
-	if err != nil {
-		return err
-	}
-	mf, err := modfile.Parse("go.mod", data, nil)
-	if err != nil {
-		return fmt.Errorf("go.mod: %w", err)
-	}
-	outside := ""
-	for _, r := range mf.Replace {
-		if r.New.Version != "" {
-			continue
-		}
-		target := r.New.Path
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(modDir, target)
-		}
-		if rel, err := filepath.Rel(source, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			outside = r.New.Path
-			break
-		}
-	}
-	if outside == "" {
-		return nil
-	}
-	rel, err := filepath.Rel(source, modDir)
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command("go", "mod", "vendor", "-o", filepath.Join(dest, rel, "vendor"))
-	cmd.Dir = modDir
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("capture out-of-tree replace %s with go mod vendor: %v\n%s", outside, err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	})
 }
 
 func shapedManagedDir(name string) string {
