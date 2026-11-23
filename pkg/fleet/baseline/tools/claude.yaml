@@ -8,22 +8,30 @@ cli:
   # against the vendor's <version>/manifest.json sha256 (darwin/arm64 was
   # downloaded and re-hashed on a trusted dev host on 2026-10-09 and matched).
   # Raw executables, no archive. Linux uses the glibc build (the bucket also
-  # has -musl variants). The npm package @anthropic-ai/claude-code@2.1.295 is
+  # has -musl variants). RE-PINNED 2026-11-23 to 2.1.325 (the vendor's `stable`
+  # channel that day; `latest` was 2.1.331): 2.1.295 carries no
+  # `claude-fable-5-2` model id, so `bashy claude --model fable5.2` (seeded
+  # Sprint 671) launched a binary that rejects the model; 2.1.325 does carry
+  # it. darwin/arm64 was downloaded and re-hashed on a trusted dev host on
+  # 2026-11-23 and matched the manifest; the other digests are the manifest's.
+  # The npm package @anthropic-ai/claude-code@2.1.325 is
   # the same release; its licence field reads "SEE LICENSE IN README.md" —
   # the Anthropic Commercial Terms of Service, a proprietary binary: download
   # and run under those terms, never vendored. DISABLE_AUTOUPDATER keeps the
   # pin from replacing itself.
   managed:
     source: vendor-url
-    version: 2.1.295
+    version: 2.1.325
     license: Anthropic Commercial Terms of Service (proprietary; SEE LICENSE IN README.md)
     license_url: https://www.anthropic.com/legal/commercial-terms
     # NO THIRD-PARTY TRACKING (Sprint #434 rule 2, docs/bashy-supply-chain-audit.md).
     # Every switch below was read out of the PINNED 2.1.295 binary itself
     # (`strings claude | grep`), not from a doc that may describe another
-    # release: each name appears as a live `process.env.<NAME>` read, and
-    # DISABLE_NON_ESSENTIAL_MODEL_CALLS — which the docs still list — is GONE
-    # from this build, so it is deliberately not set (a dead key reads like a
+    # release, and re-checked the same way against 2.1.325 on 2026-11-23 (every
+    # name still present): each name appears as a live `process.env.<NAME>`
+    # read, and DISABLE_NON_ESSENTIAL_MODEL_CALLS — which the docs still list —
+    # is GONE from this build (and still absent in 2.1.325), so it is
+    # deliberately not set (a dead key reads like a
     # protection that is not there).
     #
     #   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC  essential-traffic-only mode
@@ -62,19 +70,19 @@ cli:
     assets:
       darwin/arm64:
         url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/darwin-arm64/claude
-        sha256: 0116ee2e0a513900b633d9951367f18747686478e2b462805b8c31609f047f70
+        sha256: 84590fefe6338be9087f5814b61f9a54c5f21524163a4c127cb5a808e31009f2
       darwin/amd64:
         url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/darwin-x64/claude
-        sha256: a6066492288585a1ef5e482cb28ad22714ab12cd48e367c0cee988b00cff724c
+        sha256: af9760c59f947044e2a0d5072343de563f31efb68bd18ccee4f43c5240570de7
       linux/amd64:
         url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/linux-x64/claude
-        sha256: 4503bfe11a6c7fcc1e0b39b5e0d347c04248f750b03b0977b3ad6b531fe6f358
+        sha256: 0dc4f4a9a165fc60746d7ae8489712e5fc352f1e7ad4eb22e7141bd0812eb0cf
       linux/arm64:
         url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/linux-arm64/claude
-        sha256: cfb9dc1332fb6f92a683f835823e91b3179a803398ca7852cd2381a3cb1dea3b
+        sha256: 7b6e484b1989a5a14a4b354709ccc8672518a3ec5b9ccd7981fc6254327fde67
       windows/amd64:
         url: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}/win32-x64/claude.exe
-        sha256: a30012741c3d0b55e2a6c252dab3781134b75be95896ae89d40a93e10f83bcd6
+        sha256: 87e0cb6ae0f4775da388cd3043f4d8097ef961dcddbf55fe90bc61ffc3f57a30
   launch:
     native_system_prompt: true
     effort_args: [--effort, '{effort}']
