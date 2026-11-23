@@ -130,17 +130,20 @@ The resource carries its members and the kind it is held under, so the claim
 conflicts with a claim on any of them — a direct model:gpt-x included.
 
 The detached form is a lease across agent invocations; ` + "`bashy claim TARGET -- COMMAND`" + ` is a
-kernel-backed hold for the child lifetime. Both are advisory and HOST-LOCAL: they
-coordinate agents here and do not prove that a remote machine is idle. Every claim
-carries an EPOCH, a fencing token that rises each time the claim changes hands;
-release and refresh accept --epoch to act only on the claim you meant.
+kernel-backed hold for the child lifetime; and ` + "`story:<sprint>/<id>`" + ` is an announce-mode
+hold with no TTL. Pass ` + "`--story [SPRINT/]STORY_ID`" + ` (defaulting to $WEAVE_STORY inside
+a weave run) when a lease serves one story: closing that story (` + "`sprint accept`" + `,
+` + "`todo done`" + `, ` + "`wontfix`" + `, or moving off a sprint) or ending its sprint automatically
+reclaims the story claim and any linked lease holds. Every claim carries an EPOCH,
+a fencing token that rises each time the claim changes hands; release and refresh
+accept --epoch to act only on the claim you meant.
 
 It refuses on CONFLICT, never on absence: the claim is taken silently on your first
 write, and you are stopped only when someone else already holds one. A refusal
 prints who holds it and how to reach them on stderr and exits 9 (--json prints the
 bashy-claim-conflict-v1 document instead).`,
 		Example: `  bashy claim                     # take/refresh the claim on this project
-  bashy claim do1 --intent "sprint 251 tests"
+  bashy claim do1 --intent "sprint 251 tests" --story 251/a1b2c3d4
   bashy claim do1 -- make test       # hold do1 for the child lifetime
   bashy resource add openai-models --kind model gpt-x gpt-y
   bashy claim openai-models          # a registered resource, by name
@@ -152,7 +155,9 @@ bashy-claim-conflict-v1 document instead).`,
   bashy claim refresh do1         # heartbeat a long-held lease
   bashy claim release do1         # let someone else have the resource
   bashy claim prune               # list lapsed claims
-  bashy claim prune --apply       # clear them if still lapsed`,
+  bashy claim prune --apply       # clear them if still lapsed
+  bashy claim prune --stories-closed         # preview claims + copies of closed stories
+  bashy claim prune --stories-closed --apply # clear verified closed-story leftovers`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			dash := cmd.ArgsLenAtDash()
 			if dash >= 0 {
@@ -168,6 +173,10 @@ bashy-claim-conflict-v1 document instead).`,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			intent, _ := cmd.Flags().GetString("intent")
+			story, _ := cmd.Flags().GetString("story")
+			if !cmd.Flags().Changed("story") && strings.TrimSpace(story) == "" {
+				story = strings.TrimSpace(os.Getenv("WEAVE_STORY"))
+			}
 			force, _ := cmd.Flags().GetBool("force")
 			wait, _ := cmd.Flags().GetDuration("wait")
 			asJSON, _ := cmd.Flags().GetBool("json")
@@ -182,7 +191,7 @@ bashy-claim-conflict-v1 document instead).`,
 					return fmt.Errorf("--force is not valid with a child-scoped kernel hold")
 				}
 				g, l, err := AcquireAttachedRef(ctx, Request{
-					Ref: targetRef(cmd, args[0]), Holder: Self(), Intent: intent, Mode: ModeAttached, Wait: wait,
+					Ref: targetRef(cmd, args[0]), Holder: Self(), Intent: intent, Story: story, Mode: ModeAttached, Wait: wait,
 				})
 				if err != nil {
 					return refuse(cmd, err)
@@ -202,11 +211,11 @@ bashy-claim-conflict-v1 document instead).`,
 			var err error
 			if len(args) == 1 {
 				g, err = AcquireRef(ctx, Request{
-					Ref: targetRef(cmd, args[0]), Holder: Self(), Intent: intent, Force: force, Wait: wait,
+					Ref: targetRef(cmd, args[0]), Holder: Self(), Intent: intent, Story: story, Force: force, Wait: wait,
 				})
 			} else {
 				g, err = store{DefaultDir()}.acquireWait(ctx, acquireSpec{
-					req:    Request{Holder: Self(), Intent: intent, Force: force},
+					req:    Request{Holder: Self(), Intent: intent, Story: story, Force: force},
 					legacy: true, roots: roots(),
 				}, wait)
 			}
@@ -230,6 +239,7 @@ bashy-claim-conflict-v1 document instead).`,
 		},
 	}
 	cmd.Flags().String("intent", "", "what you are doing (shown to whoever collides with you)")
+	cmd.Flags().String("story", "", "[sprint/]story-id this claim serves (default $WEAVE_STORY); auto-released on story close")
 	cmd.Flags().Bool("force", false, "take it even if someone else holds it (recorded)")
 	cmd.Flags().Duration("wait", 0, "join the host-local FIFO queue for up to this duration")
 	cmd.Flags().String("candidate", "", "caller-supplied candidate identity for isolated child evidence")
@@ -405,7 +415,53 @@ the claim keeps refusing.`,
 	request.Flags().StringVarP(&requestMessage, "message", "m", "", "merge/sequencing request (default names requester and target)")
 
 	pruneCmd := prune.NewNounCommand(ClaimPruner{})
-	pruneCmd.Short = "List lapsed claims; --apply removes only claims still lapsed"
+	pruneCmd.Short = "List lapsed claims (or --stories-closed leftovers); --apply removes verified items"
+	var storiesClosed bool
+	pruneCmd.Flags().BoolVar(&storiesClosed, "stories-closed", false, "reclaim claims and settled run/grade copies of closed or provably missing stories")
+	basePruneRunE := pruneCmd.RunE
+	pruneCmd.RunE = func(c *cobra.Command, args []string) error {
+		if !storiesClosed {
+			return basePruneRunE(c, args)
+		}
+		apply, _ := c.Flags().GetBool("apply")
+		dryRun, _ := c.Flags().GetBool("dry-run")
+		asJSON, _ := c.Flags().GetBool("json")
+		olderStr, _ := c.Flags().GetString("older")
+		if apply && dryRun {
+			return fmt.Errorf("--apply and --dry-run cannot be combined")
+		}
+		opt := prune.Options{Apply: apply, JSON: asJSON}
+		if olderStr != "" {
+			var err error
+			opt.Older, err = prune.ParseOlder(olderStr)
+			if err != nil {
+				return err
+			}
+		}
+		if ClosedStories == nil {
+			return fmt.Errorf("claim prune --stories-closed: story store wiring is unavailable in this binary")
+		}
+		ctx := ctxOf(c)
+		items, err := ClosedStories.DryRunClosedStories(ctx, DefaultDir(), opt)
+		if err != nil {
+			return err
+		}
+		if items == nil {
+			items = []prune.Item{}
+		}
+		result := prune.Result{Noun: "claim", Applied: apply, Items: items}
+		if apply {
+			result.Counts, err = ClosedStories.ApplyClosedStories(ctx, DefaultDir(), items)
+			if err != nil {
+				return err
+			}
+		}
+		if asJSON {
+			return json.NewEncoder(c.OutOrStdout()).Encode(result)
+		}
+		prune.PrintItems(c.OutOrStdout(), items, apply, result.Counts)
+		return nil
+	}
 
 	show := &cobra.Command{
 		Use:   "show [kind:]NAME",

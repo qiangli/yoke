@@ -108,6 +108,8 @@ func newWeaveStartCmd() *cobra.Command {
 	var sealed bool
 	var sealedAllow []string
 	var baseOverride string
+	var retain bool
+	var retainReason string
 	cmd := &cobra.Command{
 		Use:   "start [-- <agent>|<tool> [args...]]",
 		Short: "Allocate a workspace and launch an agent",
@@ -178,19 +180,21 @@ branches, and any active revision stay exactly where they were.`,
 					weavecli.ExitInvalidArg, fmt.Errorf("--sealed runs a booth in the sandbox tier and requires --arena SPRINT")))
 			}
 			return runWeaveStart(cmd, issue, tool, args, weaveStartOptions{
-				noSpawn:     noSpawn,
-				arena:       arena,
-				blind:       blind,
-				sealed:      sealed,
-				sealedAllow: sealedAllow,
-				resume:      resume,
-				handoffTo:   handoffTo,
-				clone:       cloneAgent,
-				pty:         ptyMode,
-				idleTimeout: idleTimeout,
-				maxRuntime:  maxRuntime,
-				memLimit:    memLimit,
-				base:        baseOverride,
+				noSpawn:      noSpawn,
+				arena:        arena,
+				blind:        blind,
+				sealed:       sealed,
+				sealedAllow:  sealedAllow,
+				resume:       resume,
+				handoffTo:    handoffTo,
+				clone:        cloneAgent,
+				pty:          ptyMode,
+				idleTimeout:  idleTimeout,
+				maxRuntime:   maxRuntime,
+				memLimit:     memLimit,
+				base:         baseOverride,
+				retain:       retain,
+				retainReason: retainReason,
 			}, &flags)
 		},
 	}
@@ -211,6 +215,8 @@ branches, and any active revision stay exactly where they were.`,
 	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling; pointed runs derive 1=20m,2=32m,3=48m,5=80m,8=2h (4x the ladder estimate) and reject a larger explicit value; unpointed default off")
 	cmd.Flags().StringVar(&memLimit, "mem-limit", "16g", "Kill the subagent tree when its total RSS exceeds this (e.g. 16g, 512m); 0 disables — the OOM backstop")
 	cmd.Flags().StringVar(&baseOverride, "base", "", "Start the isolated workspace at this commit instead of the source HEAD (preview; never moves the active revision)")
+	cmd.Flags().BoolVar(&retain, "retain", false, "Keep the settled workspace until its story closes or sprint ends")
+	cmd.Flags().StringVar(&retainReason, "retain-reason", "", "Required reason when --retain is set")
 	return cmd
 }
 
@@ -635,6 +641,8 @@ then --force to merge anyway.`,
 	cmd.Flags().BoolVar(&requireReview, "require-review", false, "Require a passing `weave review` verdict before merging")
 	cmd.Flags().BoolVar(&force, "force", false, "Merge a run flagged isolation-violated (the live checkout changed while it ran) anyway")
 	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Run an adversarial pair in each submitted workspace before verification (default off)")
+	cmd.Flags().Bool("retain", false, "Keep the merged workspace until its story closes or sprint ends")
+	cmd.Flags().String("retain-reason", "", "Required reason when --retain is set")
 	return cmd
 }
 
@@ -837,6 +845,8 @@ the prompt — it does not bypass the unmerged-work guard; use --force for that.
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
 	cmd.Flags().BoolVar(&force, "force", false, "Destroy the workspace even if it holds unmerged commits or uncommitted changes; unmerged commits are first preserved as refs/salvage/abandoned-<issue>")
 	cmd.Flags().StringVar(&disposition, "disposition", "", "Record the outcome of the run's work: superseded|rejected|empty (implies preservation of any unmerged tip)")
+	cmd.Flags().Bool("retain", false, "Keep the settled workspace until its story closes or sprint ends")
+	cmd.Flags().String("retain-reason", "", "Required reason when --retain is set")
 	return cmd
 }
 

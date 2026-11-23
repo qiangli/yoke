@@ -846,6 +846,14 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 					}
 				}
 			}
+			movingOffSprint := cmd.Flags().Changed("sprint") &&
+				(previous.Sprint != 0 || previous.SprintID != "") &&
+				(previous.Sprint != it.Sprint || previous.SprintID != it.SprintID)
+			if movingOffSprint && StorySprintMovePreflight != nil {
+				if err := StorySprintMovePreflight(st, &previous, it); err != nil {
+					return err
+				}
+			}
 			if _, err := st.Save(it); err != nil {
 				return err
 			}
@@ -858,6 +866,11 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 						return fmt.Errorf("story saved, but retiring its former sprint goals failed: %v; rolling the story back failed too: %v", err, rerr)
 					}
 					return fmt.Errorf("story left unchanged: retiring its former sprint goals failed: %w", err)
+				}
+			}
+			if movingOffSprint && StorySprintMoved != nil {
+				if err := StorySprintMoved(st, &previous, it); err != nil {
+					return err
 				}
 			}
 			if it.Status != previous.Status {

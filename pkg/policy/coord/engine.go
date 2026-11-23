@@ -42,6 +42,9 @@ type Request struct {
 	Members []string
 	Holder  principal.Ref
 	Intent  string
+	// Story optionally records the `[sprint/]story-id` this claim serves so
+	// story closure and sprint end can reclaim it automatically.
+	Story string
 	// Mode is ModeLease, ModeAttached or ModeAnnounce; empty takes the kind's
 	// first permitted mode.
 	Mode  string
@@ -363,6 +366,7 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		Mode:       mode,
 		Holder:     r.Holder,
 		Intent:     r.Intent,
+		Story:      strings.TrimSpace(r.Story),
 		AcquiredAt: now,
 		Heartbeat:  now,
 		PID:        os.Getpid(),
@@ -384,6 +388,9 @@ func (s store) acquireOnce(b Backend, locked bool, sp acquireSpec, ref Ref, key 
 		}
 		if c.Intent == "" {
 			c.Intent = prev.Intent
+		}
+		if c.Story == "" {
+			c.Story = prev.Story
 		}
 		// A v1 record has no epoch; its first v2 refresh makes it epoch 1.
 		c.Epoch = max(prev.Epoch, 1)
@@ -621,6 +628,10 @@ func (c *Claim) Address() Ref {
 	return r
 }
 
+// Key is the claim's ledger storage key: its address ref, or holder:<id> for a
+// holder-keyed project claim.
+func (c *Claim) Key() string { return c.key() }
+
 // key is the claim's storage key: its ref, or its holder for a project claim.
 func (c *Claim) key() string {
 	if c.Resource != "" {
@@ -781,4 +792,59 @@ func readHighWater(path string) (epoch, rev uint64) {
 func withDirLock(dir string, fn func() error) error {
 	_, err := withLock(dir, func() (*Claim, error) { return nil, fn() })
 	return err
+}
+
+// ReclaimedClaim records one claim removed by lifecycle reclamation (story
+// closure, sprint end, or `--stories-closed` backfill).
+type ReclaimedClaim struct {
+	Claim  *Claim
+	Key    string
+	Reason string
+}
+
+// ReclaimClaims removes every claim in dir matched by match, regardless of
+// holder or ModeAnnounce, while preserving each key's .epoch high-water fence
+// and leaving live kernel-locked ModeAttached holds untouched.
+func ReclaimClaims(dir string, match func(*Claim) (reason string, ok bool)) ([]ReclaimedClaim, error) {
+	if dir == "" {
+		dir = DefaultDir()
+	}
+	if match == nil {
+		return nil, nil
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var out []ReclaimedClaim
+	b := fileBackend{dir: dir}
+	err := withDirLock(dir, func() error {
+		claims, err := listFiles(dir)
+		if err != nil {
+			return err
+		}
+		for _, c := range claims {
+			reason, ok := match(c)
+			if !ok {
+				continue
+			}
+			if c.Mode == ModeAttached {
+				if _, held := lockfile.Owner(keyedLockPath(dir, c.Address())); held {
+					continue
+				}
+			}
+			key := c.key()
+			if err := b.commitLocked(key, c.Rev, nil); err != nil {
+				if errors.Is(err, ErrEpochMismatch) {
+					continue
+				}
+				return err
+			}
+			out = append(out, ReclaimedClaim{Claim: c, Key: key, Reason: reason})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

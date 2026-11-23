@@ -15,6 +15,16 @@ type ClaimPruner struct {
 	Now func() time.Time
 }
 
+// ClosedStoryPruner reclaims claims and settled run/grade copies whose owning
+// story has closed (or is provably missing) or whose sprint has ended. Wired by
+// pkg/weave so standalone coord callers stay decoupled from sprint/todo stores.
+type ClosedStoryPruner interface {
+	DryRunClosedStories(ctx context.Context, coordDir string, opt prune.Options) ([]prune.Item, error)
+	ApplyClosedStories(ctx context.Context, coordDir string, items []prune.Item) (prune.Counts, error)
+}
+
+var ClosedStories ClosedStoryPruner
+
 func (ClaimPruner) Name() string { return "claim" }
 
 func (p ClaimPruner) dir() string {

@@ -78,9 +78,23 @@ func weaveContainedArtifact(dir, path string) error {
 	return nil
 }
 func weaveCleanupEligible(q *weaveQueue, id int64, path string) (*weaveItem, error) {
+	return weaveCleanupEligibleWithOptions(q, id, path, false)
+}
+
+func weaveCleanupEligibleWithOptions(q *weaveQueue, id int64, path string, endRetain bool) (*weaveItem, error) {
 	it := findWeaveItem(q, id)
 	if it == nil || !weavePrunableForSweep(it.State, false) || it.UnmergedCommits > 0 {
 		return nil, errors.New("run is no longer terminal and integrated")
+	}
+	if it.Retain && !endRetain {
+		owner := it.RetainOwner
+		if owner == "" {
+			owner = "operator"
+		}
+		if it.RetainReason != "" {
+			return nil, fmt.Errorf("retained by %s (%s) until story close", owner, it.RetainReason)
+		}
+		return nil, fmt.Errorf("retained by %s until story close", owner)
 	}
 	if it.ResourceReservationID != "" && !it.ResourceTerminated {
 		return nil, errors.New("run child termination remains unverified")
@@ -306,6 +320,11 @@ func weaveRunArtifactPath(dir string, it *weaveItem, kind string) string {
 	return ""
 }
 
+type weavePruneOptions struct {
+	EndRetain     bool
+	ExpectedBirth time.Time
+}
+
 // weavePruneOwnedRun is the ONE guarded teardown. pull, salvage (via pull),
 // abandon, prune and sprint end all reach it; none of them removes a run
 // artifact any other way. It refuses rather than guesses: active lifecycle,
@@ -314,6 +333,14 @@ func weaveRunArtifactPath(dir string, it *weaveItem, kind string) string {
 // the artifact alone and say why. On full success it compacts the row (D4):
 // paths are cleared, the disposition stays.
 func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time.Time) []sprintPruneAction {
+	var opts weavePruneOptions
+	if len(expectedBirth) > 0 {
+		opts.ExpectedBirth = expectedBirth[0]
+	}
+	return weavePruneOwnedRunWithOptions(dir, id, repo, opts, len(expectedBirth) > 0)
+}
+
+func weavePruneOwnedRunWithOptions(dir string, id int64, repo string, opts weavePruneOptions, checkBirth bool) []sprintPruneAction {
 	lock, err := weaveRunLifecycleLock(dir, id)
 	if err != nil {
 		return []sprintPruneAction{{Kind: "run", Repo: repo, Target: fmt.Sprint(id), Err: "active lifecycle; left alone"}}
@@ -329,9 +356,12 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 	// ghost forever — 18 of them survived the measured incident. Same rule as
 	// weaveReconcileMerged, applied to this one run under the queue lock.
 	_ = withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
-		if cur := findWeaveItem(fresh, id); cur != nil && cur.State == "submitted" && weaveItemMerged(root, base, cur) {
-			cur.State = "done"
+		if cur := findWeaveItem(fresh, id); cur != nil && weaveItemMerged(root, base, cur) {
+			if cur.State == "submitted" {
+				cur.State = "done"
+			}
 			cur.Disposition = weaveDispositionMerged
+			cur.UnmergedCommits = 0
 		}
 		return nil
 	})
@@ -339,11 +369,11 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 	if err != nil {
 		return nil
 	}
-	it, err := weaveCleanupEligible(q, id, "")
+	it, err := weaveCleanupEligibleWithOptions(q, id, "", opts.EndRetain)
 	if err != nil {
 		return nil
 	}
-	if len(expectedBirth) > 0 && (expectedBirth[0].IsZero() || !expectedBirth[0].Equal(it.Created)) {
+	if checkBirth && (opts.ExpectedBirth.IsZero() || !opts.ExpectedBirth.Equal(it.Created)) {
 		return []sprintPruneAction{{Kind: "run", Repo: repo, Target: fmt.Sprint(id), Err: "sprint run birth unknown or changed; left alone"}}
 	}
 	disposition, settled := weaveItemSettled(root, base, it)
@@ -452,7 +482,7 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		// stays outside queue.lock; starts are excluded by the lifecycle lock.
 		quarantine := path + fmt.Sprintf(".reclaim-%d", time.Now().UnixNano())
 		err = withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
-			current, err := weaveCleanupEligible(fresh, id, path)
+			current, err := weaveCleanupEligibleWithOptions(fresh, id, path, opts.EndRetain)
 			if err != nil {
 				return err
 			}
@@ -517,6 +547,9 @@ func weavePruneOwnedRun(dir string, id int64, repo string, expectedBirth ...time
 		if !failed {
 			cur.Workspace, cur.LogPath, cur.CtlSock = "", "", ""
 			cur.CleanupError = ""
+			if opts.EndRetain {
+				cur.Retain, cur.RetainOwner, cur.RetainReason = false, "", ""
+			}
 		}
 		return nil
 	})
@@ -555,6 +588,10 @@ func sprintPlanRunArtifacts(s *weaveStory, older ...time.Duration) []sprintPrune
 // weavePlanOwnedRun is what weavePruneOwnedRun WOULD do for one run: the same
 // eligibility and settlement proof, no lock, no claim, no removal.
 func weavePlanOwnedRun(dir, repo string, it *weaveItem) []sprintPruneAction {
+	return weavePlanOwnedRunWithOptions(dir, repo, it, false)
+}
+
+func weavePlanOwnedRunWithOptions(dir, repo string, it *weaveItem, endRetain bool) []sprintPruneAction {
 	var actions []sprintPruneAction
 	q, e := loadWeaveQueue(dir)
 	if e != nil || it == nil {
@@ -564,14 +601,18 @@ func weavePlanOwnedRun(dir, repo string, it *weaveItem) []sprintPruneAction {
 	if !ok {
 		return actions
 	}
-	if cur := findWeaveItem(q, it.ID); cur != nil && cur.State == "submitted" && weaveItemMerged(root, weaveBaseBranch(root), cur) {
-		cur.State = "done" // read-only view of what the reconcile will do
+	base := weaveBaseBranch(root)
+	if cur := findWeaveItem(q, it.ID); cur != nil && weaveItemMerged(root, base, cur) {
+		if cur.State == "submitted" {
+			cur.State = "done" // read-only view of what the reconcile will do
+		}
+		cur.UnmergedCommits = 0
 	}
-	cur, e := weaveCleanupEligible(q, it.ID, "")
+	cur, e := weaveCleanupEligibleWithOptions(q, it.ID, "", endRetain)
 	if e != nil {
 		return actions
 	}
-	if _, settled := weaveItemSettled(root, weaveBaseBranch(root), cur); !settled {
+	if _, settled := weaveItemSettled(root, base, cur); !settled {
 		return actions
 	}
 	for _, kind := range weaveRunArtifactKinds {
@@ -608,7 +649,6 @@ func weavePlanOwnedRun(dir, repo string, it *weaveItem) []sprintPruneAction {
 		}
 		actions = append(actions, a)
 	}
-	base := weaveBaseBranch(root)
 	for _, name := range weaveRunBranchNames(cur) {
 		if _, exists := gitBranchTip(root, name); !exists {
 			continue

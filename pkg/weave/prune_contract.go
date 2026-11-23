@@ -47,6 +47,9 @@ func (p WeavePruner) DryRun(ctx context.Context, opt prune.Options) ([]prune.Ite
 		if !weavePrunableForSweep(it.State, p.Stale) {
 			continue
 		}
+		if it.Retain {
+			continue
+		}
 		if opt.Older > 0 && (it.Created.IsZero() || time.Since(it.Created) < opt.Older) {
 			continue
 		}

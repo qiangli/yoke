@@ -307,6 +307,16 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 		fmt.Sprintf("WEAVE_AGENT=%s", it.Owner),
 		fmt.Sprintf("WEAVE_OWNER=%s", it.Owner),
 	)
+	if len(it.WorkerStories) == 1 {
+		ws := it.WorkerStories[0]
+		if ws.Sprint > 0 {
+			env = append(env, fmt.Sprintf("WEAVE_STORY=%d/%s", ws.Sprint, ws.ID))
+		} else if ws.ID != "" {
+			env = append(env, "WEAVE_STORY="+ws.ID)
+		}
+	} else if len(it.WorkerStories) == 0 && it.Register != "" {
+		env = append(env, "WEAVE_STORY="+it.Register)
+	}
 	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it;
 	// BASHY_INSTANCE is the CONVERSATION, which is none of the three. Stamped
 	// from the run record so the worker, the sprint lease it may take, and a
