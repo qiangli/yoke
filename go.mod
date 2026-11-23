@@ -340,14 +340,14 @@ require (
 // five grammars embedded), which a module-path rename could not reach. See
 // the fork's FORK.md for provenance; THIRD_PARTY_GRAMMARS.md carries the
 // surviving 201 attributions.
-replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261103194740-9471d547a17c
+replace github.com/odvcencio/gotreesitter => github.com/qiangli/gotreesitter v0.0.0-20261121101804-5522e72a297d
 
 // Local MIT fork adds POSIX awk float formats, locale-aware data and string
 // semantics, an error-bearing regex backend across all surfaces, and the
 // required side effect that a non-"in" reference creates an absent array
 // element. Keeping the narrow fork here makes the conformance fixes build from
 // this repository rather than an unpublished dependency commit.
-replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261112194059-6dd7a3ee1858
+replace github.com/benhoyt/goawk => github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261122134330-47dbc82478bc
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
@@ -430,10 +430,10 @@ require (
 	github.com/odvcencio/gotreesitter v0.16.0
 	github.com/ollama/ollama v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
-	github.com/qiangli/bash v0.0.0-20261117235306-adb3b4e0c28d
-	github.com/qiangli/bonsai v0.0.0-20261103194740-24dd0f47247e
-	github.com/qiangli/coreutils v0.0.0-20261118041055-ababb9f1c79a
-	github.com/qiangli/gfy v0.0.0-20261013004914-30d38f086034
+	github.com/qiangli/bash v0.0.0-20261122134408-5c52281f7136
+	github.com/qiangli/bonsai v0.0.0-20261121101804-e25a870a0d4a
+	github.com/qiangli/coreutils v0.0.0-20261122134330-47dbc82478bc
+	github.com/qiangli/gfy v0.0.0-20261121101804-aab4f6fad5be
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/provider v0.0.0-00010101000000-000000000000
