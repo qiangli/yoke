@@ -321,3 +321,181 @@ func TestPrependIsInertWithoutNotifications(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareAdmissionClaimsOnlyAdmittedAndDropsRejected(t *testing.T) {
+	isolate(t)
+	oldItems := PrepareTurnItems
+	t.Cleanup(func() { PrepareTurnItems = oldItems })
+
+	claimed := map[string]bool{}
+	PrepareTurnItems = func(agent string) ([]admission.Item, error) {
+		return []admission.Item{
+			{
+				Source: "mb", ID: "1", Sequence: 3, To: "claude",
+				Priority: admission.PriorityUrgent, Body: "lost hunt item",
+				ArtifactRef: "bashy inbox --id mb:1 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Claim:       func() bool { return false },
+			},
+			{
+				Source: "mb", ID: "2", Sequence: 2, To: "claude",
+				Priority: admission.PriorityDirected, Body: "won hunt item",
+				ArtifactRef: "bashy inbox --id mb:2 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Claim: func() bool {
+					claimed["mb:2"] = true
+					return true
+				},
+			},
+			{
+				Source: "mb", ID: "3", Sequence: 1, To: "claude",
+				Priority: admission.PriorityInformational, Body: "withheld hunt item",
+				ArtifactRef: "bashy inbox --id mb:3 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Claim: func() bool {
+					claimed["mb:3"] = true
+					return true
+				},
+			},
+		}, nil
+	}
+
+	p := PrepareLaunchPreamble("claude+2")
+	if err := p.Err(); err != nil {
+		t.Fatalf("PrepareLaunchPreamble: %v", err)
+	}
+	if strings.Contains(p.Text, "lost hunt item") {
+		t.Fatalf("rejected claim body was exposed:\n%s", p.Text)
+	}
+	if !strings.Contains(p.Text, "won hunt item") {
+		t.Fatalf("fallback admitted item was not exposed:\n%s", p.Text)
+	}
+	if !claimed["mb:2"] {
+		t.Fatal("admitted item mb:2 was not claimed before Commit")
+	}
+	if claimed["mb:3"] {
+		t.Fatal("withheld item mb:3 was claimed despite not being admitted")
+	}
+}
+
+func TestPrepareAdmissionSeparateDeliveryKeepsWithheldBusItemsUnread(t *testing.T) {
+	isolate(t)
+	joinLive(t, "sep-session", "/tmp/sep.sock")
+	subscribe(t, Subscription{Subscriber: "sep", Topics: []string{"*"}, Instance: "sep-session"})
+	publish(t, "--topic", "status", "--as", "sender", "bus routine 1")
+	if err := Publish(Notification{Principal: "owner", To: "sep", Topic: "status", Body: "bus directed 2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldItems := PrepareTurnItems
+	t.Cleanup(func() { PrepareTurnItems = oldItems })
+
+	delivered := map[string]bool{}
+	acked := map[string]bool{}
+	PrepareTurnItems = func(agent string) ([]admission.Item, error) {
+		return []admission.Item{
+			{
+				Source: "mb", ID: "10", Sequence: 10, To: agent,
+				Priority: admission.PriorityUrgent, Topic: "BLOCKED", Body: "urgent host item",
+				ArtifactRef: "bashy inbox --id mb:10 --peek",
+				OverflowRef: "bashy inbox --peek",
+				MarkDelivered: func() error {
+					delivered["mb:10"] = true
+					return nil
+				},
+				Acknowledge: func() error {
+					acked["mb:10"] = true
+					return nil
+				},
+			},
+			{
+				Source: "mb", ID: "11", Sequence: 11, To: agent,
+				Priority: admission.PriorityInformational, Body: "withheld host item",
+				ArtifactRef: "bashy inbox --id mb:11 --peek",
+				OverflowRef: "bashy inbox --peek",
+				MarkDelivered: func() error {
+					delivered["mb:11"] = true
+					return nil
+				},
+				Acknowledge: func() error {
+					acked["mb:11"] = true
+					return nil
+				},
+			},
+			{
+				Source: "host", ID: "12", Sequence: 12, To: agent,
+				Priority: admission.PriorityInformational, Body: "withheld host no-mark item",
+				ArtifactRef: "bashy inbox --id host:12 --peek",
+				OverflowRef: "bashy inbox --peek",
+				Acknowledge: func() error {
+					acked["host:12"] = true
+					return nil
+				},
+			},
+		}, nil
+	}
+
+	p := PrepareTurnPreamble("/tmp/sep.sock")
+	if err := p.Err(); err != nil {
+		t.Fatalf("PrepareTurnPreamble: %v", err)
+	}
+	if !strings.Contains(p.Text, "urgent host item") {
+		t.Fatalf("urgent host item was not rendered:\n%s", p.Text)
+	}
+	if strings.Contains(p.Text, "bus routine 1") || strings.Contains(p.Text, "bus directed 2") {
+		t.Fatalf("withheld bus items were exposed inline:\n%s", p.Text)
+	}
+	if err := p.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if !delivered["mb:10"] || acked["mb:10"] {
+		t.Fatalf("admitted separate-delivery item state mismatch: delivered=%v acked=%v", delivered["mb:10"], acked["mb:10"])
+	}
+	if delivered["mb:11"] || acked["mb:11"] || acked["host:12"] {
+		t.Fatalf("withheld host items were consumed on Commit: delivered=%v acked=%v", delivered, acked)
+	}
+
+	snap, err := SnapshotInbox("sep")
+	if err != nil {
+		t.Fatalf("SnapshotInbox: %v", err)
+	}
+	if len(snap.Items) != 2 {
+		t.Fatalf("withheld general bus items were consumed by Commit; got %d unread items (%+v), want 2", len(snap.Items), snap.Items)
+	}
+
+	// Next turn with host items cleared must still deliver the withheld bus items one by one.
+	PrepareTurnItems = func(agent string) ([]admission.Item, error) {
+		return []admission.Item{
+			{
+				Source: "mb", ID: "11", Sequence: 11,
+				Priority: admission.PriorityInformational, Body: "low host item",
+				ArtifactRef: "bashy inbox --id mb:11 --peek",
+				OverflowRef: "bashy inbox --peek",
+				MarkDelivered: func() error {
+					delivered["mb:11-second"] = true
+					return nil
+				},
+			},
+		}, nil
+	}
+	p2 := PrepareTurnPreamble("/tmp/sep.sock")
+	if err := p2.Err(); err != nil {
+		t.Fatalf("second PrepareTurnPreamble: %v", err)
+	}
+	if !strings.Contains(p2.Text, "bus directed 2") {
+		t.Fatalf("second turn did not surface withheld directed bus item:\n%s", p2.Text)
+	}
+	if err := p2.Commit(); err != nil {
+		t.Fatalf("second Commit: %v", err)
+	}
+	if delivered["mb:11-second"] {
+		t.Fatal("withheld host item was marked delivered on second turn")
+	}
+	snap2, err := SnapshotInbox("sep")
+	if err != nil {
+		t.Fatalf("second SnapshotInbox: %v", err)
+	}
+	if len(snap2.Items) != 1 || snap2.Items[0].Body != "bus routine 1" {
+		t.Fatalf("remaining unread bus items = %+v, want only 'bus routine 1'", snap2.Items)
+	}
+}

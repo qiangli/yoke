@@ -182,12 +182,15 @@ func Send(req SendRequest) (SendResult, error) {
 		if err := ValidateCoordinationBody(body); err != nil {
 			return SendResult{}, &BodyError{Err: err}
 		}
-		var seat string
+		var seat, mode string
 		if rec.Kind == TargetRole {
 			seat = rec.Label
 		}
+		if rec.HuntGroup {
+			mode = ModeAny
+		}
 		seq, err := PostMessageSeq(Post{
-			From: req.From, To: rec.Addr, Seat: seat, Topic: req.Topic, Body: body,
+			From: req.From, To: rec.Addr, Seat: seat, Mode: mode, Topic: req.Topic, Body: body,
 			FromParty: SenderParty(req.From), FromSeats: SenderSeats(req.From), ToParty: rec.Party,
 		})
 		if err != nil {
@@ -225,11 +228,16 @@ func Send(req SendRequest) (SendResult, error) {
 // judged by its UUID-named cursor. Anything the board cannot prove stays
 // unverified and says so: acceptance is not delivery.
 func deliverDirect(rec Recipient, seq int64, notice string) Delivery {
+	if rec.HuntGroup {
+		// Hunt-group main-line mail is never pushed into multiple live PTYs;
+		// the first live instance that consumes it claims it once.
+		return Delivery{To: rec.Label, State: StateAccepted}
+	}
 	steerTo, cursorOf, perReader := rec.Addr, rec.Addr, rec.Kind != TargetRole
 	switch rec.Kind {
 	case TargetInstance:
 		id, _ := fleet.ParseInstanceAddress(rec.Addr)
-		steerTo, cursorOf = "instance:"+id, id
+		steerTo, cursorOf = "instance:"+id, rec.Addr
 	case TargetRole:
 		if id, ok := ExplicitInstanceID(rec.RoleHolderInstance); ok {
 			steerTo, cursorOf, perReader = "instance:"+id, id, true

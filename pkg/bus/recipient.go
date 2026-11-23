@@ -76,6 +76,10 @@ type Recipient struct {
 	// cursor while Addr keeps the durable seat topic.
 	RoleHolder         string
 	RoleHolderInstance string
+	// HuntGroup marks a main-line NAME address whose messages wait when no
+	// instance is live and are claimed atomically once by the first live
+	// instance on that line.
+	HuntGroup bool
 	// Warning is a caveat known at resolve time, e.g. a vacant seat.
 	Warning string
 }
@@ -172,6 +176,17 @@ func SenderParty(from string) *Party {
 		}
 		inst = got
 	}
+	if inst.UUID == "" && strings.TrimSpace(from) != "" {
+		f := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(from), "@"))
+		if found, ok, err := ResolveLiveInstanceByLabel(f); err == nil && ok {
+			inst = found
+		} else {
+			return nil
+		}
+	}
+	if inst.UUID == "" {
+		return nil
+	}
 	p := partyOf(inst)
 	if want := strings.TrimSpace(os.Getenv(SelectedBindingEnv)); want != "" {
 		if sel, err := inst.Select(want); err == nil {
@@ -198,6 +213,17 @@ func ResolveRecipient(target string) (Recipient, error) {
 	all, lerr := store.List()
 	if lerr != nil {
 		return Recipient{}, storeError(lerr)
+	}
+	if _, _, isExt := ParseExtensionLabel(t); isExt {
+		if inst, found, err := resolveExactInstanceName(t, all); err != nil {
+			return Recipient{}, err
+		} else if found {
+			return instanceRecipient(inst), nil
+		}
+		return Recipient{}, unresolvedTargetError(t)
+	}
+	if rec, isHunt := resolveMainLineRecipient(t, all); isHunt {
+		return rec, nil
 	}
 	if inst, found, err := resolveInstanceName(t, all); err != nil {
 		return Recipient{}, err
@@ -244,6 +270,78 @@ func recipientForUUID(typed, id string) (Recipient, error) {
 		return Recipient{}, retiredError(typed, inst, nil)
 	}
 	return instanceRecipient(inst), nil
+}
+
+// ResolveLiveInstanceByLabel resolves an active instance by exact Label or Handle
+// match. Unlike resolveInstanceName it never falls back to family matching.
+func ResolveLiveInstanceByLabel(label string) (fleet.Instance, bool, error) {
+	all, err := InstanceStoreFn().List()
+	if err != nil {
+		return fleet.Instance{}, false, storeError(err)
+	}
+	return resolveExactInstanceName(label, all)
+}
+
+func resolveExactInstanceName(name string, all []fleet.Instance) (fleet.Instance, bool, error) {
+	want := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "@")))
+	var live, gone []fleet.Instance
+	for _, i := range all {
+		if strings.ToLower(strings.TrimSpace(i.Label)) != want && strings.ToLower(strings.TrimSpace(i.Handle)) != want {
+			continue
+		}
+		if i.Active() {
+			live = append(live, i)
+		} else {
+			gone = append(gone, i)
+		}
+	}
+	if len(live) == 1 {
+		return live[0], true, nil
+	}
+	if len(live) > 1 {
+		return fleet.Instance{}, false, ambiguousError(name, live)
+	}
+	if len(gone) > 0 {
+		sort.SliceStable(gone, func(a, b int) bool { return gone[a].Retired > gone[b].Retired })
+		return fleet.Instance{}, false, retiredError(name, gone[0], all)
+	}
+	return fleet.Instance{}, false, nil
+}
+
+func resolveMainLineRecipient(name string, all []fleet.Instance) (Recipient, bool) {
+	t := strings.TrimSpace(name)
+	if t == "" {
+		return Recipient{}, false
+	}
+	if hasNonLineFamilyAmbiguity(t, all) {
+		return Recipient{}, false
+	}
+	canon, isAgent := resolveAgentName(t)
+	isTool := IsMainLineTool != nil && IsMainLineTool(t)
+	hasPlus := hasPlusExtensions(t, all)
+	if !hasPlus && !isTool {
+		return Recipient{}, false
+	}
+	if isTool && !hasPlus {
+		// Preserve direct/ambiguous resolution when live family instances use
+		// distinct non-line labels (e.g. Esme on family claude-opus5.5).
+		want := strings.ToLower(t)
+		canonLow := strings.ToLower(canon)
+		for _, i := range all {
+			if !i.Active() {
+				continue
+			}
+			f := strings.ToLower(strings.TrimSpace(i.Family))
+			if (f != "" && (f == want || f == canonLow)) && !instanceBelongsToLine(i, t) {
+				return Recipient{}, false
+			}
+		}
+	}
+	addr := t
+	if isAgent && canon != "" {
+		addr = canon
+	}
+	return Recipient{Addr: addr, Kind: TargetAgent, Label: addr, HuntGroup: true}, true
 }
 
 // resolveInstanceName places a human name among the instance records.

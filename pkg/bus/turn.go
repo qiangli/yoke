@@ -292,19 +292,52 @@ func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
 		items = append(items, host...)
 	}
 	orderInboxFor(agent, items)
-	show, withheld := splitInbox(items, inboxMaxItems())
-	// A counted tail is only honest when every withheld record names where to
-	// read it. This is the same floor admission.Render holds for its own
-	// unrepresented set: without a retrieval reference the counter line would
-	// be a silent drop, so the preamble fails instead of consuming it.
-	for _, item := range withheld {
-		if strings.TrimSpace(item.OverflowRef) == "" {
-			return PreparedPreamble{err: fmt.Errorf("admission: unrepresented item %s:%s has no source retrieval reference", item.Source, item.ID)}
+	claimed := make([]bool, len(items))
+	var rendered admission.Prepared
+	var show, withheld []admission.Item
+	for {
+		show, withheld = splitInbox(items, inboxMaxItems())
+		// A counted tail is only honest when every withheld record names where to
+		// read it. This is the same floor admission.Render holds for its own
+		// unrepresented set: without a retrieval reference the counter line would
+		// be a silent drop, so the preamble fails instead of consuming it.
+		for _, item := range withheld {
+			if strings.TrimSpace(item.OverflowRef) == "" {
+				return PreparedPreamble{err: fmt.Errorf("admission: unrepresented item %s:%s has no source retrieval reference", item.Source, item.ID)}
+			}
 		}
-	}
-	rendered, err := admission.Render(show, admission.Options{BudgetBytes: DefaultTurnAdmissionBytes})
-	if err != nil {
-		return PreparedPreamble{err: err}
+		var err error
+		rendered, err = admission.Render(show, admission.Options{BudgetBytes: DefaultTurnAdmissionBytes})
+		if err != nil {
+			return PreparedPreamble{err: err}
+		}
+		rejected := map[int]bool{}
+		for _, idx := range rendered.AdmittedIndices() {
+			if idx < 0 || idx >= len(show) || claimed[idx] {
+				continue
+			}
+			if show[idx].Claim != nil {
+				if show[idx].Claim() {
+					claimed[idx] = true
+				} else {
+					rejected[idx] = true
+				}
+			}
+		}
+		if len(rejected) == 0 {
+			break
+		}
+		kept := make([]admission.Item, 0, len(items)-len(rejected))
+		nextClaimed := make([]bool, 0, len(items)-len(rejected))
+		for i, item := range items {
+			if i < len(show) && rejected[i] {
+				continue
+			}
+			kept = append(kept, item)
+			nextClaimed = append(nextClaimed, claimed[i])
+		}
+		items = kept
+		claimed = nextClaimed
 	}
 	if len(withheld) == 0 {
 		prepared := PreparedPreamble{Text: rendered.Text, ack: []func() error{rendered.Commit}, report: rendered.Report}
@@ -324,10 +357,27 @@ func prepareAdmission(agent string, snapshot InboxSnapshot) PreparedPreamble {
 	report.OmittedBytes += inboxBytes(withheld)
 	report.UnrepresentedItems += len(withheld)
 	report.UnrepresentedBytes += inboxBytes(withheld)
-	acks := []func() error{func() error { return snapshot.Commit() }}
+	// When the host adapter tracks turn delivery separately from explicit
+	// acknowledgement (MarkDelivered != nil), commit only the items actually
+	// rendered inline so withheld host and general bus items stay unread and
+	// retrievable via `bashy inbox`. Legacy adapters without MarkDelivered keep
+	// advancing all host items alongside the bus snapshot.
+	hasSeparateDelivery := false
 	for _, h := range host {
-		if h.Acknowledge != nil {
-			acks = append(acks, h.Acknowledge)
+		if h.MarkDelivered != nil {
+			hasSeparateDelivery = true
+			break
+		}
+	}
+	var acks []func() error
+	if hasSeparateDelivery {
+		acks = []func() error{rendered.Commit}
+	} else {
+		acks = []func() error{func() error { return snapshot.Commit() }}
+		for _, h := range host {
+			if h.Acknowledge != nil {
+				acks = append(acks, h.Acknowledge)
+			}
 		}
 	}
 	prepared := PreparedPreamble{Text: text, ack: acks, report: report}

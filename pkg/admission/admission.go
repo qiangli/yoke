@@ -53,7 +53,18 @@ type Item struct {
 	// OverflowRef opens the source's unread view when this item cannot receive
 	// even an individual header. It may be shared by every item from a source.
 	OverflowRef string
-	Acknowledge func() error
+	// Claim, when non-nil, is invoked only after this item is admitted into
+	// the rendered projection (mode > 0) and before Prepared is returned.
+	// Returning false indicates the item could not be claimed for this reader
+	// (for example, a competing hunt-group consumer won first) and must not be
+	// exposed.
+	Claim func() bool
+	// MarkDelivered, when non-nil, records turn-boundary delivery separately
+	// from explicit acknowledgement so withheld items remain unread and
+	// inline-shown items are not marked acknowledged. When nil, Render falls
+	// back to Acknowledge.
+	MarkDelivered func() error
+	Acknowledge   func() error
 }
 
 // Options controls one composition boundary.
@@ -107,9 +118,16 @@ type OverflowSource struct {
 // Prepared is a rendered projection with acknowledgements for exactly the
 // records represented by a full body or stable retrieval header.
 type Prepared struct {
-	Text   string
-	Report Report
-	ack    []func() error
+	Text        string
+	Report      Report
+	ack         []func() error
+	admittedIdx []int
+}
+
+// AdmittedIndices returns the 0-based indices into the input items slice for
+// every record that received a representation (mode > 0).
+func (p Prepared) AdmittedIndices() []int {
+	return append([]int(nil), p.admittedIdx...)
 }
 
 // Commit acknowledges only records represented in Text. It must be called only
@@ -145,10 +163,11 @@ func UTF8Prefix(s string, max int) (string, error) {
 }
 
 type candidate struct {
-	item Item
-	mode int // 0 unrepresented, 1 stable reference header, 2 full body
-	full string
-	head string
+	origIdx int
+	item    Item
+	mode    int // 0 unrepresented, 1 stable reference header, 2 full body
+	full    string
+	head    string
 }
 
 // Render selects and renders prepared records under one deterministic byte
@@ -184,7 +203,7 @@ func Render(items []Item, opt Options) (Prepared, error) {
 		if item.Priority < PriorityUrgent || item.Priority > PriorityInformational {
 			item.Priority = PriorityInformational
 		}
-		candidates[i] = candidate{item: item}
+		candidates[i] = candidate{origIdx: i, item: item}
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidates[i].item.Priority < candidates[j].item.Priority
@@ -316,8 +335,15 @@ func Render(items []Item, opt Options) (Prepared, error) {
 	}
 	prepared := Prepared{Text: text, Report: report}
 	for _, c := range candidates {
-		if c.mode > 0 && c.item.Acknowledge != nil {
-			prepared.ack = append(prepared.ack, c.item.Acknowledge)
+		if c.mode > 0 {
+			prepared.admittedIdx = append(prepared.admittedIdx, c.origIdx)
+			ack := c.item.MarkDelivered
+			if ack == nil {
+				ack = c.item.Acknowledge
+			}
+			if ack != nil {
+				prepared.ack = append(prepared.ack, ack)
+			}
 		}
 	}
 	return prepared, nil

@@ -121,6 +121,12 @@ func (p Post) Broadcast() bool {
 	return strings.TrimSpace(p.To) == "" && (p.Audience == nil || p.Audience.Empty())
 }
 
+// IsHuntGroup reports whether this post targets a main-line hunt group (one
+// claimable by the first live instance on that line).
+func (p Post) IsHuntGroup() bool {
+	return strings.TrimSpace(p.To) != "" && p.Mode == ModeAny
+}
+
 // Directed reports a post naming ONE agent — the only kind that carries an
 // obligation, and therefore the only kind never truncated from a default view.
 func (p Post) Directed(reader string) bool {
@@ -131,6 +137,12 @@ func (p Post) directed(reader string, audiences audienceSnapshot) bool {
 	to := strings.TrimSpace(p.To)
 	if to == "" {
 		return false
+	}
+	if p.IsHuntGroup() {
+		if h := ClaimHolder(p.Seq); h != "" {
+			return ClaimMatchesReader(h, reader)
+		}
+		return readerMatchesMainLine(reader, to)
 	}
 	if audiences.addressedToRole(to) {
 		return audiences.roleReaderAllowed(to, reader)
@@ -193,8 +205,12 @@ func (p Post) ForReader(reader string) bool {
 // advance cursors, claim offers, or record views.
 func FilterPostsForReader(posts []Post, reader string) []Post {
 	audiences := newAudienceSnapshot()
+	mailFrom := readerMailFrom(reader)
 	var out []Post
 	for _, p := range posts {
+		if mailFrom > 0 && p.Seq < mailFrom && !p.IsHuntGroup() {
+			continue
+		}
 		if p.forReader(reader, audiences) {
 			out = append(out, p)
 		}
@@ -202,7 +218,22 @@ func FilterPostsForReader(posts []Post, reader string) []Post {
 	return out
 }
 
+func readerMailFrom(reader string) int64 {
+	id, ok := ExplicitInstanceID(reader)
+	if !ok {
+		return 0
+	}
+	inst, err := InstanceStoreFn().Get(id)
+	if err != nil {
+		return 0
+	}
+	return inst.MailFrom
+}
+
 func (p Post) forReader(reader string, audiences audienceSnapshot) bool {
+	if p.IsHuntGroup() {
+		return p.directed(reader, audiences)
+	}
 	if p.directed(reader, audiences) || p.Broadcast() {
 		return true
 	}
@@ -652,10 +683,14 @@ func unseen(reader string, limit int, audiences audienceSnapshot) (directed, oth
 	if e != nil {
 		return nil, nil, 0, e
 	}
+	mailFrom := readerMailFrom(reader)
 	concerns := DeclaredConcerns(reader)
 	var concerned, rest []Post
 	for _, p := range all {
 		if p.Seq <= at {
+			continue
+		}
+		if mailFrom > 0 && p.Seq < mailFrom && !p.IsHuntGroup() {
 			continue
 		}
 		onConcern := p.OnConcern(concerns)
@@ -967,6 +1002,35 @@ func unattributedSessionGuidance() string {
 // receipt is that it names somebody.
 func BoardIdentity(as string) (string, error) {
 	if s := strings.TrimSpace(as); s != "" {
+		// Resolve +N extension addresses to the live instance UUID and enforce
+		// generation isolation when the caller already carries an instance stamp.
+		if _, _, isExt := ParseExtensionLabel(s); isExt {
+			inst, found, err := ResolveLiveInstanceByLabel(s)
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				return "", fmt.Errorf("mb: --as %q names no live extension instance", s)
+			}
+			if selfID, ok := principal.SelfInstanceUUID(); ok && !strings.EqualFold(selfID, inst.UUID) {
+				return "", fmt.Errorf("mb: instance %q cannot read as %q", selfID, s)
+			}
+			return inst.MailAddress(), nil
+		}
+		if selfID, ok := principal.SelfInstanceUUID(); ok {
+			if reqID, explicit := ExplicitInstanceID(s); explicit {
+				if !strings.EqualFold(selfID, reqID) {
+					return "", fmt.Errorf("mb: instance %q cannot read as %q", selfID, s)
+				}
+				return fleet.InstanceAddressPrefix + reqID, nil
+			}
+			if selfInst, err := InstanceStoreFn().Get(selfID); err == nil && selfInst.Active() &&
+				(strings.EqualFold(s, selfInst.Label) || (selfInst.Handle != "" && strings.EqualFold(s, selfInst.Handle))) {
+				if liveInst, found, _ := ResolveLiveInstanceByLabel(s); !found || strings.EqualFold(liveInst.UUID, selfInst.UUID) {
+					return selfInst.MailAddress(), nil
+				}
+			}
+		}
 		// Explicit always wins, including a human inside an agent session who
 		// means to speak as themselves: `--as qiangli`.
 		return resolveBoardName(s), nil
@@ -1157,11 +1221,13 @@ func ClaimPost(seq int64, reader string) (holder string, granted bool) {
 		_, _ = f.WriteString(reader + " " + time.Now().UTC().Format(time.RFC3339) + "\n")
 		return reader, true
 	}
-	b, rerr := os.ReadFile(p)
-	if rerr != nil {
-		return "", false
+	for attempt := 0; attempt < 20; attempt++ {
+		if holder = ClaimHolder(seq); holder != "" {
+			return holder, false
+		}
+		time.Sleep(time.Millisecond)
 	}
-	return strings.Fields(strings.TrimSpace(string(b)))[0], false
+	return "", false
 }
 
 // ClaimHolder reports who holds an ModeAny post, or "" when it is unclaimed.
