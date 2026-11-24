@@ -30,26 +30,31 @@ import (
 
 // Scopes named by the contract (§1).
 const (
-	ScopeMembersRead     = "members:read"
-	ScopeMembersWrite    = "members:write"
-	ScopeSatellitesRead  = "satellites:read"
-	ScopeSatellitesWrite = "satellites:write"
-	ScopeHostsWrite      = "hosts:write"
-	ScopeHost            = "host"
-	ScopeAttach          = "attach"
-	ScopeSatelliteHost   = "satellite-host"
+	ScopeMembersRead        = "members:read"
+	ScopeMembersWrite       = "members:write"
+	ScopeSatellitesRead     = "satellites:read"
+	ScopeSatellitesWrite    = "satellites:write"
+	ScopeSatellitesDelegate = "satellites:delegate"
+	ScopeHostsWrite         = "hosts:write"
+	ScopeHost               = "host"
+	ScopeAttach             = "attach"
+	ScopeSatelliteHost      = "satellite-host"
+	ScopeHostProxy          = "host:proxy"
+	ScopeHostInviteMint     = "host:invite-mint"
 )
 
 // ownerScopes is what an unscoped (legacy) owner token carries.
-var ownerScopes = []string{ScopeMembersRead, ScopeMembersWrite, ScopeSatellitesRead, ScopeSatellitesWrite, ScopeHostsWrite}
+var ownerScopes = []string{ScopeMembersRead, ScopeMembersWrite, ScopeSatellitesRead, ScopeSatellitesWrite, ScopeSatellitesDelegate, ScopeHostsWrite}
 
 // TTLs from the contract.
 const (
-	InvitationTTL  = 7 * 24 * time.Hour
-	PairCodeTTL    = 15 * time.Minute
-	AttachTokenTTL = 10 * time.Minute
-	IdempotencyTTL = 24 * time.Hour
-	MembershipTTL  = 30 * time.Second // Cache-Control max-age on membership reads
+	InvitationTTL      = 7 * 24 * time.Hour
+	PairCodeTTL        = 15 * time.Minute
+	AttachTokenTTL     = 10 * time.Minute
+	ExchangeDefaultTTL = 30 * time.Minute
+	ExchangeMaxTTL     = time.Hour
+	IdempotencyTTL     = 24 * time.Hour
+	MembershipTTL      = 30 * time.Second // Cache-Control max-age on membership reads
 )
 
 // ErrorBody is the error envelope every non-2xx response carries.
@@ -225,6 +230,7 @@ type satServer struct {
 	srv   *httptest.Server
 	hosts map[string]*SatelliteHost
 	token map[string]string // host -> satellite host token
+	apps  map[string]http.Handler
 }
 
 // Fake is the in-memory cloudbox. All exported methods are safe for
@@ -315,6 +321,7 @@ func (f *Fake) AddSatellite(t testing.TB, ownerEmail, name string) string {
 		sat:   &Satellite{ID: id, Name: name, State: "enabled", OwnerEmail: strings.ToLower(ownerEmail)},
 		hosts: map[string]*SatelliteHost{},
 		token: map[string]string{},
+		apps:  map[string]http.Handler{},
 	}
 	f.sats[id] = s
 	f.mu.Unlock()
@@ -325,6 +332,29 @@ func (f *Fake) AddSatellite(t testing.TB, ownerEmail, name string) string {
 	s.sat.Endpoint = s.srv.URL
 	f.mu.Unlock()
 	return id
+}
+
+// SatelliteURL returns the satellite server's base URL, or "" if unknown.
+func (f *Fake) SatelliteURL(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s := f.sats[id]; s != nil {
+		return s.sat.Endpoint
+	}
+	return ""
+}
+
+// MountApp attaches an upstream handler at /matrix/h/<host>/app/<app> on a
+// satellite. Requests require an exchanged satellite Bearer token carrying
+// host:proxy and pass HostShares.CanReach(email, host, app); admitted requests
+// forward X-Periscope-User and X-Forwarded-Prefix with the mount prefix
+// stripped from r.URL.Path.
+func (f *Fake) MountApp(satID, host, app string, h http.Handler) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s := f.sats[satID]; s != nil {
+		s.apps[host+"\x00"+app] = h
+	}
 }
 
 // SetSatelliteState changes a satellite's state (e.g. "stopped" to exercise
@@ -1096,10 +1126,16 @@ func (f *Fake) detach(w http.ResponseWriter, r *http.Request, id string) *apiErr
 // --- satellite --------------------------------------------------------------
 
 func (f *Fake) serveSatellite(s *satServer, w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/matrix/h/") {
+		f.serveSatelliteApp(s, w, r)
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var e *apiError
 	switch {
+	case r.URL.Path == "/api/v1/tokens/exchange" && r.Method == http.MethodPost:
+		e = f.exchangeToken(s, w, r)
 	case r.URL.Path == "/api/v1/hosts/attach" && r.Method == http.MethodPost:
 		e = f.redeemAttach(s, w, r)
 	case r.URL.Path == "/api/v1/hosts/self" && r.Method == http.MethodDelete:
@@ -1110,6 +1146,146 @@ func (f *Fake) serveSatellite(s *satServer, w http.ResponseWriter, r *http.Reque
 	if e != nil {
 		writeErr(w, e)
 	}
+}
+
+func (f *Fake) exchangeToken(s *satServer, w http.ResponseWriter, r *http.Request) *apiError {
+	tok, e := f.auth(r, ScopeSatellitesDelegate)
+	if e != nil {
+		return e
+	}
+	if tok.host != "" || tok.satellite != "" {
+		return errf(403, "exchange_refused", "only an account token may be exchanged")
+	}
+	if s.sat.State != "enabled" {
+		return errf(409, "satellite_unavailable", "satellite %s is %s", s.sat.ID, s.sat.State)
+	}
+	if tok.email != s.sat.OwnerEmail {
+		if !f.mutual(s.sat.OwnerEmail, tok.email) {
+			return errf(403, "exchange_refused", "caller is not admitted on this satellite")
+		}
+		if rules := f.admitRules[s.sat.ID]; len(rules) > 0 {
+			admitted := false
+			for _, rule := range rules {
+				if f.ruleMatches(rule.Circles, rule.Groups, rule.Emails, s.sat.OwnerEmail, tok.email) {
+					admitted = true
+					break
+				}
+			}
+			if !admitted {
+				return errf(403, "exchange_refused", "caller is not admitted on this satellite")
+			}
+		}
+	}
+	var body struct {
+		Scopes []string `json:"scopes"`
+		TTL    string   `json:"ttl"`
+	}
+	if e := decode(r, &body); e != nil {
+		return e
+	}
+	if len(body.Scopes) == 0 {
+		return errf(400, "bad_request", "scopes required")
+	}
+	for _, sc := range body.Scopes {
+		switch sc {
+		case ScopeHostProxy, "ssh:read":
+		case ScopeHostInviteMint, "hosts:read", ScopeHostsWrite:
+			if tok.email != s.sat.OwnerEmail {
+				return errf(403, "insufficient_scope", "scope %q is owner-only on this satellite", sc)
+			}
+		default:
+			return errf(403, "insufficient_scope", "scope %q is not exchangeable", sc)
+		}
+	}
+	ttl := ExchangeDefaultTTL
+	if rawTTL := strings.TrimSpace(body.TTL); rawTTL != "" {
+		d, err := time.ParseDuration(rawTTL)
+		if err != nil || d <= 0 || d > ExchangeMaxTTL {
+			return errf(400, "invalid_ttl", "ttl must be > 0 and <= 1h")
+		}
+		ttl = d
+	}
+	now := f.now()
+	exp := now.Add(ttl)
+	xtok := f.nextID("xtok")
+	scopes := append([]string(nil), body.Scopes...)
+	f.tokens[xtok] = &token{
+		email:     tok.email,
+		satellite: s.sat.ID,
+		scopes:    scopes,
+		expires:   exp,
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":      xtok,
+		"token_id":   f.nextID("tid"),
+		"scopes":     scopes,
+		"expires_at": exp,
+	})
+	return nil
+}
+
+func (f *Fake) serveSatelliteApp(s *satServer, w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/matrix/h/")
+	host, afterHost, ok := strings.Cut(trimmed, "/")
+	if !ok || host == "" || !strings.HasPrefix(afterHost, "app/") {
+		writeErr(w, errf(404, "not_found", "no route %s %s", r.Method, r.URL.Path))
+		return
+	}
+	afterApp := strings.TrimPrefix(afterHost, "app/")
+	app, rest, hasRest := strings.Cut(afterApp, "/")
+	if app == "" {
+		writeErr(w, errf(404, "not_found", "no route %s %s", r.Method, r.URL.Path))
+		return
+	}
+
+	f.mu.Lock()
+	tok, e := f.auth(r, ScopeHostProxy)
+	if e != nil {
+		f.mu.Unlock()
+		writeErr(w, e)
+		return
+	}
+	if tok.satellite != s.sat.ID {
+		f.mu.Unlock()
+		writeErr(w, errf(401, "unauthorized", "token was not issued by this satellite"))
+		return
+	}
+	if s.sat.State != "enabled" {
+		f.mu.Unlock()
+		writeErr(w, errf(409, "satellite_unavailable", "satellite %s is %s", s.sat.ID, s.sat.State))
+		return
+	}
+	if f.hosts[host] == nil {
+		f.mu.Unlock()
+		writeErr(w, errf(404, "not_found", "host %s not found", host))
+		return
+	}
+	if !f.canReachLocked(tok.email, host, app) {
+		f.mu.Unlock()
+		writeErr(w, errf(403, "not_shared", "app %s on host %s is not shared with you", app, host))
+		return
+	}
+	h := s.apps[host+"\x00"+app]
+	email := tok.email
+	f.mu.Unlock()
+
+	if h == nil {
+		writeErr(w, errf(404, "not_found", "app %s is not mounted on host %s", app, host))
+		return
+	}
+	req := r.Clone(r.Context())
+	prefix := "/matrix/h/" + host + "/app/" + app
+	if hasRest {
+		req.URL.Path = "/" + rest
+	} else {
+		req.URL.Path = "/"
+	}
+	req.URL.RawPath = ""
+	req.RequestURI = ""
+	req.Header.Del("Authorization")
+	req.Header.Set("X-Periscope-User", email)
+	req.Header.Set("X-Forwarded-Prefix", prefix)
+	h.ServeHTTP(w, req)
 }
 
 func (f *Fake) redeemAttach(s *satServer, w http.ResponseWriter, r *http.Request) *apiError {

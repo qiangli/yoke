@@ -2,7 +2,9 @@ package fleet
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -65,9 +67,18 @@ func (c SatelliteClient) getHTTPClient() *http.Client {
 	return httpClient()
 }
 
-// ExchangeToken exchanges the owner Bearer token for a short-lived token
-// with the requested scopes on the satellite.
-func (c SatelliteClient) ExchangeToken(scopes []string, ttl string) (string, error) {
+// Exchange exchanges the caller's Cloudbox account Bearer token for a
+// short-lived satellite token carrying the requested scopes, returning the
+// token metadata (including ExpiresAt for proactive refresh).
+//
+// Redirects are never followed so the account token reaches only BaseURL, and
+// non-JSON refusal bodies are never echoed so server errors cannot leak caller
+// credentials.
+func (c SatelliteClient) Exchange(ctx context.Context, scopes []string, ttl string) (TokenExchangeResponse, error) {
+	var zero TokenExchangeResponse
+	if strings.TrimSpace(c.Token) == "" || strings.ContainsAny(c.Token, "\r\n") {
+		return zero, errors.New("fleet: invalid account token for satellite exchange")
+	}
 	if ttl == "" {
 		ttl = "10m"
 	}
@@ -77,42 +88,86 @@ func (c SatelliteClient) ExchangeToken(scopes []string, ttl string) (string, err
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", err
+		return zero, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/tokens/exchange", bytes.NewReader(body))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+"/api/v1/tokens/exchange", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return zero, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.getHTTPClient().Do(req)
+	hc := *c.getHTTPClient()
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req)
 	if err != nil {
-		return "", err
+		return zero, scrubSecretString(err, c.Token)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return zero, err
 	}
 
-	if resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("fleet: POST /api/v1/tokens/exchange: 403: owner token lacks host:invite-mint; see docs")
-	}
 	if resp.StatusCode/100 != 2 {
-		return "", provisionAPIError("POST /api/v1/tokens/exchange", resp.StatusCode, raw)
+		return zero, exchangeAPIError(resp.StatusCode, raw, c.Token)
 	}
 
 	var env TokenExchangeResponse
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return "", fmt.Errorf("fleet: POST /api/v1/tokens/exchange: decode: %w", err)
+		return zero, fmt.Errorf("fleet: POST /api/v1/tokens/exchange: decode: %w", err)
 	}
-	if env.Token == "" {
-		return "", fmt.Errorf("fleet: POST /api/v1/tokens/exchange: response missing token")
+	if env.Token == "" || strings.ContainsAny(env.Token, "\r\n") {
+		return zero, fmt.Errorf("fleet: POST /api/v1/tokens/exchange: response missing token")
 	}
-	return env.Token, nil
+	return env, nil
+}
+
+func exchangeAPIError(status int, raw []byte, secret string) error {
+	code := ""
+	msg := http.StatusText(status)
+	var env struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(raw, &env) == nil && (env.Error != "" || env.Code != "") {
+		code = env.Code
+		if env.Error != "" {
+			msg = env.Error
+		} else {
+			msg = env.Code
+		}
+	}
+	if secret != "" {
+		code = strings.ReplaceAll(code, secret, "[REDACTED]")
+		msg = strings.ReplaceAll(msg, secret, "[REDACTED]")
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("HTTP %d", status)
+	}
+	return &ProvisionError{Op: "POST /api/v1/tokens/exchange", Status: status, Code: code, Message: msg}
+}
+
+func scrubSecretString(err error, secret string) error {
+	if err == nil || secret == "" || !strings.Contains(err.Error(), secret) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), secret, "[REDACTED]"))
+}
+
+// ExchangeToken exchanges the account Bearer token for a short-lived token
+// with the requested scopes on the satellite.
+func (c SatelliteClient) ExchangeToken(scopes []string, ttl string) (string, error) {
+	res, err := c.Exchange(context.Background(), scopes, ttl)
+	if err != nil {
+		return "", err
+	}
+	return res.Token, nil
 }
 
 // MintInvite mints an owner-scoped, single-use invite code on the satellite
@@ -176,6 +231,10 @@ func (c SatelliteClient) Invite(name, ttl string) (*HostInvite, error) {
 	}
 	exchangedToken, err := c.ExchangeToken([]string{"host:invite-mint"}, ttl)
 	if err != nil {
+		var pe *ProvisionError
+		if errors.As(err, &pe) && pe.Status == http.StatusForbidden {
+			return nil, fmt.Errorf("fleet: POST /api/v1/tokens/exchange: 403: owner token lacks host:invite-mint; see docs")
+		}
 		return nil, err
 	}
 	return c.MintInvite(exchangedToken, name)

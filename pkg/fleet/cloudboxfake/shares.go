@@ -578,6 +578,10 @@ func (f *Fake) ruleMatches(circles, groups, emails []string, owner, memberEmail 
 func (f *Fake) CanReach(email, host, app string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.canReachLocked(email, host, app)
+}
+
+func (f *Fake) canReachLocked(email, host, app string) bool {
 	h := f.hosts[host]
 	if h == nil {
 		return false

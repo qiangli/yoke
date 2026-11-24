@@ -323,6 +323,28 @@ func ResolveCloudAccount(sel *AccountSelection, urlOverride, tokenOverride strin
 	return base, sel.Token, nil
 }
 
+// ResolveAccountSelection resolves an optional --account reference for a
+// cloudbox or satellite operation, returning the selection (nil when
+// accountRef is empty) and the resolved (base, token) pair from
+// ResolveCloudAccount / ResolveMaster. With accountRef set there is no ambient
+// fallback.
+func ResolveAccountSelection(ctx context.Context, accountRef, urlOverride, tokenOverride string) (*AccountSelection, string, string, error) {
+	f := accountFlag{ref: accountRef}
+	if !f.given() {
+		base, tok, err := ResolveCloudAccount(nil, urlOverride, tokenOverride)
+		return nil, base, tok, err
+	}
+	sel, err := f.resolve(ctx, accountOpCloudbox, AccountCloudbox, AccountSatellite)
+	if err != nil {
+		return nil, "", "", err
+	}
+	base, tok, err := ResolveCloudAccount(sel, urlOverride, tokenOverride)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return sel, base, tok, nil
+}
+
 // The cloudbox client constructors under one account. Each is NewXClient with
 // cloudOverrides in front of it, so a verb gains `--account` by calling the
 // For variant and nothing about the client itself changes.

@@ -662,3 +662,66 @@ func TestMultiplePendingAttachmentsAndUnpair(t *testing.T) {
 		}
 	}
 }
+
+func TestSatelliteTokenExchangeAndMountedApp(t *testing.T) {
+	f := New(t)
+	now := time.Date(2026, 11, 24, 23, 0, 0, 0, time.UTC)
+	f.SetNow(func() time.Time { return now })
+
+	owner := f.AddOwner("owner@example.com")
+	member := f.AddOwner("member@example.com")
+	stranger := f.AddOwner("stranger@example.com")
+	readOnly := f.AddToken("member@example.com", ScopeMembersRead)
+
+	m := call{t, f.URL()}
+	hostTok := pairHost(m, owner, "studio")
+	satID := f.AddSatellite(t, "owner@example.com", "zoo")
+	sat := call{t, f.SatelliteURL(satID)}
+
+	// Mutual membership for member@example.com.
+	inv := obj(m.want(201, "POST", "/api/v1/members", owner, map[string]string{"email": "member@example.com", "circle": "team"}), "invitation")
+	m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", member, map[string]string{"circle": "team"})
+
+	// Refusals: missing token, narrow token, host token, non-member, invalid TTL (>1h), owner-only scope by member.
+	sat.wantErr(401, "unauthorized", "POST", "/api/v1/tokens/exchange", "", map[string]any{"scopes": []string{"host:proxy"}})
+	sat.wantErr(403, "insufficient_scope", "POST", "/api/v1/tokens/exchange", readOnly, map[string]any{"scopes": []string{"host:proxy"}})
+	sat.wantErr(403, "insufficient_scope", "POST", "/api/v1/tokens/exchange", hostTok, map[string]any{"scopes": []string{"host:proxy"}})
+	sat.wantErr(403, "exchange_refused", "POST", "/api/v1/tokens/exchange", stranger, map[string]any{"scopes": []string{"host:proxy"}})
+	sat.wantErr(400, "invalid_ttl", "POST", "/api/v1/tokens/exchange", member, map[string]any{"scopes": []string{"host:proxy"}, "ttl": "2h"})
+	sat.wantErr(403, "insufficient_scope", "POST", "/api/v1/tokens/exchange", member, map[string]any{"scopes": []string{"host:invite-mint"}})
+
+	// Default TTL is 30m; explicit 10m is honored.
+	defEx := sat.want(201, "POST", "/api/v1/tokens/exchange", member, map[string]any{"scopes": []string{"host:proxy"}})
+	if str(defEx, "expires_at") != now.Add(30*time.Minute).Format(time.RFC3339) {
+		t.Fatalf("default ttl expires_at = %q", str(defEx, "expires_at"))
+	}
+	shortEx := sat.want(201, "POST", "/api/v1/tokens/exchange", member, map[string]any{"scopes": []string{"host:proxy"}, "ttl": "10m"})
+	xtok := str(shortEx, "token")
+	if xtok == "" || str(shortEx, "expires_at") != now.Add(10*time.Minute).Format(time.RFC3339) {
+		t.Fatalf("short exchange = %v", shortEx)
+	}
+	// An exchanged satellite token cannot re-exchange itself.
+	sat.wantErr(403, "insufficient_scope", "POST", "/api/v1/tokens/exchange", xtok, map[string]any{"scopes": []string{"host:proxy"}})
+
+	var forwardedUser, forwardedPrefix, forwardedPath string
+	f.MountApp(satID, "studio", "site", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardedUser = r.Header.Get("X-Periscope-User")
+		forwardedPrefix = r.Header.Get("X-Forwarded-Prefix")
+		forwardedPath = r.URL.Path
+		writeJSON(w, 200, map[string]any{"ok": true})
+	}))
+
+	// Unshared app refuses with 403 not_shared.
+	sat.wantErr(403, "not_shared", "POST", "/matrix/h/studio/app/site/mcp", xtok, nil)
+
+	// Owner shares studio/site with circle team -> member reaches app with X-Periscope-User stamped.
+	m.want(201, "POST", "/api/v1/hosts/studio/shares", owner, map[string]any{"app": "site", "circles": []string{"team"}})
+	sat.want(200, "POST", "/matrix/h/studio/app/site/mcp", xtok, nil)
+	if forwardedUser != "member@example.com" || forwardedPrefix != "/matrix/h/studio/app/site" || forwardedPath != "/mcp" {
+		t.Fatalf("forwarded = user=%q prefix=%q path=%q", forwardedUser, forwardedPrefix, forwardedPath)
+	}
+
+	// Past TTL, old exchanged token is rejected with 401 unauthorized.
+	now = now.Add(11 * time.Minute)
+	sat.wantErr(401, "unauthorized", "POST", "/matrix/h/studio/app/site/mcp", xtok, nil)
+}
