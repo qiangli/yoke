@@ -62,7 +62,12 @@ function setBadge(state) {
 // and live only as long as THIS socket and that tab, so one agent can drive
 // several tabs and each keeps its own banner. A socket close, Disconnect, or
 // the tab closing clears them. Memory only: a restarted worker simply has no
-// route until the next call.
+// route until the next call. The ONE thing persisted is the set of tab ids
+// that carry a banner (chrome.storage.session, ids only: no chat, agent or
+// route), so a restarted worker can remove the banners it orphaned. It never
+// restores a route: authority belongs to the current live socket.
+const BANNER_KEY = "liveBannerTabs";
+const bannerTabs = new Set(); // tab ids this worker marked
 const shapeTabs = new Map(); // nonce -> the tab a press came from
 const routes = new Map(); // tabId -> {tabId, agent, chat, stale}
 
@@ -103,22 +108,49 @@ function routeLabel(r) {
   return r.agent + (r.stale ? " (chat gone)" : "");
 }
 
+function persistBanners() {
+  try {
+    const p = chrome.storage.session.set({ [BANNER_KEY]: [...bannerTabs] });
+    if (p && p.catch) p.catch(() => {});
+  } catch (_) { /* session storage unavailable: orphans are not swept */ }
+}
+
+// sweepOrphanBanners runs once at worker start: tabs marked by a previous
+// worker lose their banner, then the stored ids are replaced by the ones this
+// worker has marked since (usually none). Tabs with a live route are skipped.
+async function sweepOrphanBanners() {
+  let ids = [];
+  try {
+    const got = await chrome.storage.session.get(BANNER_KEY);
+    if (got && Array.isArray(got[BANNER_KEY])) ids = got[BANNER_KEY].filter(Number.isInteger);
+  } catch (_) { return; }
+  for (const id of ids) if (!routes.has(id)) await paintTab(id, null);
+  persistBanners();
+}
+
 async function bindRoute(tabId, agent, chat) {
   if (!Number.isInteger(tabId) || typeof agent !== "string" || typeof chat !== "string" || !agent || !chat) return;
   const r = { tabId, agent: agent.slice(0, 64), chat: chat.slice(0, 128), stale: false };
   r.color = agentColor(r.agent);
   routes.set(tabId, r);
+  bannerTabs.add(tabId);
+  persistBanners();
   await paintTab(tabId, routeLabel(r), r.color);
 }
 
 function clearRoutes() {
   const old = [...routes.keys()];
   routes.clear();
-  for (const id of old) paintTab(id, null);
+  const marked = [...new Set([...old, ...bannerTabs])];
+  bannerTabs.clear();
+  persistBanners();
+  for (const id of marked) paintTab(id, null);
 }
+sweepOrphanBanners();
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   routes.delete(tabId); // the page is gone with its banner
+  if (bannerTabs.delete(tabId)) persistBanners();
 });
 // A navigation replaces the document, and the banner with it.
 chrome.tabs.onUpdated.addListener((tabId, info) => {

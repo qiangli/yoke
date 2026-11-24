@@ -38,7 +38,7 @@ const TABS = [
   { id: 9, url: "https://human.example/", title: "Human", active: true }, // the one the human selected
 ];
 
-function loadBackground() {
+function loadBackground(opts = {}) {
   const state = { failScript: false };
   const sockets = [];
   const timers = []; // {fn, ms, cleared}
@@ -78,6 +78,11 @@ function loadBackground() {
           return r;
         },
         set() { return Promise.resolve(); },
+      },
+      // session survives a worker restart; opts.session is that shared store.
+      session: {
+        get: async (k) => (opts.session && k in opts.session ? { [k]: JSON.parse(JSON.stringify(opts.session[k])) } : {}),
+        set: async (o) => { if (opts.session) Object.assign(opts.session, JSON.parse(JSON.stringify(o))); },
       },
     },
     alarms: { create() {}, clear() {}, onAlarm: event },
@@ -683,4 +688,38 @@ test("a failed address or failed action binds no route and paints no banner", as
   await bg.hub(ws, { ...DRIVE, selector: "#x" });
   assert.deepEqual(await routesOf(bg), [], "a failed action binds nothing");
   assert.deepEqual(banners(bg).filter(([, l]) => l), []);
+});
+
+test("a restarted worker removes orphan banners from stored tab ids and restores no route", async () => {
+  const session = {}; // chrome.storage.session outlives the worker
+  const before = loadBackground({ session });
+  const ws = await before.connect();
+  await before.hub(ws, DRIVE);
+  await before.hub(ws, DRIVE2);
+  assert.deepEqual(plain(session), { liveBannerTabs: [4711, 4712] }, "only tab ids are stored");
+  assert.ok(!JSON.stringify(session).includes("chat-123") && !JSON.stringify(session).includes("claude-x"));
+
+  // The worker dies; the pages keep their banners. A new worker starts.
+  const after = loadBackground({ session });
+  await tick(); await tick();
+  assert.deepEqual(banners(after).sort(), [[4711, null], [4712, null]], "orphan banners removed from exactly the stored tabs");
+  assert.deepEqual(plain(session), { liveBannerTabs: [] }, "stored ids cleared");
+  assert.deepEqual(await routesOf(after), [], "no route authority restored");
+  const ws2 = await after.connect();
+  assert.deepEqual(await routesOf(after), []);
+  assert.equal(ws2.sent.length, 0);
+});
+
+test("tab close and disconnect drop stored banner ids", async () => {
+  const session = {};
+  const bg = loadBackground({ session });
+  const ws = await bg.connect();
+  await bg.hub(ws, DRIVE);
+  await bg.hub(ws, DRIVE2);
+  bg.tabListeners.removed.forEach((f) => f(4711));
+  await tick();
+  assert.deepEqual(plain(session.liveBannerTabs), [4712]);
+  await bg.send({ type: "ycode-live:disconnect" });
+  await tick();
+  assert.deepEqual(plain(session.liveBannerTabs), []);
 });
