@@ -113,7 +113,7 @@ func startEffectsE2E(t *testing.T, fixtures map[string]headerFixture, path strin
 	opts := liveE2EAllocatorOptions(dir, filepath.Join(t.TempDir(), "profile"), e2eChrome(t))
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancelCtx := chromedp.NewContext(alloc)
-	t.Cleanup(func() { cancelCtx(); cancelAlloc() })
+	t.Cleanup(func() { closeFixtureBrowser(ctx, cancelCtx, cancelAlloc) })
 	if err := chromedp.Run(ctx, chromedp.Navigate(srv.URL+path)); err != nil {
 		t.Fatal(err)
 	}

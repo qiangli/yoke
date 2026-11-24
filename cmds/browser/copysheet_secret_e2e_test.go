@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/qiangli/yoke/pkg/browser/live"
@@ -81,22 +84,25 @@ func TestCopySheetSecretRevealAndCopyInChrome(t *testing.T) {
 
 	origin := fmt.Sprintf("http://127.0.0.1:%d", port)
 	var shown, copied, button, note string
-	err = chromedp.Run(ctx,
-		browser.SetPermission(&browser.PermissionDescriptor{Name: "clipboard-read"}, browser.PermissionSettingGranted).WithOrigin(origin),
-		browser.SetPermission(&browser.PermissionDescriptor{Name: "clipboard-write"}, browser.PermissionSettingGranted).WithOrigin(origin),
-		chromedp.Navigate(reg.URL),
-		chromedp.Click(`[data-secret] button[data-act=reveal]`, chromedp.ByQuery),
-		chromedp.Poll(`document.querySelector('[data-secret] pre').textContent!=='••••••••'`, nil, chromedp.WithPollingTimeout(10*time.Second)),
-		chromedp.Text(`[data-secret] pre`, &shown, chromedp.ByQuery),
-		chromedp.Click(`[data-secret] button[data-act=copy]`, chromedp.ByQuery),
-		chromedp.Poll(`document.querySelector('[data-secret] button[data-act=copy]').textContent==='Copied' || document.querySelector('.sx').style.color!==''`, nil, chromedp.WithPollingTimeout(10*time.Second)),
-		chromedp.Text(`[data-secret] button[data-act=copy]`, &button, chromedp.ByQuery),
-		chromedp.Text(`.sx`, &note, chromedp.ByQuery),
+	focusCopySheet(t, ctx, reg.URL, origin)
+	runCopySheetStep(t, ctx, "reveal the fixture value",
+		chromedp.Evaluate(`document.querySelector('[data-secret] button[data-act=reveal]').click()`, nil),
+		chromedp.Poll(`(() => {
+			const text = document.querySelector('[data-secret] pre').textContent;
+			return text !== '••••••••' && text;
+		})()`, &shown, chromedp.WithPollingInterval(50*time.Millisecond), chromedp.WithPollingTimeout(10*time.Second)),
+	)
+	runCopySheetStep(t, ctx, "copy the fixture value",
+		chromedp.Evaluate(`document.querySelector('[data-secret] button[data-act=copy]').click()`, nil),
+		chromedp.Poll(`(() => {
+			const button = document.querySelector('[data-secret] button[data-act=copy]').textContent;
+			return (button === 'Copied' || document.querySelector('.sx').style.color !== '') && button;
+		})()`, &button, chromedp.WithPollingInterval(50*time.Millisecond), chromedp.WithPollingTimeout(10*time.Second)),
+		chromedp.Evaluate(`document.querySelector('.sx').textContent`, &note),
+	)
+	runCopySheetStep(t, ctx, "read the fixture clipboard",
 		chromedp.Evaluate(`navigator.clipboard.readText()`, &copied, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) }),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if shown != value {
 		t.Errorf("reveal showed %q", shown)
 	}
@@ -159,23 +165,24 @@ func TestCopySheetEntryRememberInChrome(t *testing.T) {
 	defer cancel()
 	origin := fmt.Sprintf("http://127.0.0.1:%d", port)
 	var note, copied string
-	err = chromedp.Run(ctx,
-		browser.SetPermission(&browser.PermissionDescriptor{Name: "clipboard-read"}, browser.PermissionSettingGranted).WithOrigin(origin),
-		browser.SetPermission(&browser.PermissionDescriptor{Name: "clipboard-write"}, browser.PermissionSettingGranted).WithOrigin(origin),
-		chromedp.Navigate(reg.URL),
-		chromedp.WaitVisible(`[data-secret] .sv`, chromedp.ByQuery),
-		chromedp.SendKeys(`[data-secret] .sv`, value, chromedp.ByQuery),
-		chromedp.Click(`[data-secret] .remember`, chromedp.ByQuery),
-		chromedp.Click(`[data-secret] button[data-act=save]`, chromedp.ByQuery),
-		chromedp.Poll(`document.querySelector('.sx').textContent.startsWith('Saved')`, nil, chromedp.WithPollingTimeout(10*time.Second)),
-		chromedp.Text(`.sx`, &note, chromedp.ByQuery),
-		chromedp.Click(`[data-secret] button[data-act=copy]`, chromedp.ByQuery),
-		chromedp.Poll(`document.querySelector('[data-secret] button[data-act=copy]').textContent==='Copied'`, nil, chromedp.WithPollingTimeout(10*time.Second)),
+	focusCopySheet(t, ctx, reg.URL, origin)
+	runCopySheetStep(t, ctx, "enter and remember the fixture value",
+		chromedp.Poll(`!document.querySelector('[data-secret] .entry').hidden`, nil,
+			chromedp.WithPollingInterval(50*time.Millisecond), chromedp.WithPollingTimeout(10*time.Second)),
+		chromedp.Evaluate(fmt.Sprintf(`document.querySelector('[data-secret] .sv').value = %q;
+			document.querySelector('[data-secret] .remember').click();
+			document.querySelector('[data-secret] button[data-act=save]').click()`, value), nil),
+		chromedp.Poll(`(() => {
+			const note = document.querySelector('.sx').textContent;
+			return note.startsWith('Saved') && note;
+		})()`, &note, chromedp.WithPollingInterval(50*time.Millisecond), chromedp.WithPollingTimeout(10*time.Second)),
+	)
+	runCopySheetStep(t, ctx, "copy the remembered fixture value",
+		chromedp.Evaluate(`document.querySelector('[data-secret] button[data-act=copy]').click()`, nil),
+		chromedp.Poll(`document.querySelector('[data-secret] button[data-act=copy]').textContent === 'Copied'`, nil,
+			chromedp.WithPollingInterval(50*time.Millisecond), chromedp.WithPollingTimeout(10*time.Second)),
 		chromedp.Evaluate(`navigator.clipboard.readText()`, &copied, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) }),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if strings.Contains(note, value) || copied != value {
 		t.Errorf("note %q, clipboard %q", note, copied)
 	}
@@ -185,4 +192,31 @@ func TestCopySheetEntryRememberInChrome(t *testing.T) {
 	if strings.Contains(hubLog.String(), value) || !strings.Contains(hubLog.String(), "sheet secret entered") {
 		t.Errorf("hub log leaks the value or misses the event:\n%s", hubLog.String())
 	}
+}
+
+func runCopySheetStep(t *testing.T, ctx context.Context, name string, actions ...chromedp.Action) {
+	t.Helper()
+	if err := chromedp.Run(ctx, actions...); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+}
+
+func focusCopySheet(t *testing.T, ctx context.Context, url, origin string) {
+	t.Helper()
+	runCopySheetStep(t, ctx, "open and focus copy sheet",
+		chromedp.Navigate(url),
+		page.BringToFront(),
+		emulation.SetFocusEmulationEnabled(true),
+		chromedp.Poll("document.hasFocus()", nil, chromedp.WithPollingTimeout(5*time.Second)),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			browserCtx := cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser)
+			for _, permission := range []string{"clipboard-read", "clipboard-write"} {
+				if err := browser.SetPermission(&browser.PermissionDescriptor{Name: permission},
+					browser.PermissionSettingGranted).WithOrigin(origin).Do(browserCtx); err != nil {
+					return err
+				}
+			}
+			return nil
+		}),
+	)
 }

@@ -101,18 +101,7 @@ func startExtensionE2E(t *testing.T, fixtures map[string]string, path string) (*
 	// The shipped extension, unchanged but for one appended line that
 	// connects it to this hub (the popup's "connect" does the same).
 	dir := filepath.Join(t.TempDir(), "ext")
-	if _, err := ExtractExtension(dir); err != nil {
-		t.Fatal(err)
-	}
-	bg := filepath.Join(dir, "background.js")
-	src, err := os.ReadFile(bg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	boot := fmt.Sprintf("\n;connectedPort = %d; wantConnected = true; openWS();\n", port)
-	if err := os.WriteFile(bg, append(src, boot...), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	extractFixtureExtension(t, dir, port)
 
 	mux := http.NewServeMux()
 	for p, body := range fixtures {
@@ -128,7 +117,7 @@ func startExtensionE2E(t *testing.T, fixtures map[string]string, path string) (*
 	opts := liveE2EAllocatorOptions(dir, filepath.Join(t.TempDir(), "profile"), e2eChrome(t))
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancelCtx := chromedp.NewContext(alloc)
-	t.Cleanup(func() { cancelCtx(); cancelAlloc() })
+	t.Cleanup(func() { closeFixtureBrowser(ctx, cancelCtx, cancelAlloc) })
 	// The first Run starts the browser and binds its life to ctx: a timeout
 	// context here would close Chrome the moment it is cancelled.
 	if err := chromedp.Run(ctx, chromedp.Navigate(srv.URL+path)); err != nil {
@@ -149,6 +138,33 @@ func startExtensionE2E(t *testing.T, fixtures map[string]string, path string) (*
 		t.Fatalf("hello install_type = %q, want development", got)
 	}
 	return svc, ctx
+}
+
+func extractFixtureExtension(t *testing.T, dir string, port int) {
+	t.Helper()
+	if _, err := ExtractExtension(dir); err != nil {
+		t.Fatal(err)
+	}
+	bg := filepath.Join(dir, "background.js")
+	src, err := os.ReadFile(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot := fmt.Sprintf("\n;connectedPort = %d; wantConnected = true; openWS();\n", port)
+	if err := os.WriteFile(bg, append(src, boot...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+}
+
+// Close Chrome before testing removes its profile. Force-cancelling the
+// allocator can leave renderer or storage processes writing in that directory.
+func closeFixtureBrowser(ctx context.Context, cancelCtx, cancelAlloc context.CancelFunc) {
+	defer cancelAlloc()
+	defer cancelCtx()
+	closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = chromedp.Cancel(closeCtx)
 }
 
 // restartWorkerAndSwitchTab plays what can happen while the operator reads
@@ -194,24 +210,32 @@ func restartWorkerAndSwitchTab(t *testing.T, ctx context.Context, svc *Service) 
 // (Chrome runs component extensions too): the one whose manifest is ours.
 func ourWorker(t *testing.T, ctx context.Context) (target.ID, string) {
 	t.Helper()
-	ts, err := chromedp.Targets(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, ti := range ts {
-		if ti.Type != "service_worker" || !strings.HasPrefix(ti.URL, "chrome-extension://") {
-			continue
+	ctx, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	for {
+		ts, err := chromedp.Targets(ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-		wctx, cancel := chromedp.NewContext(ctx, chromedp.WithTargetID(ti.TargetID))
-		var name string
-		err := chromedp.Run(wctx, chromedp.Evaluate(`chrome.runtime.getManifest().name`, &name))
-		cancel()
-		if err == nil && name == "bashy live" {
-			return ti.TargetID, ti.URL[:strings.LastIndex(ti.URL, "/")+1]
+		for _, ti := range ts {
+			if ti.Type != "service_worker" || !strings.HasPrefix(ti.URL, "chrome-extension://") {
+				continue
+			}
+			wctx, cancel := chromedp.NewContext(ctx, chromedp.WithTargetID(ti.TargetID))
+			var name string
+			err := chromedp.Run(wctx, chromedp.Evaluate(`chrome.runtime.getManifest().name`, &name))
+			cancel()
+			if err == nil && name == "bashy live" {
+				return ti.TargetID, ti.URL[:strings.LastIndex(ti.URL, "/")+1]
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the extension's service worker is not running")
+			return "", ""
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	t.Fatal("the extension's service worker is not running")
-	return "", ""
 }
 
 // slowOperator answers provide after during() ran — the window in which a

@@ -291,6 +291,19 @@ set -e
 go test ./pkg/browser/live/ ./cmds/browser/ ./cmd/chrome-ext-release/
 ```
 
+### browser-regression
+Run the existing browser behavior gate on a coordinated test host. Point
+`BASHY_BROWSER_EXT_CHROME` at Chrome for Testing and `BASHY_BROWSER_E2E_BIN`
+at the candidate Bashy or Yoke executable. Both paths must be absolute.
+Add new scenarios to the existing Go suites under `TestExtensionE2E` or
+`TestBrowserE2E` so the gate also checks that they ran.
+Sources: pkg/browser/, cmds/browser/, scripts/browser-regression.sh
+Effects: exec,net,read,write
+
+```bash
+bash scripts/browser-regression.sh
+```
+
 ### chrome-ext-release
 Pack the embedded live extension for release into dist/chrome-ext/: the zip the
 Chrome Web Store takes (`bashy-live-<manifest version>.zip`) plus its sha256.
