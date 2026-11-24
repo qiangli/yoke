@@ -344,8 +344,8 @@ func TestPopupHasTheShapeControls(t *testing.T) {
 			t.Errorf("popup.html lacks %s", want)
 		}
 	}
-	if n := strings.Count(html, "<button"); n != 6 {
-		t.Errorf("popup.html has %d buttons, want the four it had, Shape and Focus", n)
+	if n := strings.Count(html, "<button"); n != 5 {
+		t.Errorf("popup.html has %d buttons, want the four it had and Shape (Focus buttons are per route row, built by popup.js)", n)
 	}
 	if strings.Count(html, "<textarea") != 1 {
 		t.Error("popup.html should have exactly one textarea, the note")
