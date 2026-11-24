@@ -35,6 +35,7 @@ import (
 	"github.com/qiangli/yoke/pkg/shape/selfbin"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -623,7 +624,39 @@ func checkEnv(callLog string) map[string]string {
 		k, v, _ := strings.Cut(kv, "=")
 		env[k] = v
 	}
+	// A check runs with HOME inside the clone, so Go would default its module
+	// and build caches there and download the toolchain and every dependency
+	// again for each check: eight parallel forks blow the per-check budget.
+	// Share the host's read-only caches instead, as the warm-cache rule asks;
+	// the verifier's own values win, else what the go tool reports.
+	for k, v := range goCaches() {
+		env[k] = v
+	}
 	return env
+}
+
+// goCaches names the host's Go module and build caches: the verifier's
+// environment first, else `go env`; absent when neither answers.
+func goCaches() map[string]string {
+	out := map[string]string{}
+	missing := []string{}
+	for _, k := range []string{"GOMODCACHE", "GOCACHE"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			out[k] = v
+		} else {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		if res, err := exec.Command("go", append([]string{"env"}, missing...)...).Output(); err == nil {
+			for i, line := range strings.Split(strings.TrimSpace(string(res)), "\n") {
+				if i < len(missing) && strings.TrimSpace(line) != "" {
+					out[missing[i]] = strings.TrimSpace(line)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // trim bounds a detail string stored in a record.

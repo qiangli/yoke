@@ -262,6 +262,34 @@ func TestRunNeedsAPrincipal(t *testing.T) {
 // A check builds the candidate inside its clone, so it reads shared modules
 // from the host's local module proxy exactly as a program candidate does;
 // the proxy is named by the verifier's environment, not the check's home.
+// A check inherits the host's Go caches so it never re-downloads the
+// toolchain or modules into its scrubbed home; the verifier's values win.
+func TestTrustedRunnerChecksSeeTheGoCaches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture check is POSIX shell")
+	}
+	mod, build := t.TempDir(), t.TempDir()
+	t.Setenv("GOMODCACHE", mod)
+	t.Setenv("GOCACHE", build)
+	dir := t.TempDir()
+	script := filepath.Join(dir, "check.sh")
+	if err := os.WriteFile(script, []byte(`printf '%s\n%s\n' "$GOMODCACHE" "$GOCACHE"`+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := TrustedRunner{
+		Bin: "sh", Effects: []string{"read"}, Level: contain.LevelProcess,
+	}.RunCheck(context.Background(), CheckRun{
+		Name: "caches", Dir: dir, Script: script, Cap: "read",
+		CallLog: filepath.Join(dir, "calls.log"), Timeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := mod + "\n" + build; !strings.Contains(out.Detail, want) {
+		t.Fatalf("check did not see the host Go caches:\n%s", out.Detail)
+	}
+}
+
 func TestTrustedRunnerChecksSeeTheModuleProxy(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fixture check is POSIX shell")
