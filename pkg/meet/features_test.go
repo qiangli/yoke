@@ -47,6 +47,59 @@ func TestNormalizeChoice(t *testing.T) {
 	}
 }
 
+func TestNormalizeDescribedChoice(t *testing.T) {
+	const (
+		ship = "SHIP-NOW: release the patch: tests passed"
+		hold = "HOLD : wait for review"
+	)
+	choices := []string{ship, hold, "abstain"}
+	cases := []struct {
+		name, reply, want string
+	}{
+		{"key only", " ship-now ", ship},
+		{"trimmed key", "hold", hold},
+		{"full choice", ship, ship},
+		{"formatted prefix", "> **Vote:** `Hold`", hold},
+		{"first line verdict", "SHIP-NOW\nI considered HOLD but the patch is ready.", ship},
+		{"inline rationale", "SHIP-NOW because the patch is ready", ship},
+		{"fallback key", "My recommendation is **HOLD**.", hold},
+		{"fallback full choice", "I select [" + ship + "].", ship},
+		{"ambiguous fallback", "I could pick SHIP-NOW or HOLD.", ""},
+		{"ambiguous first line", "SHIP-NOW or HOLD", ""},
+		{"mixed choices", "I considered HOLD and abstain.", ""},
+		{"plain choice", "Answer: abstain", "abstain"},
+		{"partial key", "I prefer SHIP-NOW-ISH.", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeChoice(tc.reply, choices); got != tc.want {
+				t.Errorf("normalizeChoice(%q) = %q, want %q", tc.reply, got, tc.want)
+			}
+		})
+	}
+
+	sharedKey := []string{ship, "SHIP-NOW: deploy later"}
+	for _, reply := range []string{"SHIP-NOW", "I vote SHIP-NOW."} {
+		if got := normalizeChoice(reply, sharedKey); got != "" {
+			t.Errorf("normalizeChoice(%q) = %q, want an ambiguous ballot", reply, got)
+		}
+	}
+}
+
+func TestPollPromptAsksForChoiceKey(t *testing.T) {
+	choices := []string{"YES: ship the patch", "NO: wait for review", "abstain"}
+	prompt := pollPrompt(&State{Topic: "Release"}, "Ship the patch?", choices)
+	for _, want := range []string{
+		"Reply on the FIRST line with EXACTLY one choice key",
+		"the text before the first colon, or the entire choice if it has no colon",
+		strings.Join(choices, " | "),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("poll prompt is missing %q: %s", want, prompt)
+		}
+	}
+}
+
 // An agent that answers but does not answer the BALLOT is `invalid`, not `ok` —
 // otherwise an unparseable reply would silently vanish from the tally.
 func TestPollTalliesAndFlagsInvalid(t *testing.T) {

@@ -66,7 +66,8 @@ func (p *PollResult) Winner() (string, bool) {
 func pollPrompt(st *State, question string, choices []string) string {
 	return fmt.Sprintf(
 		"%s\nTopic: %s\n\nPOLL — you must answer.\nQuestion: %s\n\n"+
-			"Reply on the FIRST line with EXACTLY one of these words and nothing else: %s\n"+
+			"Choices: %s\n"+
+			"Reply on the FIRST line with EXACTLY one choice key (the text before the first colon, or the entire choice if it has no colon).\n"+
 			"On the following lines give one or two sentences of rationale.",
 		turnGuard, st.Topic, question, strings.Join(choices, " | "))
 }
@@ -81,7 +82,9 @@ func askPrompt(st *State, question string, optional bool) string {
 }
 
 // normalizeChoice maps a free-text reply onto one of the permitted choices, or
-// "" when the reply does not name exactly one. It reads the first few lines
+// "" when the reply does not name exactly one. A described choice can be
+// named by its key (the text before the first colon) or by its full text.
+// It reads the first few lines
 // (agents put the verdict up top, as instructed), tolerating markdown emphasis,
 // punctuation, and an "Answer:"/"Vote:" prefix. If the head is unreadable it
 // falls back to a whole-reply scan, which succeeds only when exactly ONE choice
@@ -90,13 +93,35 @@ func normalizeChoice(reply string, choices []string) string {
 	clean := func(s string) string {
 		s = strings.ToLower(strings.TrimSpace(s))
 		s = strings.Trim(s, "*_`#>-. \t\"'!?:;,()[]")
-		for _, p := range []string{"answer:", "vote:", "verdict:", "answer", "vote"} {
+		for _, p := range []string{"answer:", "vote:", "verdict:", "answer ", "vote "} {
 			if strings.HasPrefix(s, p) {
 				s = strings.TrimSpace(strings.TrimPrefix(s, p))
 				s = strings.Trim(s, "*_`\"' \t:")
 			}
 		}
 		return s
+	}
+
+	// Match against both spellings but count each canonical choice only once.
+	match := func(matches func(full, key string) bool) (choice string, found bool) {
+		for _, c := range choices {
+			full := strings.ToLower(strings.TrimSpace(c))
+			key, _, _ := strings.Cut(full, ":")
+			if !matches(full, strings.TrimSpace(key)) {
+				continue
+			}
+			if found && c != choice {
+				return "", true
+			}
+			choice, found = c, true
+		}
+		return choice, found
+	}
+	scan := func(s string) string {
+		choice, _ := match(func(full, key string) bool {
+			return mentionsPollChoice(s, full) || mentionsPollChoice(s, key)
+		})
+		return choice
 	}
 
 	lines := strings.Split(strings.TrimSpace(reply), "\n")
@@ -108,32 +133,43 @@ func normalizeChoice(reply string, choices []string) string {
 		if head == "" {
 			continue
 		}
-		for _, c := range choices {
-			lc := strings.ToLower(c)
-			if head == lc || strings.HasPrefix(head, lc+" ") {
-				return c
-			}
+		if choice, found := match(func(full, key string) bool {
+			return head == full || head == key
+		}); found {
+			return choice
+		}
+		if _, found := match(func(full, key string) bool {
+			return (full != "" && strings.HasPrefix(head, full+" ")) ||
+				(key != "" && strings.HasPrefix(head, key+" "))
+		}); found {
+			return scan(head)
 		}
 	}
 
 	// Whole-reply fallback: unambiguous mention only.
-	fields := strings.FieldsFunc(strings.ToLower(reply), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' && r != '_'
-	})
-	seen := map[string]bool{}
-	for _, f := range fields {
-		for _, c := range choices {
-			if f == strings.ToLower(c) {
-				seen[c] = true
-			}
-		}
+	return scan(strings.ToLower(reply))
+}
+
+func mentionsPollChoice(reply, spelling string) bool {
+	if spelling == "" {
+		return false
 	}
-	if len(seen) == 1 {
-		for c := range seen {
-			return c
-		}
+	wordByte := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '-' || b == '_'
 	}
-	return ""
+	for offset := 0; offset < len(reply); {
+		start := strings.Index(reply[offset:], spelling)
+		if start < 0 {
+			break
+		}
+		start += offset
+		end := start + len(spelling)
+		if (start == 0 || !wordByte(reply[start-1])) && (end == len(reply) || !wordByte(reply[end])) {
+			return true
+		}
+		offset = start + 1
+	}
+	return false
 }
 
 // runPoll puts a fixed-choice question to each participant and tallies the
