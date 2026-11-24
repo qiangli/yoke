@@ -453,9 +453,9 @@ func (s Service) Status(ctx context.Context, c Caller) (Status, error) {
 	return out, nil
 }
 func (s Service) Begin(ctx context.Context, caller Caller, w Wish) (Candidate, error) {
-	return s.begin(ctx, caller, w, false)
+	return s.begin(ctx, caller, w, false, "")
 }
-func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool) (Candidate, error) {
+func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool, expectedBase string) (Candidate, error) {
 	if s.isBashy() {
 		return s.bashyRecord(ctx, caller, w)
 	}
@@ -497,9 +497,15 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 		return Candidate{}, errors.New("shape: choose story or todo")
 	}
 	actPrincipal := s.ActivationPrincipalFor(caller)
+	if expectedBase != "" && actPrincipal != s.Owner() {
+		return Candidate{}, ErrUnauthorized
+	}
 	base, e := s.active(actPrincipal)
 	if e != nil {
 		return Candidate{}, e
+	}
+	if expectedBase != "" && expectedBase != base {
+		return Candidate{}, fmt.Errorf("%w: active revision changed (base %s, active %s)", ErrConflict, expectedBase, base)
 	}
 	if e = shapeverify.RequireCompleteSource(s.App.SourceDir); e != nil {
 		return Candidate{}, e
@@ -672,16 +678,20 @@ func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, er
 	return s.complete(ctx, caller, c, e)
 }
 func (s Service) Import(ctx context.Context, caller Caller, w Wish, workspace string) (Candidate, error) {
+	return s.importChanges(ctx, caller, w, "", func(dest string) error { return CopyWorkspace(workspace, dest) })
+}
+
+func (s Service) importChanges(ctx context.Context, caller Caller, w Wish, base string, apply func(string) error) (Candidate, error) {
 	if s.isBashy() {
 		return Candidate{}, ErrBashyActivation
 	}
-	c, e := s.Begin(ctx, caller, w)
+	c, e := s.begin(ctx, caller, w, false, base)
 	if e != nil {
 		return c, e
 	}
 	r, e := CloneAt(ctx, s.App.SourceDir, c.Workspace, c.BaseRev)
 	if e == nil {
-		e = CopyWorkspace(workspace, c.Workspace)
+		e = apply(c.Workspace)
 	}
 	if e == nil {
 		c.Rev, e = CommitCandidate(r, c)

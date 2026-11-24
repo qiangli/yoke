@@ -758,7 +758,7 @@ func (s Service) HostRestore(ctx context.Context, caller Caller, ref string) (Ho
 	if e != nil {
 		return HostStatus{}, e
 	}
-	c, e := s.begin(ctx, caller, Wish{Request: "Restore host app to " + ref}, true)
+	c, e := s.begin(ctx, caller, Wish{Request: "Restore host app to " + ref}, true, "")
 	if e != nil {
 		return HostStatus{}, e
 	}
