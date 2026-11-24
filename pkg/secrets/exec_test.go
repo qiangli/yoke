@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,6 +34,19 @@ func TestSecretExecChild(t *testing.T) {
 		fmt.Printf("%x\n", h.Sum(nil))
 		os.Exit(0)
 	}
+	if mode == "google" {
+		path := filepath.Join(os.Getenv("GWS_CONFIG_ROOT"), "a+b@example.test", "credentials.json")
+		value, err := os.ReadFile(path)
+		if err != nil || string(value) != "{\"test\": true}\n" || os.Getenv("GH_TOKEN") != "synthetic-github" {
+			os.Exit(28)
+		}
+		info, err := os.Stat(path)
+		if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			os.Exit(29)
+		}
+		fmt.Println("credential present")
+		os.Exit(0)
+	}
 	if os.Getenv("DO_ORBIT_AGENT") != "synthetic-agent" ||
 		os.Getenv("DOCR_DHNT_PUSH_TOKEN") != "synthetic-push" ||
 		os.Getenv("CUSTOM_TOKEN") != "synthetic-custom" ||
@@ -47,6 +62,71 @@ func TestSecretExecChild(t *testing.T) {
 	_, _ = io.Copy(os.Stdout, os.Stdin)
 	fmt.Fprintln(os.Stderr, "child completed")
 	os.Exit(0)
+}
+
+func TestSecretExecGoogleProjection(t *testing.T) {
+	configureSecretsTestEnv(t)
+	fv := newFakeVault(t)
+	const google = "google/a+b@example.test/credentials"
+	fv.data[google] = "{\"test\": true}\n"
+	fv.data["github/work/token"] = "synthetic-github"
+	t.Setenv("BASHY_SECRET_EXEC_TEST_CHILD", "google")
+	t.Setenv("GH_TOKEN", "parent-token")
+	t.Setenv("GWS_CONFIG_ROOT", "parent-root")
+	root := t.TempDir()
+	for _, missing := range []bool{false, true} {
+		github := "github/work/token=GH_TOKEN"
+		if missing {
+			github = "github/missing/token=GH_TOKEN"
+		}
+		out, stderr, err := executeSecrets(t, fv.cfg(), nil, "exec", "--no-cache",
+			"--google-root", root, google, github, "--", os.Args[0], "-test.run=^TestSecretExecChild$")
+		if missing {
+			if err == nil || err.Error() != "no such secret: github/missing/token" || out+stderr != "" {
+				t.Fatalf("missing secret: output %q, stderr %q, error %v", out, stderr, err)
+			}
+		} else if err != nil || out != "credential present\n" || stderr != "" {
+			t.Fatalf("projection: output %q, stderr %q, error %v", out, stderr, err)
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 0 {
+			t.Fatal("scratch contains credential data after exec")
+		}
+		if os.Getenv("GH_TOKEN") != "parent-token" || os.Getenv("GWS_CONFIG_ROOT") != "parent-root" {
+			t.Fatal("projection mutated parent environment")
+		}
+	}
+}
+
+func TestSecretExecGoogleRejectsUnsafeAccount(t *testing.T) {
+	fv := newFakeVault(t)
+	root := t.TempDir()
+	for _, account := range []string{".", "..", `a\b`, ""} {
+		name := "google/" + account + "/credentials"
+		if _, _, err := executeSecrets(t, fv.cfg(), nil, "exec", "--google-root", root,
+			name, "--", os.Args[0]); err == nil || !strings.Contains(err.Error(), "invalid Google credential path") {
+			t.Errorf("unsafe account %q: %v", account, err)
+		}
+	}
+	if len(fv.paths) != 0 {
+		t.Fatal("invalid binding fetched vault values")
+	}
+}
+
+func TestSecretCredentialAccounts(t *testing.T) {
+	fv := newFakeVault(t)
+	for _, name := range []string{
+		"google/z@example.test/credentials", "google/a@example.test/access-token",
+		"google/../credentials", "github/work/token", "aws/one/access-key-id",
+		"aws/one/secret-access-key", "other/ignored/token", "aws/partial",
+	} {
+		fv.data[name] = "synthetic-value"
+	}
+	out, stderr, err := executeSecrets(t, fv.cfg(), nil, "accounts")
+	const want = "{\"aws\":[\"one\"],\"github\":[\"work\"],\"google\":[\"a@example.test\",\"z@example.test\"]}\n"
+	if err != nil || out != want || stderr != "" {
+		t.Fatalf("accounts: output %q, stderr %q, error %v", out, stderr, err)
+	}
 }
 
 func TestSecretExecChildEnvironmentOnly(t *testing.T) {

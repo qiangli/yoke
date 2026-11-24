@@ -136,7 +136,11 @@ func readTokenFile() string {
 func (c Client) endpoint(p string) string { return c.BaseURL + "/api/v1/secrets" + p }
 
 func (c Client) do(method, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.endpoint(path), body)
+	return c.doContext(context.Background(), method, path, body)
+}
+
+func (c Client) doContext(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path), body)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +163,11 @@ func apiError(resp *http.Response) error {
 
 // List returns all of the caller's secrets, sorted by name.
 func (c Client) List() ([]Item, error) {
-	resp, err := c.do(http.MethodGet, "", nil)
+	return c.listContext(context.Background())
+}
+
+func (c Client) listContext(ctx context.Context) ([]Item, error) {
+	resp, err := c.doContext(ctx, http.MethodGet, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +187,11 @@ func (c Client) List() ([]Item, error) {
 
 // Get returns one secret value by name.
 func (c Client) Get(name string) (string, error) {
-	resp, err := c.do(http.MethodGet, "/"+url.PathEscape(name), nil)
+	return c.getContext(context.Background(), name)
+}
+
+func (c Client) getContext(ctx context.Context, name string) (string, error) {
+	resp, err := c.doContext(ctx, http.MethodGet, "/"+url.PathEscape(name), nil)
 	if err != nil {
 		return "", err
 	}

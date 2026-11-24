@@ -66,8 +66,20 @@ agent transcript or shell history, compose gen (local-only) with set:
   bashy secret gen | bashy secret set DB_PASSWORD
 
 Name secrets <provider>/<account>/<purpose> (for example do/orbit/agent or
-docr/dhnt/push). Keep local secret files only under ~/.ssh/; use
-bashy secret exec for one-off commands.`,
+docr/dhnt/push). Keep long-lived local secret files under ~/.ssh/ and use
+bashy secret exec for one-off commands.
+
+Vault name                              Provider credential
+google/<account>/credentials            Google Workspace credential JSON
+google/<account>/access-token           CLOUDSDK_AUTH_ACCESS_TOKEN
+github/<account>/token                  GH_TOKEN
+aws/<account>/access-key-id             AWS_ACCESS_KEY_ID
+aws/<account>/secret-access-key         AWS_SECRET_ACCESS_KEY
+aws/<account>/session-token             AWS_SESSION_TOKEN (temporary keys)
+
+bashy secret accounts lists connected Google, GitHub, and AWS accounts
+from vault names. Use bashy google auth-export --to-vault to store the
+local Google credential file.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -79,6 +91,7 @@ bashy secret exec for one-off commands.`,
 	cmd.AddCommand(newEnvCmd(&cfg))
 	cmd.AddCommand(newExecCmd(&cfg))
 	cmd.AddCommand(newLsCmd(&cfg))
+	cmd.AddCommand(newAccountsCmd(&cfg))
 	cmd.AddCommand(newGetCmd(&cfg))
 	cmd.AddCommand(newCheckCmd(&cfg))
 	cmd.AddCommand(newSetCmd(&cfg))
