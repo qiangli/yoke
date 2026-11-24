@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -65,7 +66,10 @@ type ShapeMessage struct {
 
 	// To is the recipient the human typed; empty means the default.
 	To string
-	At time.Time
+	// Chat is the exact Bashy chat id bound to the tab by the agent driving
+	// it. When set it is the only recipient: never a default, never a DM.
+	Chat string
+	At   time.Time
 }
 
 // ShapeReceipt is what the popup's status line says after a delivery.
@@ -74,6 +78,10 @@ type ShapeReceipt struct {
 	To     string // who it reached
 	Status string // one line for the human
 }
+
+// ErrShapeRouteStale is what a handler returns when the chat a bound tab
+// names is gone: nothing was sent, and the popup says the route is stale.
+var ErrShapeRouteStale = errors.New("the agent chat bound to this tab is gone; nothing was sent")
 
 // ShapeHandler delivers a Shape message.
 type ShapeHandler func(ctx context.Context, m ShapeMessage) (ShapeReceipt, error)
@@ -110,6 +118,7 @@ type extShape struct {
 	Title string `json:"title,omitempty"`
 	Note  string `json:"note,omitempty"`
 	To    string `json:"to,omitempty"`
+	Chat  string `json:"chat,omitempty"`
 	// Browser is the extension's own guess, used only when the hub's port
 	// names no browser.
 	Browser string `json:"browser,omitempty"`
@@ -125,6 +134,7 @@ func newShapeMessage(port int, in extShape) ShapeMessage {
 		URL:     clipText(oneLine(in.URL), shapeURLMax),
 		Title:   clipText(oneLine(in.Title), shapeTitleMax),
 		To:      clipText(oneLine(strings.TrimPrefix(strings.TrimSpace(in.To), "@")), shapeToMax),
+		Chat:    clipText(oneLine(in.Chat), shapeToMax),
 		At:      time.Now().UTC(),
 	}
 	if m.Browser == "" {
@@ -237,6 +247,11 @@ func (h *hub) handleShape(conn *websocket.Conn, origin string, raw json.RawMessa
 	ctx, cancel := context.WithTimeout(context.Background(), ShapeDeliverTimeout)
 	defer cancel()
 	rec, err := (*fn)(ctx, m)
+	if errors.Is(err, ErrShapeRouteStale) {
+		logInfo("live: shape not delivered", "reason", err.Error())
+		reply(map[string]any{"ok": false, "error": err.Error(), "stale": true})
+		return
+	}
 	if err != nil {
 		fail(err.Error())
 		return

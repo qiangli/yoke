@@ -482,6 +482,9 @@ func actionToParams(a wire.Action) (string, map[string]any, error) {
 	for k, v := range tabSelector(a) {
 		params[k] = v
 	}
+	if a.Agent != "" && a.Chat != "" {
+		params["agent"], params["chat"] = a.Agent, a.Chat
+	}
 	return method, params, nil
 }
 

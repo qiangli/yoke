@@ -53,6 +53,13 @@ func deliverShape(ctx context.Context, m live.ShapeMessage) (live.ShapeReceipt, 
 		return live.ShapeReceipt{}, err
 	}
 	human := shapeOperator()
+	if m.Chat != "" {
+		// The tab is bound to one exact chat: that card, or nothing.
+		if c, ok, err := shapeFind(m.Chat); err == nil && ok && c.ID == m.Chat && chat.SteerableCard(c) {
+			return steerShape(c, human, m, "")
+		}
+		return live.ShapeReceipt{}, live.ErrShapeRouteStale
+	}
 	if m.To != "" {
 		if card, ok := shapeSession(m.To); ok {
 			return steerShape(card, human, m, "")
@@ -202,4 +209,45 @@ func shapeClip(s string, max int) string {
 		cut--
 	}
 	return s[:cut] + "…"
+}
+
+// routeIdentity names the managed agent driving a live call: its exact chat is
+// the room card id the launcher put in BASHY_AGENT, and the banner name comes
+// from that card (nick, else tool), else the id. Outside a managed agent both
+// are empty and the call binds nothing.
+func routeIdentity() (agent, chatID string) {
+	chatID = strings.TrimSpace(os.Getenv("BASHY_AGENT"))
+	if chatID == "" {
+		return "", ""
+	}
+	name := chatID
+	if c, ok, err := shapeFind(chatID); err == nil && ok && c.ID == chatID {
+		if c.Nick != "" {
+			name = c.Nick
+		} else if c.Tool != "" {
+			name = c.Tool
+		}
+	}
+	return safeRouteName(name), chatID
+}
+
+// safeRouteName keeps a banner label to printable word characters, so a card
+// field can never put markup or control bytes on a page.
+func safeRouteName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte(' ')
+		}
+		if b.Len() >= 32 {
+			break
+		}
+	}
+	if n := strings.TrimSpace(b.String()); n != "" {
+		return n
+	}
+	return "agent"
 }

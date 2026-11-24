@@ -467,3 +467,66 @@ func TestHubRoutesAShapePress(t *testing.T) {
 	}
 	wantAll(t, "steer", w.steers[0].text, []string{"tab 12", `"https://example.com/"`, `"Example"`, "--id 12", "Their note: hello"})
 }
+
+// A bound tab's note goes to that exact chat or nowhere: not to a nick or
+// prefix match, not to the most recent session, not to a DM.
+func TestShapeBoundChatIsExactOrStale(t *testing.T) {
+	w := newShapeWorld(t)
+	bound := w.session("claude-x")
+	other := w.session("codex")
+	m := live.ShapeMessage{Browser: "chrome", Port: 58082, TabID: 7, URL: "https://e.com/", Title: "t", Note: "look", Chat: bound.ID}
+
+	rec, err := deliverShape(context.Background(), m)
+	if err != nil || rec.Via != "steer" || len(w.steers) != 1 || w.steers[0].to != bound.ID {
+		t.Fatalf("rec=%+v err=%v steers=%v", rec, err, w.steers)
+	}
+	if strings.Contains(w.steers[0].to, other.ID) || !strings.Contains(w.steers[0].text, "look") {
+		t.Fatalf("steer = %+v", w.steers[0])
+	}
+
+	// Stale: the chat is gone, though another session and a nick match exist.
+	w.steers = nil
+	for _, chat := range []string{"gone-chat", strings.ToUpper(other.Nick)} {
+		m.Chat = chat
+		if _, err := deliverShape(context.Background(), m); !errors.Is(err, live.ErrShapeRouteStale) {
+			t.Fatalf("chat %q: err = %v, want a stale route", chat, err)
+		}
+	}
+	if len(w.steers)+len(w.dms)+len(w.pubs) != 0 {
+		t.Fatalf("a stale route delivered somewhere: %+v %+v %+v", w.steers, w.dms, w.pubs)
+	}
+}
+
+// A stale bound chat never falls back to the typed recipient, even when that
+// recipient names a live session.
+func TestShapeStaleBoundChatDoesNotFallBackToRecipient(t *testing.T) {
+	w := newShapeWorld(t)
+	live1 := w.session("codex")
+	m := live.ShapeMessage{Browser: "chrome", Port: 58082, TabID: 7, URL: "https://e.com/", Title: "t", Note: "look", Chat: "gone-chat", To: live1.ID}
+	if _, err := deliverShape(context.Background(), m); !errors.Is(err, live.ErrShapeRouteStale) {
+		t.Fatalf("err = %v, want a stale route", err)
+	}
+	if len(w.steers)+len(w.dms)+len(w.pubs) != 0 {
+		t.Fatalf("delivered despite a stale bound chat: %+v %+v %+v", w.steers, w.dms, w.pubs)
+	}
+}
+
+// The route comes from the managed agent's own room card id: no new env, and a
+// banner name that is safe to put on a page.
+func TestRouteIdentityUsesBashyAgentCard(t *testing.T) {
+	w := newShapeWorld(t)
+	c := w.session("claude-x")
+	t.Setenv("BASHY_AGENT", c.ID)
+	if agent, chatID := routeIdentity(); agent != "claude-x" || chatID != c.ID {
+		t.Fatalf("identity = %q %q", agent, chatID)
+	}
+	// An id with no card falls back to the id itself, sanitised.
+	t.Setenv("BASHY_AGENT", "ghost<img src=x>")
+	if agent, chatID := routeIdentity(); agent != "ghostimg srcx" || chatID != "ghost<img src=x>" {
+		t.Fatalf("identity = %q %q", agent, chatID)
+	}
+	t.Setenv("BASHY_AGENT", "")
+	if agent, chatID := routeIdentity(); agent != "" || chatID != "" {
+		t.Fatalf("outside a managed agent: %q %q", agent, chatID)
+	}
+}

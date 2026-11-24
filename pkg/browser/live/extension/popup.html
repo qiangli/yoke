@@ -19,6 +19,15 @@
     #status.connecting { background: #fff3cd; color: #6b4f00; }
     .hint { color: #777; font-size: 11px; margin-top: 8px; line-height: 1.4; }
 
+    #route { margin-top: 8px; padding: 6px; border-radius: 4px; font-size: 12px; display: none; }
+    #route.driven { display: block; background: #ede9fe; color: #4c1d95; }
+    #route.other, #route.stale { display: block; background: #fff3cd; color: #6b4f00; }
+    #route-list { margin-top: 6px; }
+    #route-list .route-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }
+    #route-list .swatch { flex: none; width: 10px; height: 10px; border-radius: 5px; }
+    #route-list .agent { flex: none; font-weight: 600; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #route-list .title { flex: 1; min-width: 0; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #route-list button { flex: none; padding: 2px 8px; font-size: 11px; margin: 0; }
     #shape { margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px; }
     #shape label { margin-top: 0; }
     #shape input[type=text], #shape textarea { width: 100%; box-sizing: border-box; padding: 4px; font: inherit; }
@@ -57,6 +66,8 @@
     <button id="disconnect">Disconnect</button>
   </div>
   <div id="status" class="disconnected">disconnected</div>
+  <div id="route" role="status"><span id="route-text"></span></div>
+  <div id="route-list"></div>
   <div id="shape">
     <label for="shape-to">Send this tab to an agent</label>
     <input id="shape-to" type="text" placeholder="To: agent name (empty = your latest chat session)" spellcheck="false" autocomplete="off" />

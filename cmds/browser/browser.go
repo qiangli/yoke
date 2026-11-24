@@ -241,6 +241,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}
+	if *mode == "live" {
+		action.Agent, action.Chat = routeIdentity()
+	}
 	if err := requireLiveForTabAddress(*mode, action); err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}

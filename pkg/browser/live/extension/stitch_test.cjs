@@ -127,6 +127,7 @@ function loadExtension(hooks) {
       goBack: async () => {},
       captureVisibleTab: async () => { throw new Error("not used in stitch scenarios"); },
       onUpdated: { addListener() {}, removeListener() {} },
+      onRemoved: { addListener() {} },
     },
     windows: { update: async () => ({}) },
     scripting: {
