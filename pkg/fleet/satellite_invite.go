@@ -35,7 +35,7 @@ type TokenExchangeResponse struct {
 // SatelliteClient interacts with a satellite control plane.
 type SatelliteClient struct {
 	BaseURL string // e.g. https://zoo.dhnt.io (no trailing slash)
-	Token   string // Owner Bearer token
+	Token   string // Cloudbox account bearer
 	HTTP    *http.Client
 }
 
@@ -72,7 +72,7 @@ func (c SatelliteClient) getHTTPClient() *http.Client {
 // token metadata (including ExpiresAt for proactive refresh).
 //
 // Redirects are never followed so the account token reaches only BaseURL, and
-// non-JSON refusal bodies are never echoed so server errors cannot leak caller
+// refusal bodies are never echoed so server errors cannot leak caller
 // credentials.
 func (c SatelliteClient) Exchange(ctx context.Context, scopes []string, ttl string) (TokenExchangeResponse, error) {
 	var zero TokenExchangeResponse
@@ -105,59 +105,21 @@ func (c SatelliteClient) Exchange(ctx context.Context, scopes []string, ttl stri
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := hc.Do(req)
 	if err != nil {
-		return zero, scrubSecretString(err, c.Token)
+		return zero, err
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return zero, err
-	}
-
 	if resp.StatusCode/100 != 2 {
-		return zero, exchangeAPIError(resp.StatusCode, raw, c.Token)
+		return zero, &ProvisionError{Op: "POST /api/v1/tokens/exchange", Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
 	}
-
 	var env TokenExchangeResponse
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return zero, fmt.Errorf("fleet: POST /api/v1/tokens/exchange: decode: %w", err)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env); err != nil {
+		return zero, errors.New("fleet: invalid satellite token exchange response")
 	}
 	if env.Token == "" || strings.ContainsAny(env.Token, "\r\n") {
 		return zero, fmt.Errorf("fleet: POST /api/v1/tokens/exchange: response missing token")
 	}
 	return env, nil
-}
-
-func exchangeAPIError(status int, raw []byte, secret string) error {
-	code := ""
-	msg := http.StatusText(status)
-	var env struct {
-		Code  string `json:"code"`
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(raw, &env) == nil && (env.Error != "" || env.Code != "") {
-		code = env.Code
-		if env.Error != "" {
-			msg = env.Error
-		} else {
-			msg = env.Code
-		}
-	}
-	if secret != "" {
-		code = strings.ReplaceAll(code, secret, "[REDACTED]")
-		msg = strings.ReplaceAll(msg, secret, "[REDACTED]")
-	}
-	if msg == "" {
-		msg = fmt.Sprintf("HTTP %d", status)
-	}
-	return &ProvisionError{Op: "POST /api/v1/tokens/exchange", Status: status, Code: code, Message: msg}
-}
-
-func scrubSecretString(err error, secret string) error {
-	if err == nil || secret == "" || !strings.Contains(err.Error(), secret) {
-		return err
-	}
-	return errors.New(strings.ReplaceAll(err.Error(), secret, "[REDACTED]"))
 }
 
 // ExchangeToken exchanges the account Bearer token for a short-lived token

@@ -682,6 +682,37 @@ func TestSatelliteTokenExchangeAndMountedApp(t *testing.T) {
 	inv := obj(m.want(201, "POST", "/api/v1/members", owner, map[string]string{"email": "member@example.com", "circle": "team"}), "invitation")
 	m.want(200, "POST", "/api/v1/member/invitations/"+str(inv, "id")+"/accept", member, map[string]string{"circle": "team"})
 
+	const exchange = "/api/v1/tokens/exchange"
+	request := map[string]any{"scopes": []string{ScopeHostProxy}}
+	admit := "/api/v1/satellites/" + satID + "/admit"
+	setRules := func(rules ...AdmitRule) {
+		m.want(200, "PUT", admit, owner, map[string]any{"rules": rules})
+	}
+	setRules(AdmitRule{Circles: []string{"team"}})
+	other := f.AddSatellite(t, "owner@example.com", "other")
+	f.RecordSatelliteLogin(other, "member@example.com")
+	if got := sat.want(403, "POST", exchange, member, request)["error"]; got != "delegation refused" {
+		t.Fatalf("admitted without a login grant: %v", got)
+	}
+	f.RecordSatelliteLogin(satID, "member@example.com")
+	setRules(AdmitRule{Circles: []string{"family"}})
+	if got := sat.want(403, "POST", exchange, member, request)["error"]; got != "delegation refused" {
+		t.Fatalf("previous login without current admission: %v", got)
+	}
+	setRules(AdmitRule{Circles: []string{"team"}})
+	narrow := f.AddToken("member@example.com", ScopeSatellitesDelegate, ScopeHostProxy)
+	if got := sat.want(403, "POST", exchange, narrow, map[string]any{"scopes": []string{ScopeHostProxy, "ssh:read"}})["error"]; got != "scope escalation refused" {
+		t.Fatalf("additional unheld scope: %v", got)
+	}
+	cutoff := now.Add(23 * time.Second)
+	f.mu.Lock()
+	f.tokens[narrow].expires = cutoff
+	f.mu.Unlock()
+	if got := sat.want(201, "POST", exchange, narrow, request)["expires_at"]; got != cutoff.Format(time.RFC3339) {
+		t.Fatalf("expiry = %v, want account cutoff %s", got, cutoff)
+	}
+	sat.want(201, "POST", exchange, owner, request)
+
 	// Refusals: missing token, narrow token, host token, non-member, invalid TTL (>1h), owner-only scope by member.
 	sat.wantErr(401, "unauthorized", "POST", "/api/v1/tokens/exchange", "", map[string]any{"scopes": []string{"host:proxy"}})
 	sat.wantErr(403, "insufficient_scope", "POST", "/api/v1/tokens/exchange", readOnly, map[string]any{"scopes": []string{"host:proxy"}})

@@ -16,7 +16,6 @@
 package dks
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,6 +45,7 @@ import (
 	"github.com/qiangli/yoke/pkg/dagrun"
 	"github.com/qiangli/yoke/pkg/dagrun/attach"
 	"github.com/qiangli/yoke/pkg/dagrun/cluster"
+	"github.com/qiangli/yoke/pkg/fleet"
 )
 
 // Terminal attach outcomes share the process exit code with the session, but
@@ -1268,32 +1268,16 @@ func sessionAccountBearer(endpoint *url.URL) (string, error) {
 			return "", errors.New("session attach account credential requires HTTPS outside loopback")
 		}
 	}
-	body := []byte(`{"scopes":["host:proxy"],"ttl":"10m"}`)
-	req, err := http.NewRequest(http.MethodPost, base.String()+"api/v1/tokens/exchange", bytes.NewReader(body))
+	client := fleet.SatelliteClient{BaseURL: base.String(), Token: owner, HTTP: &http.Client{Timeout: 10 * time.Second}}
+	token, err := client.ExchangeToken([]string{"host:proxy"}, "10m")
 	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+owner)
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
+		var refusal *fleet.ProvisionError
+		if errors.As(err, &refusal) {
+			return "", fmt.Errorf("exchange account credential for session attach: HTTP %d", refusal.Status)
+		}
 		return "", fmt.Errorf("exchange account credential for session attach: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("exchange account credential for session attach: HTTP %d", resp.StatusCode)
-	}
-	var result struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode session attach credential exchange: %w", err)
-	}
-	if result.Token == "" || strings.ContainsAny(result.Token, "\r\n") {
-		return "", errors.New("session attach credential exchange returned no valid token")
-	}
-	return result.Token, nil
+	return token, nil
 }
 
 // appRootURL maps a ws(s) attach endpoint onto the http(s) root of its app

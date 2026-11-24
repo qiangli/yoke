@@ -44,7 +44,7 @@ const (
 )
 
 // ownerScopes is what an unscoped (legacy) owner token carries.
-var ownerScopes = []string{ScopeMembersRead, ScopeMembersWrite, ScopeSatellitesRead, ScopeSatellitesWrite, ScopeSatellitesDelegate, ScopeHostsWrite}
+var ownerScopes = []string{ScopeMembersRead, ScopeMembersWrite, ScopeSatellitesRead, ScopeSatellitesWrite, ScopeSatellitesDelegate, ScopeHostsWrite, ScopeHostProxy, ScopeHostInviteMint, "hosts:read", "ssh:read"}
 
 // TTLs from the contract.
 const (
@@ -226,11 +226,12 @@ func (s *satServer) registration(host, accessToken string) map[string]any {
 }
 
 type satServer struct {
-	sat   *Satellite
-	srv   *httptest.Server
-	hosts map[string]*SatelliteHost
-	token map[string]string // host -> satellite host token
-	apps  map[string]http.Handler
+	sat         *Satellite
+	srv         *httptest.Server
+	hosts       map[string]*SatelliteHost
+	token       map[string]string // host -> satellite host token
+	loginGrants map[string]bool   // accounts that have signed in to this satellite
+	apps        map[string]http.Handler
 }
 
 // Fake is the in-memory cloudbox. All exported methods are safe for
@@ -318,10 +319,11 @@ func (f *Fake) AddSatellite(t testing.TB, ownerEmail, name string) string {
 	f.mu.Lock()
 	id := f.nextID("sat")
 	s := &satServer{
-		sat:   &Satellite{ID: id, Name: name, State: "enabled", OwnerEmail: strings.ToLower(ownerEmail)},
-		hosts: map[string]*SatelliteHost{},
-		token: map[string]string{},
-		apps:  map[string]http.Handler{},
+		sat:         &Satellite{ID: id, Name: name, State: "enabled", OwnerEmail: strings.ToLower(ownerEmail)},
+		hosts:       map[string]*SatelliteHost{},
+		token:       map[string]string{},
+		loginGrants: make(map[string]bool),
+		apps:        map[string]http.Handler{},
 	}
 	f.sats[id] = s
 	f.mu.Unlock()
@@ -332,6 +334,16 @@ func (f *Fake) AddSatellite(t testing.TB, ownerEmail, name string) string {
 	s.sat.Endpoint = s.srv.URL
 	f.mu.Unlock()
 	return id
+}
+
+// RecordSatelliteLogin records a browser sign-in. Admission is checked again
+// at exchange time, so a past sign-in cannot override a revoked rule.
+func (f *Fake) RecordSatelliteLogin(id, email string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if sat := f.sats[id]; sat != nil {
+		sat.loginGrants[strings.ToLower(email)] = true
+	}
 }
 
 // SatelliteURL returns the satellite server's base URL, or "" if unknown.
@@ -1160,20 +1172,15 @@ func (f *Fake) exchangeToken(s *satServer, w http.ResponseWriter, r *http.Reques
 		return errf(409, "satellite_unavailable", "satellite %s is %s", s.sat.ID, s.sat.State)
 	}
 	if tok.email != s.sat.OwnerEmail {
-		if !f.mutual(s.sat.OwnerEmail, tok.email) {
-			return errf(403, "exchange_refused", "caller is not admitted on this satellite")
+		admitted := false
+		for _, rule := range f.admitRules[s.sat.ID] {
+			if f.ruleMatches(rule.Circles, rule.Groups, rule.Emails, s.sat.OwnerEmail, tok.email) {
+				admitted = true
+				break
+			}
 		}
-		if rules := f.admitRules[s.sat.ID]; len(rules) > 0 {
-			admitted := false
-			for _, rule := range rules {
-				if f.ruleMatches(rule.Circles, rule.Groups, rule.Emails, s.sat.OwnerEmail, tok.email) {
-					admitted = true
-					break
-				}
-			}
-			if !admitted {
-				return errf(403, "exchange_refused", "caller is not admitted on this satellite")
-			}
+		if !admitted || !s.loginGrants[tok.email] {
+			return errf(403, "exchange_refused", "delegation refused")
 		}
 	}
 	var body struct {
@@ -1187,6 +1194,9 @@ func (f *Fake) exchangeToken(s *satServer, w http.ResponseWriter, r *http.Reques
 		return errf(400, "bad_request", "scopes required")
 	}
 	for _, sc := range body.Scopes {
+		if !hasScope(tok, sc) {
+			return errf(403, "insufficient_scope", "scope escalation refused")
+		}
 		switch sc {
 		case ScopeHostProxy, "ssh:read":
 		case ScopeHostInviteMint, "hosts:read", ScopeHostsWrite:
@@ -1207,6 +1217,9 @@ func (f *Fake) exchangeToken(s *satServer, w http.ResponseWriter, r *http.Reques
 	}
 	now := f.now()
 	exp := now.Add(ttl)
+	if !tok.expires.IsZero() && tok.expires.Before(exp) {
+		exp = tok.expires
+	}
 	xtok := f.nextID("xtok")
 	scopes := append([]string(nil), body.Scopes...)
 	f.tokens[xtok] = &token{

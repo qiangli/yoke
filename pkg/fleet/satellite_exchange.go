@@ -10,9 +10,7 @@ import (
 	"time"
 )
 
-// DefaultProxyExchangeTTL is the default lifetime requested when exchanging an
-// account token for a host:proxy satellite token.
-const DefaultProxyExchangeTTL = "10m"
+const proxyExchangeTTL = "10m"
 
 // SatelliteAppEndpoint is a parsed https://SATELLITE/matrix/h/HOST/app/NAME/...
 // endpoint on a satellite.
@@ -28,48 +26,30 @@ type SatelliteAppEndpoint struct {
 // only) and returns its normalized URL, satellite origin, host and app name.
 func ParseSatelliteAppURL(raw string) (SatelliteAppEndpoint, error) {
 	var zero SatelliteAppEndpoint
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || strings.ContainsAny(trimmed, "\x00\r\n \t") {
-		return zero, fmt.Errorf("fleet: empty or invalid satellite app URL")
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return zero, fmt.Errorf("invalid satellite app URL (want https://SATELLITE/matrix/h/HOST/app/NAME/mcp)")
 	}
-	u, err := url.Parse(trimmed)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return zero, fmt.Errorf("fleet: invalid satellite app URL %q (want https://SATELLITE/matrix/h/HOST/app/NAME/mcp)", raw)
+	if u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname())) {
+		return zero, fmt.Errorf("satellite app URL requires https outside loopback")
 	}
-	switch u.Scheme {
-	case "https":
-	case "http":
-		if !isLoopbackHost(u.Hostname()) {
-			return zero, fmt.Errorf("fleet: satellite app URL %q requires https outside loopback", raw)
-		}
-	default:
-		return zero, fmt.Errorf("fleet: satellite app URL %q must use https", raw)
+	path := strings.TrimSuffix(u.Path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 7 || parts[0] != "" || parts[1] != "matrix" || parts[2] != "h" || parts[4] != "app" || parts[6] != "mcp" ||
+		strings.Contains(strings.ToLower(u.EscapedPath()), "%2f") {
+		return zero, fmt.Errorf("expected satellite app route /matrix/h/HOST/app/NAME/mcp")
 	}
-	cleanPath := strings.TrimRight(u.Path, "/")
-	parts := strings.Split(strings.Trim(cleanPath, "/"), "/")
-	for _, p := range parts {
-		if p == "" || p == "." || p == ".." {
-			return zero, fmt.Errorf("fleet: invalid path in satellite app URL %q", raw)
+	for _, segment := range []string{parts[3], parts[5]} {
+		if segment == "" || segment == "." || segment == ".." || strings.ContainsAny(segment, "\\\x00\r\n") {
+			return zero, fmt.Errorf("invalid host or app in satellite app URL")
 		}
 	}
-	if len(parts) < 5 || parts[0] != "matrix" || parts[1] != "h" || parts[3] != "app" {
-		return zero, fmt.Errorf("fleet: %q is not a satellite app URL (want https://SATELLITE/matrix/h/HOST/app/NAME/mcp)", raw)
-	}
-	origin := u.Scheme + "://" + u.Host
-	return SatelliteAppEndpoint{
-		URL:       origin + "/" + strings.Join(parts, "/"),
-		Satellite: origin,
-		Host:      parts[2],
-		App:       parts[4],
-	}, nil
+	u.Path, u.RawPath = path, ""
+	return SatelliteAppEndpoint{URL: u.String(), Satellite: u.Scheme + "://" + u.Host, Host: parts[3], App: parts[5]}, nil
 }
 
 func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback()
 }
 
 // URLOrigin returns scheme://host for a base URL, or "" if invalid.
@@ -85,97 +65,34 @@ func URLOrigin(raw string) string {
 // token (default scope host:proxy, TTL 10m) and refreshes it before expiry.
 // Neither the account token nor the exchanged token is ever logged or printed.
 type SatelliteTokenSource struct {
-	Client SatelliteClient
-	Scopes []string         // default ["host:proxy"]
-	TTL    string           // default DefaultProxyExchangeTTL ("10m")
-	Now    func() time.Time // default time.Now
-
+	Client    SatelliteClient
+	Now       func() time.Time // optional clock for expiry
 	mu        sync.Mutex
 	token     string
-	scopes    []string
-	expiresAt time.Time
 	refreshAt time.Time
 }
 
-func (s *SatelliteTokenSource) now() time.Time {
+// Token returns the cached host:proxy bearer or exchanges the account token.
+func (s *SatelliteTokenSource) Token(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now
 	if s.Now != nil {
-		return s.Now()
+		now = s.Now
 	}
-	return time.Now()
-}
-
-// Token returns a valid satellite token, exchanging a new one when none is
-// cached or when the cached token has entered its pre-expiry refresh window.
-func (s *SatelliteTokenSource) Token(ctx context.Context) (TokenExchangeResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.token != "" && s.now().Before(s.refreshAt) {
-		return TokenExchangeResponse{
-			Token:     s.token,
-			Scopes:    append([]string(nil), s.scopes...),
-			ExpiresAt: s.expiresAt,
-		}, nil
+	start := now()
+	if start.Before(s.refreshAt) && s.token != "" {
+		return s.token, nil
 	}
-	return s.exchangeLocked(ctx)
-}
-
-// Exchange forces an immediate token exchange and updates the cached token.
-func (s *SatelliteTokenSource) Exchange(ctx context.Context) (TokenExchangeResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.exchangeLocked(ctx)
-}
-
-// Invalidate drops the cached token if it matches staleToken, forcing the next
-// Token call to perform a fresh exchange.
-func (s *SatelliteTokenSource) Invalidate(staleToken string) {
-	if staleToken == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.token == staleToken {
-		s.token = ""
-	}
-}
-
-func (s *SatelliteTokenSource) exchangeLocked(ctx context.Context) (TokenExchangeResponse, error) {
-	scopes := s.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{"host:proxy"}
-	}
-	ttl := strings.TrimSpace(s.TTL)
-	if ttl == "" {
-		ttl = DefaultProxyExchangeTTL
-	}
-	fetchedAt := s.now()
-	res, err := s.Client.Exchange(ctx, scopes, ttl)
+	res, err := s.Client.Exchange(ctx, []string{"host:proxy"}, proxyExchangeTTL)
 	if err != nil {
-		return TokenExchangeResponse{}, err
+		return "", err
 	}
-	exp := res.ExpiresAt
-	if exp.IsZero() {
-		d, err := time.ParseDuration(ttl)
-		if err != nil || d <= 0 {
-			d = 10 * time.Minute
-		}
-		exp = fetchedAt.Add(d)
-		res.ExpiresAt = exp
-	}
-	if len(res.Scopes) == 0 {
-		res.Scopes = append([]string(nil), scopes...)
-	}
-	lifetime := exp.Sub(fetchedAt)
-	leeway := lifetime / 5
-	if leeway > 30*time.Second {
-		leeway = 30 * time.Second
-	}
-	if leeway < 0 {
-		leeway = 0
+	lifetime := res.ExpiresAt.Sub(start)
+	if lifetime <= 0 {
+		return "", fmt.Errorf("satellite exchange returned no future expiry")
 	}
 	s.token = res.Token
-	s.scopes = append([]string(nil), res.Scopes...)
-	s.expiresAt = exp
-	s.refreshAt = exp.Add(-leeway)
-	return res, nil
+	s.refreshAt = res.ExpiresAt.Add(-min(30*time.Second, lifetime/5))
+	return s.token, nil
 }
