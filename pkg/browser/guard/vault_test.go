@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/qiangli/yoke/pkg/browser/internal/privtest"
 )
 
 // The vault matcher keeps digests only: the 0600 cache never holds a value,
@@ -18,13 +20,10 @@ func TestVaultCacheHoldsDigestsOnly(t *testing.T) {
 		t.Fatal("vault value not recognised")
 	}
 	path := vaultCachePath()
-	st, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0o600 {
-		t.Errorf("cache mode = %v, want 0600", st.Mode().Perm())
-	}
+	privtest.Private(t, path)
 	raw, _ := os.ReadFile(path)
 	if strings.Contains(string(raw), secret) || strings.Contains(string(raw), "battery") {
 		t.Fatal("the vault cache holds a plaintext value")

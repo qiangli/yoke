@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/yoke/pkg/browser/internal/privtest"
 )
 
 const hubAddr = "127.0.0.1:58082"
@@ -158,9 +160,10 @@ func TestSheetStoreNamesAndModes(t *testing.T) {
 	if err := PutSheetSecret("k", "v1"); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(filepath.Join(SheetSecretDir(), "k")); fi == nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("store file mode: %v", fi)
+	if _, err := os.Stat(filepath.Join(SheetSecretDir(), "k")); err != nil {
+		t.Fatalf("store file: %v", err)
 	}
+	privtest.Private(t, filepath.Join(SheetSecretDir(), "k"))
 	if v, err := GetSheetSecret("k"); err != nil || v != "v1" {
 		t.Fatalf("get = %q %v", v, err)
 	}

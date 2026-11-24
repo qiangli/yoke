@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/qiangli/yoke/pkg/browser/internal/privtest"
 )
 
 func freePort(t *testing.T) int {
@@ -168,11 +170,8 @@ func TestHubCreatesTheControlTokenAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { svc.Close() })
-	st, err := os.Stat(gateTokenPath())
-	if err != nil {
+	if _, err := os.Stat(gateTokenPath()); err != nil {
 		t.Fatalf("token not created at start: %v", err)
 	}
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("token mode %v, want 0600", st.Mode().Perm())
-	}
+	privtest.Private(t, gateTokenPath())
 }
