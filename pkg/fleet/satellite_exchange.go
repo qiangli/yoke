@@ -89,7 +89,7 @@ func (s *SatelliteTokenSource) Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	lifetime := res.ExpiresAt.Sub(start)
-	if lifetime <= 0 {
+	if !res.ExpiresAt.After(now()) {
 		return "", fmt.Errorf("satellite exchange returned no future expiry")
 	}
 	s.token = res.Token

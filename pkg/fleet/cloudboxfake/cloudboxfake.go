@@ -327,9 +327,21 @@ func (f *Fake) AddSatellite(t testing.TB, ownerEmail, name string) string {
 	}
 	f.sats[id] = s
 	f.mu.Unlock()
-	s.srv = httptest.NewServer(f.withIdempotency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	satAPI := f.withIdempotency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.serveSatellite(s, w, r)
-	})))
+	}))
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/matrix/h/"):
+			// A mounted app has its own idempotency semantics. Authorize every request.
+			f.serveSatelliteApp(s, w, r)
+		case r.URL.Path == "/api/v1/tokens/exchange":
+			// Current admission, account expiry and scope determine each exchange.
+			f.serveSatellite(s, w, r)
+		default:
+			satAPI.ServeHTTP(w, r)
+		}
+	}))
 	f.mu.Lock()
 	s.sat.Endpoint = s.srv.URL
 	f.mu.Unlock()
@@ -1138,10 +1150,6 @@ func (f *Fake) detach(w http.ResponseWriter, r *http.Request, id string) *apiErr
 // --- satellite --------------------------------------------------------------
 
 func (f *Fake) serveSatellite(s *satServer, w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/matrix/h/") {
-		f.serveSatelliteApp(s, w, r)
-		return
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var e *apiError

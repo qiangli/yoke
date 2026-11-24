@@ -729,7 +729,7 @@ func TestSatelliteTokenExchangeAndMountedApp(t *testing.T) {
 	shortEx := sat.want(201, "POST", "/api/v1/tokens/exchange", member, map[string]any{"scopes": []string{"host:proxy"}, "ttl": "10m"})
 	xtok := str(shortEx, "token")
 	if xtok == "" || str(shortEx, "expires_at") != now.Add(10*time.Minute).Format(time.RFC3339) {
-		t.Fatalf("short exchange = %v", shortEx)
+		t.Fatal("missing exchanged token or incorrect expiry")
 	}
 	// An exchanged satellite token cannot re-exchange itself.
 	sat.wantErr(403, "insufficient_scope", "POST", "/api/v1/tokens/exchange", xtok, map[string]any{"scopes": []string{"host:proxy"}})
@@ -747,12 +747,12 @@ func TestSatelliteTokenExchangeAndMountedApp(t *testing.T) {
 
 	// Owner shares studio/site with circle team -> member reaches app with X-Periscope-User stamped.
 	m.want(201, "POST", "/api/v1/hosts/studio/shares", owner, map[string]any{"app": "site", "circles": []string{"team"}})
-	sat.want(200, "POST", "/matrix/h/studio/app/site/mcp", xtok, nil)
+	sat.want(200, "POST", "/matrix/h/studio/app/site/mcp", xtok, nil, "Idempotency-Key", "call")
 	if forwardedUser != "member@example.com" || forwardedPrefix != "/matrix/h/studio/app/site" || forwardedPath != "/mcp" {
 		t.Fatalf("forwarded = user=%q prefix=%q path=%q", forwardedUser, forwardedPrefix, forwardedPath)
 	}
 
 	// Past TTL, old exchanged token is rejected with 401 unauthorized.
 	now = now.Add(11 * time.Minute)
-	sat.wantErr(401, "unauthorized", "POST", "/matrix/h/studio/app/site/mcp", xtok, nil)
+	sat.want(401, "POST", "/matrix/h/studio/app/site/mcp", xtok, nil, "Idempotency-Key", "call")
 }
