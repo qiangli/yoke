@@ -133,6 +133,13 @@ func newHeaderHarness(t *testing.T, fixtures map[string]headerFixture) *headerHa
 	ctx, cancelCtx := chromedp.NewContext(alloc)
 	ctx, cancelTimeout := context.WithTimeout(ctx, 60*time.Second)
 	t.Cleanup(func() { cancelTimeout(); cancelCtx(); cancelAlloc() })
+	// Readiness, not retry: allocate the browser and its first tab and load
+	// an explicit about:blank (Navigate waits for the load lifecycle, no body
+	// query on the empty document) before any fixture Navigate, so the first
+	// fixture Navigate is not aborted (net::ERR_ABORTED) by the initial load.
+	if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+		t.Fatalf("browser tab not ready: %v", err)
+	}
 	return &headerHarness{t: t, ctx: ctx, srv: srv, script: script}
 }
 
