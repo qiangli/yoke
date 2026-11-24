@@ -163,7 +163,12 @@ func apiError(resp *http.Response) error {
 
 // List returns all of the caller's secrets, sorted by name.
 func (c Client) List() ([]Item, error) {
-	return c.listContext(context.Background())
+	return c.ListContext(context.Background())
+}
+
+// ListContext returns all of the caller's secrets and respects cancellation.
+func (c Client) ListContext(ctx context.Context) ([]Item, error) {
+	return c.listContext(ctx)
 }
 
 func (c Client) listContext(ctx context.Context) ([]Item, error) {
