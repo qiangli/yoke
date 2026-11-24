@@ -272,6 +272,7 @@ function makeDOM() {
       addEventListener(type, fn) { (el.listeners[type] ||= []).push(fn); },
       replaceChildren() { el.children = []; },
       prepend(c) { el.children.unshift(c); },
+      appendChild(c) { el.children.push(c); },
       removeChild() {},
       set innerHTML(v) { markup.push([id, v]); },
       fire(type) { return Promise.all((el.listeners[type] || []).map((fn) => fn({ type }))); },
@@ -312,7 +313,10 @@ function loadPopup(opts) {
         set(kv) { Object.assign(stored, kv); return Promise.resolve(); },
       },
     },
-    tabs: { query: async () => opts.tabs ?? [TAB] },
+    tabs: {
+      query: async () => opts.tabs ?? [TAB],
+      get: async (id) => ({ id, title: "title-" + id }),
+    },
     windows: {
       getLastFocused: async (q) => { opts.windowQuery = q; return opts.lastFocused; },
       create: async () => ({}),
@@ -322,7 +326,13 @@ function loadPopup(opts) {
     chrome,
     document: {
       getElementById: (id) => els[id] || null,
-      createElement: () => { throw new Error("no debug rows in these fixtures"); },
+      createElement: () => {
+        const el = { attrs: {}, children: [], listeners: {}, className: "", textContent: "", disabled: false,
+          setAttribute(k, v) { el.attrs[k] = v; }, appendChild(c) { el.children.push(c); },
+          addEventListener(type, fn) { (el.listeners[type] ||= []).push(fn); },
+          fire(type) { return Promise.all((el.listeners[type] || []).map((fn) => fn({ type }))); } };
+        return el;
+      },
       body: { classList: { add() {} } },
     },
     location: { search: opts.windowed ? "?windowed=1" : "" },
@@ -335,7 +345,7 @@ function loadPopup(opts) {
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(path.join(DIR, "popup.js"), "utf8"), sandbox, { filename: "popup.js" });
   const shapeMessages = () => messages.filter((m) => m.type === "ycode-live:shape");
-  return { els, markup, stored, shapeMessages, opts };
+  return { els, markup, stored, shapeMessages, messages, opts };
 }
 
 test("Shape sends the current tab, the note as typed and the recipient", async () => {
@@ -444,7 +454,9 @@ test("a call naming agent and chat paints one banner on that tab only; a plain c
   assert.deepEqual(banners(bg).filter(([, l]) => l), [[4711, "claude-x"]]);
   assert.deepEqual(bg.focused, [], "driving a tab never moves focus");
   const st = plain(await bg.send({ type: "ycode-live:status" }));
-  assert.deepEqual(st.routes, [{ tabId: 4711, agent: "claude-x", chat: "chat-123", stale: false }]);
+  assert.equal(st.routes.length, 1);
+  assert.match(st.routes[0].color, /^#[0-9a-f]{6}$/);
+  assert.deepEqual({ ...st.routes[0], color: undefined }, { tabId: 4711, agent: "claude-x", chat: "chat-123", stale: false, color: undefined });
 });
 
 test("the banner is a click-through label built with textContent, no focus", () => {
@@ -472,7 +484,8 @@ test("the popup tells a driven selected tab from a browser-selected one, and Foc
   await tick(); await tick();
   assert.equal(same.els.route.className, "driven");
   assert.match(same.els["route-text"].textContent, /driven by Bashy: claude-x/);
-  assert.equal(same.els["route-focus"].style.display, "none");
+  assert.equal(same.els["route-list"].children.length, 1);
+  assert.equal(same.els["route-list"].children[0].children[3].disabled, true, "the selected tab's own row has nothing to focus");
   assert.equal(same.els["shape-to"].disabled, true);
   same.els["shape-note"].value = "look";
   await same.els["shape-send"].fire("click");
@@ -483,8 +496,12 @@ test("the popup tells a driven selected tab from a browser-selected one, and Foc
   const other = loadPopup({ route: { ...route, tabId: 99 }, shape: { ok: true, status: "kept" } });
   await tick(); await tick();
   assert.equal(other.els.route.className, "other");
-  assert.match(other.els["route-text"].textContent, /drives tab 99.*not driven by Bashy/);
-  assert.equal(other.els["route-focus"].style.display, "");
+  assert.match(other.els["route-text"].textContent, /not driven by Bashy/);
+  const orow = other.els["route-list"].children[0];
+  assert.equal(orow.children[1].textContent, "claude-x");
+  assert.equal(orow.children[2].textContent, "title-99");
+  await orow.children[3].fire("click");
+  assert.deepEqual(plain(other.messages.filter((m) => m.type === "ycode-live:focus")), [{ type: "ycode-live:focus", tabId: 99 }]);
   assert.equal(other.els["shape-to"].disabled, false);
   other.els["shape-to"].value = "codex";
   await other.els["shape-send"].fire("click");

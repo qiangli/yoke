@@ -68,7 +68,7 @@ const routes = new Map(); // tabId -> {tabId, agent, chat, stale}
 
 // paintBanner runs inside the page. It adds one small, click-through label
 // (no focus, no listeners) and never touches the page's own elements.
-function paintBanner(label) {
+function paintBanner(label, color) {
   const ID = "__bashy_live_banner__";
   const old = document.getElementById(ID);
   if (old) old.remove();
@@ -77,15 +77,26 @@ function paintBanner(label) {
   el.id = ID;
   el.textContent = "Bashy \u00b7 " + label;
   el.setAttribute("style", "position:fixed;top:6px;right:6px;z-index:2147483647;pointer-events:none;" +
-    "background:#6d28d9;color:#fff;font:600 11px/1.4 system-ui,sans-serif;padding:2px 8px;" +
+    "background:" + (/^#[0-9a-f]{6}$/i.test(color || "") ? color : "#6d28d9") + ";color:#fff;font:600 11px/1.4 system-ui,sans-serif;padding:2px 8px;" +
     "border-radius:10px;opacity:.92;max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap");
   (document.body || document.documentElement).appendChild(el);
 }
 
-async function paintTab(tabId, label) {
+async function paintTab(tabId, label, color) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, func: paintBanner, args: [label] });
+    await chrome.scripting.executeScript({ target: { tabId }, func: paintBanner, args: [label, color || null] });
   } catch (_) { /* a page that cannot be scripted (chrome://, a closed tab) has no banner */ }
+}
+
+// One stable colour per agent name (FNV-1a over the name), shared by the
+// in-page banner and the popup row so the two can be matched by eye. Every
+// entry is dark enough for white text.
+const AGENT_COLORS = ["#6d28d9", "#0369a1", "#b45309", "#be123c", "#047857", "#a21caf",
+  "#1d4ed8", "#c2410c", "#0f766e", "#4d7c0f", "#9f1239", "#475569"];
+function agentColor(agent) {
+  let h = 2166136261;
+  for (let i = 0; i < agent.length; i++) h = Math.imul(h ^ agent.charCodeAt(i), 16777619) >>> 0;
+  return AGENT_COLORS[h % AGENT_COLORS.length];
 }
 
 function routeLabel(r) {
@@ -95,8 +106,9 @@ function routeLabel(r) {
 async function bindRoute(tabId, agent, chat) {
   if (!Number.isInteger(tabId) || typeof agent !== "string" || typeof chat !== "string" || !agent || !chat) return;
   const r = { tabId, agent: agent.slice(0, 64), chat: chat.slice(0, 128), stale: false };
+  r.color = agentColor(r.agent);
   routes.set(tabId, r);
-  await paintTab(tabId, routeLabel(r));
+  await paintTab(tabId, routeLabel(r), r.color);
 }
 
 function clearRoutes() {
@@ -111,7 +123,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // A navigation replaces the document, and the banner with it.
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   const r = routes.get(tabId);
-  if (r && info && info.status === "complete") paintTab(tabId, routeLabel(r));
+  if (r && info && info.status === "complete") paintTab(tabId, routeLabel(r), r.color);
 });
 
 // --- entry: open/close commands from popup ---
@@ -264,7 +276,7 @@ function onShapeResult(params) {
   const r = stale ? routes.get(shapeTabs.get(params.nonce)) : null;
   if (r) {
     r.stale = true;
-    paintTab(r.tabId, routeLabel(r));
+    paintTab(r.tabId, routeLabel(r), r.color);
   }
   finish({
     ok: params.ok === true,

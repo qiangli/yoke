@@ -53,31 +53,64 @@ function setStatus(cls, text) {
 // stale one, leaves the manual recipient exactly as it was.
 const routeEl = document.getElementById("route");
 const routeTextEl = document.getElementById("route-text");
-const routeFocusBtn = document.getElementById("route-focus");
+const routeListEl = document.getElementById("route-list");
 let activeRoute = null; // the route the selected tab follows, else null
+
+async function tabTitle(r) {
+  try {
+    const t = await chrome.tabs.get(r.tabId);
+    return (t && (t.title || t.url)) || `tab ${r.tabId}`;
+  } catch (_) {
+    return `tab ${r.tabId}`;
+  }
+}
+
+// One compact row per current route: the tab's real title, the agent's
+// stable colour and name, and an explicit Focus for that tab.
+async function renderRows(routes, selId) {
+  const titles = await Promise.all(routes.map(tabTitle));
+  routeListEl.replaceChildren();
+  routes.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "route-row";
+    row.setAttribute("data-tab-id", String(r.tabId));
+    row.setAttribute("data-agent", r.agent);
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.setAttribute("data-color", r.color || "");
+    sw.setAttribute("style", `background:${r.color || "#6d28d9"}`);
+    const name = document.createElement("span");
+    name.className = "agent";
+    name.textContent = r.agent + (r.stale ? " (chat gone)" : "");
+    const title = document.createElement("span");
+    title.className = "title";
+    title.textContent = titles[i];
+    const btn = document.createElement("button");
+    btn.className = "focus";
+    btn.textContent = "Focus";
+    btn.disabled = r.tabId === selId;
+    btn.addEventListener("click", async () => {
+      const resp = await chrome.runtime.sendMessage({ type: "ycode-live:focus", tabId: r.tabId });
+      if (resp && !resp.ok) routeTextEl.textContent = resp.error || "could not focus the driven tab";
+    });
+    for (const c of [sw, name, title, btn]) row.appendChild(c);
+    routeListEl.appendChild(row);
+  });
+}
 
 async function renderRoute(resp) {
   const routes = (resp && resp.routes) || [];
   const sel = routes.length ? await currentTab() : null;
-  // The selected tab's own route wins; otherwise show one driven elsewhere.
-  const route = routes.find((r) => sel && r.tabId === sel.id) || routes[0] || null;
-  const here = !!(route && sel && sel.id === route.tabId);
-  focusTabId = route ? route.tabId : 0;
-  activeRoute = here && !route.stale ? route : null;
-  routeEl.className = !route ? "" : route.stale ? "stale" : here ? "driven" : "other";
-  routeFocusBtn.style.display = route && !here ? "" : "none";
-  if (!route) routeTextEl.textContent = "";
-  else if (route.stale) routeTextEl.textContent = `Bashy route stale: ${route.agent}'s chat is gone. Type a recipient below.`;
-  else if (here) routeTextEl.textContent = `This tab is driven by Bashy: ${route.agent}. Notes go to its chat.`;
-  else routeTextEl.textContent = `Bashy (${route.agent}) drives tab ${route.tabId}; the tab you selected is not driven by Bashy.`;
+  const route = routes.find((r) => sel && r.tabId === sel.id) || null;
+  activeRoute = route && !route.stale ? route : null;
+  routeEl.className = !routes.length ? "" : route ? (route.stale ? "stale" : "driven") : "other";
+  if (!routes.length) routeTextEl.textContent = "";
+  else if (route && route.stale) routeTextEl.textContent = `Bashy route stale: ${route.agent}'s chat is gone. Type a recipient below.`;
+  else if (route) routeTextEl.textContent = `This tab is driven by Bashy: ${route.agent}. Notes go to its chat.`;
+  else routeTextEl.textContent = `Bashy agents drive ${routes.length} tab${routes.length === 1 ? "" : "s"}; the tab you selected is not driven by Bashy.`;
+  await renderRows(routes, sel ? sel.id : 0);
   shapeToEl.disabled = !!activeRoute;
 }
-
-let focusTabId = 0; // the driven tab the Focus button brings forward
-routeFocusBtn.addEventListener("click", async () => {
-  const r = await chrome.runtime.sendMessage({ type: "ycode-live:focus", tabId: focusTabId });
-  if (r && !r.ok) routeTextEl.textContent = r.error || "could not focus the driven tab";
-});
 
 async function refreshStatus() {
   const resp = await chrome.runtime.sendMessage({ type: "ycode-live:status" });
