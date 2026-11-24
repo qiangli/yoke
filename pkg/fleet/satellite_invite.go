@@ -110,7 +110,20 @@ func (c SatelliteClient) Exchange(ctx context.Context, scopes []string, ttl stri
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		return zero, &ProvisionError{Op: "POST /api/v1/tokens/exchange", Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
+		// Only relay known wire reasons. An arbitrary error body can echo credentials.
+		reason := http.StatusText(resp.StatusCode)
+		if resp.StatusCode == http.StatusForbidden {
+			var body struct {
+				Error string `json:"error"`
+			}
+			if json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(&body) == nil {
+				switch body.Error {
+				case "scope escalation refused", "delegation refused", "token lacks scope satellites:delegate":
+					reason = body.Error
+				}
+			}
+		}
+		return zero, &ProvisionError{Op: "POST /api/v1/tokens/exchange", Status: resp.StatusCode, Message: reason}
 	}
 	var env TokenExchangeResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env); err != nil {
