@@ -141,8 +141,6 @@ func run(rc *tool.RunContext, args []string) int {
 	detail := fs.String("detail", "", "dispatch-event: JSON detail for a CustomEvent")
 	on := fs.String("on", "", "dispatch-event: window|document|<css-selector> (default window)")
 	fromAsk := fs.String("from-ask", "", "type: fill the target BY REFERENCE with the operator answer this guard ask id names (no text)")
-	agentName := fs.String("agent", os.Getenv("BASHY_BROWSER_AGENT"), "live mode: the working agent's name, shown on the tab it drives (needs --chat)")
-	chatID := fs.String("chat", os.Getenv("BASHY_BROWSER_CHAT"), "live mode: the agent's exact Bashy chat id; a note sent from the driven tab goes to it (needs --agent)")
 	fromSheet := fs.String("from-sheet", "", "type: fill the target BY REFERENCE with the value the human entered on a copy sheet under this secret name (no text; same site only)")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -243,11 +241,8 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}
-	if (*agentName == "") != (*chatID == "") {
-		return tool.UsageError(rc, cmd, "--agent and --chat go together")
-	}
 	if *mode == "live" {
-		action.Agent, action.Chat = strings.TrimSpace(*agentName), strings.TrimSpace(*chatID)
+		action.Agent, action.Chat = routeIdentity()
 	}
 	if err := requireLiveForTabAddress(*mode, action); err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)

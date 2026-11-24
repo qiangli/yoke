@@ -32,7 +32,14 @@ const plain = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 // background.js: the press becomes one frame, and one answer settles it.
 // ---------------------------------------------------------------------------
 
+const TABS = [
+  { id: 4711, url: "https://example.com/", title: "Example", active: false },
+  { id: 4712, url: "https://example.com/two", title: "Two", active: false },
+  { id: 9, url: "https://human.example/", title: "Human", active: true }, // the one the human selected
+];
+
 function loadBackground() {
+  const state = { failScript: false };
   const sockets = [];
   const timers = []; // {fn, ms, cleared}
   const scripted = []; // every chrome.scripting.executeScript call
@@ -76,14 +83,18 @@ function loadBackground() {
     alarms: { create() {}, clear() {}, onAlarm: event },
     tabs: {
       get: async (id) => ({ id }),
-      query: async () => [{ id: 4711, url: "https://example.com/", title: "Example", active: true }],
+      query: async () => TABS,
       update: async (id, p) => { focused.push(["tab", id, p]); return { id, windowId: 3 }; },
       onUpdated: { addListener(fn) { tabListeners.updated.push(fn); }, removeListener() {} },
       onRemoved: { addListener(fn) { tabListeners.removed.push(fn); } },
       onActivated: event,
     },
     windows: { update: async (id, p) => { focused.push(["window", id, p]); return {}; } },
-    scripting: { executeScript: async (c) => { scripted.push(c); return [{}]; } },
+    scripting: { executeScript: async (c) => {
+      scripted.push(c);
+      if (state.failScript && c.func.name !== "paintBanner") throw new Error("page action failed");
+      return [{}];
+    } },
     debugger: {
       attach: async () => {}, sendCommand: async () => ({}), detach: async () => {},
       onDetach: event, onEvent: event,
@@ -119,7 +130,7 @@ function loadBackground() {
     await tick();
   };
   return {
-    sockets, timers, send, scripted, focused, tabListeners, hub, sandbox,
+    state, sockets, timers, send, scripted, focused, tabListeners, hub, sandbox,
     // connect presses Connect and opens the socket, as the hub accepting it.
     async connect() {
       await send({ type: "ycode-live:connect", port: 58084, tabId: 7 });
@@ -286,7 +297,7 @@ function loadPopup(opts) {
           if (opts.shapeThrows) throw new Error(opts.shapeThrows);
           return opts.shape;
         }
-        return { connected: true, port: 58082, route: opts.route };
+        return { connected: true, port: 58082, routes: opts.route ? [opts.route] : (opts.routes || []) };
       },
       connect: () => ({ onMessage: { addListener() {} }, postMessage() {} }),
     },
@@ -433,7 +444,7 @@ test("a call naming agent and chat paints one banner on that tab only; a plain c
   assert.deepEqual(banners(bg).filter(([, l]) => l), [[4711, "claude-x"]]);
   assert.deepEqual(bg.focused, [], "driving a tab never moves focus");
   const st = plain(await bg.send({ type: "ycode-live:status" }));
-  assert.deepEqual(st.route, { tabId: 4711, agent: "claude-x", chat: "chat-123", stale: false });
+  assert.deepEqual(st.routes, [{ tabId: 4711, agent: "claude-x", chat: "chat-123", stale: false }]);
 });
 
 test("the banner is a click-through label built with textContent, no focus", () => {
@@ -485,10 +496,10 @@ test("the popup tells a driven selected tab from a browser-selected one, and Foc
 test("Focus asks the worker, and only then does it focus the driven tab", async () => {
   const bg = loadBackground();
   const ws = await bg.connect();
-  assert.deepEqual(plain(await bg.send({ type: "ycode-live:focus" })), { ok: false, error: "no tab is driven by an agent" });
+  assert.deepEqual(plain(await bg.send({ type: "ycode-live:focus", tabId: 4711 })), { ok: false, error: "no tab is driven by an agent" });
   await bg.hub(ws, DRIVE);
   assert.deepEqual(bg.focused, []);
-  assert.deepEqual(plain(await bg.send({ type: "ycode-live:focus" })), { ok: true });
+  assert.deepEqual(plain(await bg.send({ type: "ycode-live:focus", tabId: 4711 })), { ok: true });
   assert.deepEqual(plain(bg.focused), [["tab", 4711, { active: true }], ["window", 3, { focused: true }]]);
 });
 
@@ -529,7 +540,7 @@ test("a stale route is reported, the banner says so, and manual recipient still 
   assert.equal(resp.ok, false);
   assert.equal(resp.stale, true);
   assert.deepEqual(banners(bg).pop(), [4711, "claude-x (chat gone)"]);
-  assert.equal(plain(await bg.send({ type: "ycode-live:status" })).route.stale, true);
+  assert.equal(plain(await bg.send({ type: "ycode-live:status" })).routes[0].stale, true);
 
   const refused = await bg.send({ type: "ycode-live:shape", tab: TAB, note: "n", to: "", useRoute: true });
   assert.equal(refused.ok, false);
@@ -545,13 +556,13 @@ test("tab close, socket close and Disconnect each clear the route and banner", a
     const bg = loadBackground();
     const ws = await bg.connect();
     await bg.hub(ws, DRIVE);
-    assert.ok(plain(await bg.send({ type: "ycode-live:status" })).route, how);
+    assert.equal(plain(await bg.send({ type: "ycode-live:status" })).routes.length, 1, how);
     const before = banners(bg).length;
     if (how === "tab") bg.tabListeners.removed.forEach((fn) => fn(4711));
     else if (how === "socket") ws.onclose({ code: 1006 });
     else await bg.send({ type: "ycode-live:disconnect" });
     await tick();
-    assert.equal(plain(await bg.send({ type: "ycode-live:status" })).route, null, how);
+    assert.deepEqual(plain(await bg.send({ type: "ycode-live:status" })).routes, [], how);
     if (how !== "tab") assert.deepEqual(banners(bg).slice(before), [[4711, null]], how + ": banner removed");
   }
 });
@@ -568,4 +579,91 @@ test("a navigation repaints the banner on the bound tab only", async () => {
   bg.tabListeners.updated.forEach((fn) => fn(4711, { status: "complete" }));
   await tick();
   assert.deepEqual(banners(bg).slice(n), [[4711, "claude-x"]]);
+});
+
+// ---------------------------------------------------------------------------
+// One agent, several tabs; each route is per exact tab on the current socket.
+// ---------------------------------------------------------------------------
+
+const DRIVE2 = { by_id: true, tab_id: 4712, agent: "claude-x", chat: "chat-123" };
+const routesOf = async (bg) => plain(await bg.send({ type: "ycode-live:status" })).routes.map((r) => r.tabId).sort();
+
+test("one agent drives two tabs: both keep banners and chat; the selected third tab has none", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, DRIVE);
+  await bg.hub(ws, DRIVE2);
+  assert.deepEqual(banners(bg).filter(([, l]) => l), [[4711, "claude-x"], [4712, "claude-x"]]);
+  assert.deepEqual(banners(bg).filter(([, l]) => !l), [], "the second tab did not remove the first banner");
+  assert.deepEqual(await routesOf(bg), [4711, 4712]);
+  assert.deepEqual(bg.focused, []);
+
+  // Each driven tab's note carries the exact chat receipt; the selected tab 9 is refused.
+  for (const id of [4711, 4712]) {
+    ws.sent.length = 0;
+    let resp = null;
+    bg.send({ type: "ycode-live:shape", tab: { ...TAB, id }, note: "n", to: "", useRoute: true }).then((r) => { resp = r; });
+    await tick();
+    assert.equal(ws.sent[0].result.tab_id, id);
+    assert.equal(ws.sent[0].result.chat, "chat-123");
+    await answer(ws, { nonce: ws.sent[0].result.nonce, ok: true, status: "sent to claude-x's live chat session" });
+    await tick();
+    assert.equal(resp.ok, true);
+    assert.equal(resp.status, "sent to claude-x's live chat session");
+  }
+  ws.sent.length = 0;
+  const third = await bg.send({ type: "ycode-live:shape", tab: { ...TAB, id: 9 }, note: "n", to: "", useRoute: true });
+  assert.equal(third.ok, false);
+  assert.equal(ws.sent.length, 0);
+  // Legacy/manual press on the selected tab: no chat field, manual recipient.
+  bg.send({ type: "ycode-live:shape", tab: { ...TAB, id: 9 }, note: "n", to: "codex" });
+  await tick();
+  assert.equal(ws.sent[0].result.to, "codex");
+  assert.equal("chat" in ws.sent[0].result, false);
+
+  // A stale answer marks only the tab it came from.
+  ws.sent.length = 0;
+  bg.send({ type: "ycode-live:shape", tab: { ...TAB, id: 4712 }, note: "n", to: "", useRoute: true });
+  await tick();
+  await answer(ws, { nonce: ws.sent[0].result.nonce, ok: false, stale: true, error: "gone" });
+  await tick();
+  const st = plain(await bg.send({ type: "ycode-live:status" })).routes;
+  assert.deepEqual(st.map((r) => [r.tabId, r.stale]).sort(), [[4711, false], [4712, true]]);
+});
+
+test("closing one driven tab, then the socket, clear exactly their routes and banners", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, DRIVE);
+  await bg.hub(ws, DRIVE2);
+  bg.tabListeners.removed.forEach((fn) => fn(4711));
+  assert.deepEqual(await routesOf(bg), [4712]);
+  const before = banners(bg).length;
+  ws.onclose({ code: 1006 });
+  await tick();
+  assert.deepEqual(await routesOf(bg), []);
+  assert.deepEqual(banners(bg).slice(before), [[4712, null]]);
+});
+
+test("a late close of an old socket does not clear the newer socket's routes", async () => {
+  const bg = loadBackground();
+  const old = await bg.connect();
+  await bg.send({ type: "ycode-live:disconnect" });
+  const fresh = await bg.connect();
+  assert.notEqual(old, fresh);
+  await bg.hub(fresh, DRIVE);
+  old.onclose({ code: 1006 });
+  await tick();
+  assert.deepEqual(await routesOf(bg), [4711]);
+});
+
+test("a failed address or failed action binds no route and paints no banner", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, { by_id: true, tab_id: 999, agent: "claude-x", chat: "chat-123" });
+  assert.deepEqual(await routesOf(bg), [], "an unresolved tab binds nothing");
+  bg.state.failScript = true;
+  await bg.hub(ws, { ...DRIVE, selector: "#x" });
+  assert.deepEqual(await routesOf(bg), [], "a failed action binds nothing");
+  assert.deepEqual(banners(bg).filter(([, l]) => l), []);
 });

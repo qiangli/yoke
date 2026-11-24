@@ -2,10 +2,12 @@ package live
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
@@ -23,8 +25,9 @@ func TestExtensionE2EAgentRoute(t *testing.T) {
 	guardIsolate(t)
 	t.Setenv(guard.FakeAskEnv, "fake:stop")
 	svc, ctx1 := startExtensionE2E(t, map[string]string{
-		"/one": `<!doctype html><title>Alpha</title><p>first tab</p>`,
-		"/two": `<!doctype html><title>Beta</title><p>second tab</p>`,
+		"/one":   `<!doctype html><title>Alpha</title><p>first tab</p>`,
+		"/two":   `<!doctype html><title>Beta</title><p>second tab</p>`,
+		"/three": `<!doctype html><title>Gamma</title><p>third tab</p>`,
 	}, "/one")
 	var loc string
 	if err := chromedp.Run(ctx1, chromedp.Location(&loc)); err != nil {
@@ -34,6 +37,16 @@ func TestExtensionE2EAgentRoute(t *testing.T) {
 	ctx2, cancel2 := chromedp.NewContext(ctx1)
 	defer cancel2()
 	if err := chromedp.Run(ctx2, chromedp.Navigate(base+"/two")); err != nil { // the selected tab
+		t.Fatal(err)
+	}
+
+	ctx4, cancel4 := chromedp.NewContext(ctx1)
+	defer cancel4()
+	if err := chromedp.Run(ctx4, chromedp.Navigate(base+"/three")); err != nil { // driven second
+		t.Fatal(err)
+	}
+	// The human selects tab two last.
+	if err := chromedp.Run(ctx2, chromedp.ActionFunc(func(c context.Context) error { return page.BringToFront().Do(c) })); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,16 +116,45 @@ func TestExtensionE2EAgentRoute(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var st struct {
-		Route *struct {
-			TabID int    `json:"tabId"`
-			Agent string `json:"agent"`
-			Chat  string `json:"chat"`
-		} `json:"route"`
+	type routeRec struct {
+		TabID int    `json:"tabId"`
+		Agent string `json:"agent"`
+		Chat  string `json:"chat"`
 	}
-	call(`chrome.runtime.sendMessage({type:"ycode-live:status"})`, &st)
-	if st.Route == nil || st.Route.TabID != first || st.Route.Agent != "claude-x" || st.Route.Chat != "chat-123" {
-		t.Fatalf("status route = %+v, driven tab %d", st.Route, first)
+	var st struct {
+		Routes []routeRec `json:"routes"`
+	}
+	status := func() map[int]routeRec {
+		call(`chrome.runtime.sendMessage({type:"ycode-live:status"})`, &st)
+		m := map[int]routeRec{}
+		for _, r := range st.Routes {
+			m[r.TabID] = r
+		}
+		return m
+	}
+	if r := status(); len(r) != 1 || r[first].Agent != "claude-x" || r[first].Chat != "chat-123" {
+		t.Fatalf("status routes = %+v, driven tab %d", st.Routes, first)
+	}
+
+	// The same agent drives a second tab: both keep their banners and routes,
+	// and the selected tab (two) still has none.
+	second := do(wire.Action{Type: wire.ActionExtract, MatchURL: "/three", Agent: "claude-x", Chat: "chat-123"}).TabID
+	waitBanner(ctx4, "Bashy · claude-x")
+	waitBanner(ctx1, "Bashy · claude-x")
+	if banner(ctx2) != "" {
+		t.Fatal("the banner leaked to the selected tab")
+	}
+	if r := status(); len(r) != 2 || r[first].Chat != "chat-123" || r[second].Chat != "chat-123" {
+		t.Fatalf("two bound tabs: %+v", st.Routes)
+	}
+	// A failed action (no such tab) binds nothing new.
+	c, cancelFail := context.WithTimeout(context.Background(), 30*time.Second)
+	if res, err := svc.Execute(c, wire.Action{Type: wire.ActionExtract, MatchURL: "/nowhere", Agent: "other", Chat: "chat-x"}); err == nil && res != nil && res.Success {
+		t.Fatal("an action on a missing tab succeeded")
+	}
+	cancelFail()
+	if r := status(); len(r) != 2 {
+		t.Fatalf("a failed action bound a route: %+v", st.Routes)
 	}
 
 	// The note on the bound tab reaches the handler with the exact chat; the
@@ -122,28 +164,35 @@ func TestExtensionE2EAgentRoute(t *testing.T) {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	press := func(id int) {
-		call(`chrome.runtime.sendMessage({type:"ycode-live:shape", useRoute:true, note:"look", to:"", tab:{id:`+itoa(id)+`,url:"u",title:"t"}})`, &resp)
+	press := func(id int, route bool, to string) {
+		call(`chrome.runtime.sendMessage({type:"ycode-live:shape", useRoute:`+strconv.FormatBool(route)+`, note:"look", to:"`+to+`", tab:{id:`+itoa(id)+`,url:"u",title:"t"}})`, &resp)
 	}
-	press(first)
-	if m := <-got; !resp.OK || m.Chat != "chat-123" || m.TabID != first || m.Note != "look" {
-		t.Fatalf("bound press: %+v %+v", resp, m)
+	for _, id := range []int{first, second} {
+		press(id, true, "")
+		if m := <-got; !resp.OK || m.Chat != "chat-123" || m.TabID != id || m.Note != "look" {
+			t.Fatalf("bound press from tab %d: %+v %+v", id, resp, m)
+		}
 	}
-	press(first + 1000)
+	// The selected, unbound tab is refused when it asks for the route...
+	press(first+1000, true, "")
 	if resp.OK {
-		t.Fatal("a press from a tab that is not the bound one was delivered")
+		t.Fatal("a press from a tab that is not bound was delivered")
 	}
 	noShape(t, got)
+	// ...and a legacy/manual press carries no chat, only its recipient.
+	press(first+1000, false, "codex")
+	if m := <-got; !resp.OK || m.Chat != "" || m.To != "codex" {
+		t.Fatalf("manual press: %+v %+v", resp, m)
+	}
 
-	// Closing the driven tab clears the route.
+	// Closing one driven tab clears only its route.
 	call(`chrome.tabs.remove(`+itoa(first)+`).then(()=>true)`, new(bool))
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
-		call(`chrome.runtime.sendMessage({type:"ycode-live:status"})`, &st)
-		if st.Route == nil {
+		if r := status(); len(r) == 1 && r[second].Chat == "chat-123" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("route survived the tab closing")
+			t.Fatalf("routes after closing one tab: %+v", st.Routes)
 		}
 	}
 
@@ -155,4 +204,5 @@ func TestExtensionE2EAgentRoute(t *testing.T) {
 	svc.hub.mu.Unlock()
 	_ = conn.Close()
 	waitBanner(ctx2, "")
+	waitBanner(ctx4, "") // the other driven tab loses its banner with the socket too
 }

@@ -57,9 +57,12 @@ const routeFocusBtn = document.getElementById("route-focus");
 let activeRoute = null; // the route the selected tab follows, else null
 
 async function renderRoute(resp) {
-  const route = resp && resp.route;
-  const sel = route ? await currentTab() : null;
+  const routes = (resp && resp.routes) || [];
+  const sel = routes.length ? await currentTab() : null;
+  // The selected tab's own route wins; otherwise show one driven elsewhere.
+  const route = routes.find((r) => sel && r.tabId === sel.id) || routes[0] || null;
   const here = !!(route && sel && sel.id === route.tabId);
+  focusTabId = route ? route.tabId : 0;
   activeRoute = here && !route.stale ? route : null;
   routeEl.className = !route ? "" : route.stale ? "stale" : here ? "driven" : "other";
   routeFocusBtn.style.display = route && !here ? "" : "none";
@@ -70,8 +73,9 @@ async function renderRoute(resp) {
   shapeToEl.disabled = !!activeRoute;
 }
 
+let focusTabId = 0; // the driven tab the Focus button brings forward
 routeFocusBtn.addEventListener("click", async () => {
-  const r = await chrome.runtime.sendMessage({ type: "ycode-live:focus" });
+  const r = await chrome.runtime.sendMessage({ type: "ycode-live:focus", tabId: focusTabId });
   if (r && !r.ok) routeTextEl.textContent = r.error || "could not focus the driven tab";
 });
 
