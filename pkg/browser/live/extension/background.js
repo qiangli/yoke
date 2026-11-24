@@ -55,6 +55,63 @@ function setBadge(state) {
   } catch (e) { /* action API unavailable: badge is cosmetic */ }
 }
 
+// --- route: which tab an agent drives, and which chat answers for it ---
+//
+// A call that names {agent, chat} binds the tab it landed on to that agent
+// and that exact Bashy chat id. It lives only as long as THIS socket and
+// that tab: a socket close, Disconnect, or the tab closing clears it and the
+// banner. One route at a time; the latest driving call wins. It is memory
+// only: a restarted worker simply has no route until the next call.
+let route = null; // {tabId, agent, chat, stale}
+
+// paintBanner runs inside the page. It adds one small, click-through label
+// (no focus, no listeners) and never touches the page's own elements.
+function paintBanner(label) {
+  const ID = "__bashy_live_banner__";
+  const old = document.getElementById(ID);
+  if (old) old.remove();
+  if (!label) return;
+  const el = document.createElement("div");
+  el.id = ID;
+  el.textContent = "Bashy \u00b7 " + label;
+  el.setAttribute("style", "position:fixed;top:6px;right:6px;z-index:2147483647;pointer-events:none;" +
+    "background:#6d28d9;color:#fff;font:600 11px/1.4 system-ui,sans-serif;padding:2px 8px;" +
+    "border-radius:10px;opacity:.92;max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap");
+  (document.body || document.documentElement).appendChild(el);
+}
+
+async function paintTab(tabId, label) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, func: paintBanner, args: [label] });
+  } catch (_) { /* a page that cannot be scripted (chrome://, a closed tab) has no banner */ }
+}
+
+function routeLabel(r) {
+  return r.agent + (r.stale ? " (chat gone)" : "");
+}
+
+async function bindRoute(tabId, agent, chat) {
+  if (typeof agent !== "string" || typeof chat !== "string" || !agent || !chat) return;
+  const prev = route;
+  route = { tabId, agent: agent.slice(0, 64), chat: chat.slice(0, 128), stale: false };
+  if (prev && prev.tabId !== tabId) await paintTab(prev.tabId, null);
+  await paintTab(tabId, routeLabel(route));
+}
+
+function clearRoute() {
+  const prev = route;
+  route = null;
+  if (prev) paintTab(prev.tabId, null);
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (route && route.tabId === tabId) route = null; // the page is gone with its banner
+});
+// A navigation replaces the document, and the banner with it.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (route && route.tabId === tabId && info && info.status === "complete") paintTab(tabId, routeLabel(route));
+});
+
 // --- entry: open/close commands from popup ---
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -89,6 +146,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       ws = null;
     }
     chrome.alarms.clear("ycode-live-keepalive");
+    clearRoute();
     setBadge("idle");
     sendResponse({ status: "disconnected" });
   } else if (msg && msg.type === "ycode-live:status") {
@@ -97,9 +155,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       busy: hubBusy,
       port: connectedPort,
       tabId: activeTabId,
+      route: route ? { ...route } : null,
     });
   } else if (msg && msg.type === "ycode-live:shape") {
     sendShape(msg).then(sendResponse);
+  } else if (msg && msg.type === "ycode-live:focus") {
+    focusRoute().then(sendResponse);
   }
   return true;
 });
@@ -123,6 +184,19 @@ function shapeBrowser() {
   return "chrome";
 }
 
+// focusRoute brings the driven tab forward. It runs only on the popup's
+// explicit Focus press; driving a tab never moves the human's focus.
+async function focusRoute() {
+  if (!route) return { ok: false, error: "no tab is driven by an agent" };
+  try {
+    const tab = await chrome.tabs.update(route.tabId, { active: true });
+    if (tab && typeof tab.windowId === "number") await chrome.windows.update(tab.windowId, { focused: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: "the driven tab is gone" };
+  }
+}
+
 function sendShape(msg) {
   return new Promise((resolve) => {
     const tab = msg.tab || {};
@@ -133,6 +207,16 @@ function sendShape(msg) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       resolve({ ok: false, error: "not connected to the bashy hub: press Connect this tab first" });
       return;
+    }
+    // A press routed to the bound chat is honoured only for the bound tab on
+    // this socket; the worker, not the popup, is the authority on that.
+    let chat = "";
+    if (msg.useRoute) {
+      if (!route || route.tabId !== tab.id || route.stale) {
+        resolve({ ok: false, error: "this tab is no longer driven by an agent chat: type a recipient" });
+        return;
+      }
+      chat = route.chat;
     }
     const nonce = Date.now().toString(36) + "-" + (++shapeSeq);
     const timer = setTimeout(() => {
@@ -156,6 +240,7 @@ function sendShape(msg) {
           note: String(msg.note || ""),
           to: String(msg.to || ""),
           browser: shapeBrowser(),
+          ...(chat ? { chat } : {}),
         },
       }));
     } catch (e) {
@@ -168,11 +253,17 @@ function sendShape(msg) {
 function onShapeResult(params) {
   const finish = params && shapeWaiting.get(params.nonce);
   if (!finish) return;
+  const stale = params.stale === true;
+  if (stale && route) {
+    route.stale = true;
+    paintTab(route.tabId, routeLabel(route));
+  }
   finish({
     ok: params.ok === true,
     status: String(params.status || ""),
     error: String(params.error || ""),
     truncated: params.truncated === true,
+    ...(stale ? { stale: true } : {}),
   });
 }
 
@@ -281,6 +372,7 @@ function openWS() {
   ws.onerror = (e) => console.warn("ycode-live: socket error", e);
   ws.onclose = (ev) => {
     ws = null;
+    clearRoute();
     chrome.alarms.clear("ycode-live-keepalive");
     for (const finish of [...shapeWaiting.values()]) {
       finish({ ok: false, error: "the bashy hub disconnected before it answered" });
@@ -669,6 +761,7 @@ async function dispatch(method, params) {
   } else {
     tabId = (method === "guard_fill" || method === "guard_focus") ? await guardTabId(params) : await targetTabId();
   }
+  if (params && params.agent && params.chat) await bindRoute(tabId, params.agent, params.chat);
   const out = await dispatchOnTab(method, params, tabId);
   // Stamp the resolved tab on every page-touching result so a caller
   // can prove which page answered instead of inferring it.

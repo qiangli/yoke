@@ -53,6 +53,13 @@ func deliverShape(ctx context.Context, m live.ShapeMessage) (live.ShapeReceipt, 
 		return live.ShapeReceipt{}, err
 	}
 	human := shapeOperator()
+	if m.Chat != "" {
+		// The tab is bound to one exact chat: that card, or nothing.
+		if c, ok, err := shapeFind(m.Chat); err == nil && ok && c.ID == m.Chat && chat.SteerableCard(c) {
+			return steerShape(c, human, m, "")
+		}
+		return live.ShapeReceipt{}, live.ErrShapeRouteStale
+	}
 	if m.To != "" {
 		if card, ok := shapeSession(m.To); ok {
 			return steerShape(card, human, m, "")

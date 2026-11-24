@@ -45,8 +45,39 @@ function setStatus(cls, text) {
   statusEl.textContent = text;
 }
 
+// --- route: is the selected tab the one a Bashy agent drives? ---
+//
+// The extension's worker holds the route (tab + agent + chat, for this
+// socket). The popup only shows it, offers an explicit Focus, and lets the
+// note follow it when the selected tab is the driven one. No route, or a
+// stale one, leaves the manual recipient exactly as it was.
+const routeEl = document.getElementById("route");
+const routeTextEl = document.getElementById("route-text");
+const routeFocusBtn = document.getElementById("route-focus");
+let activeRoute = null; // the route the selected tab follows, else null
+
+async function renderRoute(resp) {
+  const route = resp && resp.route;
+  const sel = route ? await currentTab() : null;
+  const here = !!(route && sel && sel.id === route.tabId);
+  activeRoute = here && !route.stale ? route : null;
+  routeEl.className = !route ? "" : route.stale ? "stale" : here ? "driven" : "other";
+  routeFocusBtn.style.display = route && !here ? "" : "none";
+  if (!route) routeTextEl.textContent = "";
+  else if (route.stale) routeTextEl.textContent = `Bashy route stale: ${route.agent}'s chat is gone. Type a recipient below.`;
+  else if (here) routeTextEl.textContent = `This tab is driven by Bashy: ${route.agent}. Notes go to its chat.`;
+  else routeTextEl.textContent = `Bashy (${route.agent}) drives tab ${route.tabId}; the tab you selected is not driven by Bashy.`;
+  shapeToEl.disabled = !!activeRoute;
+}
+
+routeFocusBtn.addEventListener("click", async () => {
+  const r = await chrome.runtime.sendMessage({ type: "ycode-live:focus" });
+  if (r && !r.ok) routeTextEl.textContent = r.error || "could not focus the driven tab";
+});
+
 async function refreshStatus() {
   const resp = await chrome.runtime.sendMessage({ type: "ycode-live:status" });
+  await renderRoute(resp);
   if (resp && resp.connected) {
     setStatus("connected", `connected on port ${resp.port}`);
   } else if (resp && resp.busy) {
@@ -118,6 +149,7 @@ shapeBtn.addEventListener("click", async () => {
       setShapeStatus("error", "no current tab to send");
       return;
     }
+    await renderRoute(await chrome.runtime.sendMessage({ type: "ycode-live:status" }));
     const to = shapeToEl.value.trim();
     chrome.storage.local.set({ shapeTo: to });
     const resp = await chrome.runtime.sendMessage({
@@ -125,6 +157,7 @@ shapeBtn.addEventListener("click", async () => {
       tab: { id: tab.id, url: tab.url || "", title: tab.title || "" },
       note: shapeNoteEl.value,
       to,
+      ...(activeRoute ? { useRoute: true } : {}),
     });
     if (resp && resp.ok) {
       setShapeStatus("sent", resp.status || "sent");
@@ -136,6 +169,7 @@ shapeBtn.addEventListener("click", async () => {
   } catch (e) {
     setShapeStatus("error", "not sent: " + String(e.message || e));
   } finally {
+    await renderRoute(await chrome.runtime.sendMessage({ type: "ycode-live:status" }));
     shapeBtn.disabled = false;
   }
 });

@@ -75,6 +75,12 @@ type Action struct {
 	MatchURL   string `json:"match_url,omitempty"`
 	MatchTitle string `json:"match_title,omitempty"`
 
+	// Agent and Chat name who drives the tab this action lands on: the
+	// working agent's name and its exact Bashy chat id. Live mode only; the
+	// extension shows the agent on that tab and routes a note back to Chat.
+	Agent string `json:"agent,omitempty"`
+	Chat  string `json:"chat,omitempty"`
+
 	// DispatchEvent: Event is the event name, Detail an optional JSON
 	// document used as CustomEvent detail, and Target one of
 	// "window" (default) / "document" / a CSS selector via Selector.

@@ -35,6 +35,9 @@ const plain = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 function loadBackground() {
   const sockets = [];
   const timers = []; // {fn, ms, cleared}
+  const scripted = []; // every chrome.scripting.executeScript call
+  const focused = []; // tabs.update / windows.update calls: only the Focus press may add any
+  const tabListeners = { removed: [], updated: [] };
   let listener = null;
   class FakeSocket {
     constructor(url) {
@@ -71,9 +74,16 @@ function loadBackground() {
       },
     },
     alarms: { create() {}, clear() {}, onAlarm: event },
-    tabs: { get: async (id) => ({ id }), query: async () => [], onUpdated: event, onRemoved: event, onActivated: event },
-    windows: { update: async () => ({}) },
-    scripting: { executeScript: async () => [{}] },
+    tabs: {
+      get: async (id) => ({ id }),
+      query: async () => [{ id: 4711, url: "https://example.com/", title: "Example", active: true }],
+      update: async (id, p) => { focused.push(["tab", id, p]); return { id, windowId: 3 }; },
+      onUpdated: { addListener(fn) { tabListeners.updated.push(fn); }, removeListener() {} },
+      onRemoved: { addListener(fn) { tabListeners.removed.push(fn); } },
+      onActivated: event,
+    },
+    windows: { update: async (id, p) => { focused.push(["window", id, p]); return {}; } },
+    scripting: { executeScript: async (c) => { scripted.push(c); return [{}]; } },
     debugger: {
       attach: async () => {}, sendCommand: async () => ({}), detach: async () => {},
       onDetach: event, onEvent: event,
@@ -103,8 +113,13 @@ function loadBackground() {
 
   // send plays the popup: one runtime message, the promise is its response.
   const send = (msg) => new Promise((resolve) => listener(msg, {}, resolve));
+  // hub plays the hub's request frame to the worker and settles it.
+  const hub = async (ws, params, method) => {
+    await ws.onmessage({ data: JSON.stringify({ id: 9, method: method || "text", params }) });
+    await tick();
+  };
   return {
-    sockets, timers, send,
+    sockets, timers, send, scripted, focused, tabListeners, hub, sandbox,
     // connect presses Connect and opens the socket, as the hub accepting it.
     async connect() {
       await send({ type: "ycode-live:connect", port: 58084, tabId: 7 });
@@ -266,11 +281,12 @@ function loadPopup(opts) {
       getURL: (p) => "chrome-extension://test/" + p,
       sendMessage: async (msg) => {
         messages.push(msg);
+        if (msg.type === "ycode-live:focus") return opts.focus || { ok: true };
         if (msg.type === "ycode-live:shape") {
           if (opts.shapeThrows) throw new Error(opts.shapeThrows);
           return opts.shape;
         }
-        return { connected: true, port: 58082 };
+        return { connected: true, port: 58082, route: opts.route };
       },
       connect: () => ({ onMessage: { addListener() {} }, postMessage() {} }),
     },
@@ -398,4 +414,158 @@ test("the popped-out panel sends the browser window's tab, not itself", async ()
   await p.els["shape-send"].fire("click");
   assert.deepEqual(plain(p.shapeMessages()[0].tab), { id: 9, url: "https://b.example/", title: "B" });
   assert.deepEqual(plain(p.opts.windowQuery), { populate: true, windowTypes: ["normal"] });
+});
+
+// ---------------------------------------------------------------------------
+// Route: the banner on the driven tab, selected vs driven, exact chat.
+// ---------------------------------------------------------------------------
+
+const DRIVE = { by_id: true, tab_id: 4711, agent: "claude-x", chat: "chat-123" };
+const banners = (bg) => bg.scripted.filter((c) => typeof c.func === "function" && c.func.name === "paintBanner").map((c) => [c.target.tabId, c.args[0]]);
+
+test("a call naming agent and chat paints one banner on that tab only; a plain call paints none", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, { by_id: true, tab_id: 4711 });
+  assert.deepEqual(banners(bg).filter(([, l]) => l), [], "legacy calls get no banner");
+
+  await bg.hub(ws, DRIVE);
+  assert.deepEqual(banners(bg).filter(([, l]) => l), [[4711, "claude-x"]]);
+  assert.deepEqual(bg.focused, [], "driving a tab never moves focus");
+  const st = plain(await bg.send({ type: "ycode-live:status" }));
+  assert.deepEqual(st.route, { tabId: 4711, agent: "claude-x", chat: "chat-123", stale: false });
+});
+
+test("the banner is a click-through label built with textContent, no focus", () => {
+  const bg = loadBackground();
+  const painted = [];
+  const doc = {
+    getElementById: () => null,
+    createElement: () => {
+      const el = { attrs: {}, focus() { throw new Error("banner must not take focus"); },
+        setAttribute(k, v) { el.attrs[k] = v; }, remove() {} };
+      return el;
+    },
+    body: { appendChild: (el) => painted.push(el) },
+  };
+  const fn = bg.sandbox.paintBanner;
+  vm.runInNewContext("(" + fn.toString() + ")('<img src=x onerror=1>')", { document: doc });
+  assert.equal(painted.length, 1);
+  assert.equal(painted[0].textContent, "Bashy \u00b7 <img src=x onerror=1>");
+  assert.match(painted[0].attrs.style, /pointer-events:none/);
+});
+
+test("the popup tells a driven selected tab from a browser-selected one, and Focus is explicit", async () => {
+  const route = { tabId: 4711, agent: "claude-x", chat: "chat-123", stale: false };
+  const same = loadPopup({ route, shape: { ok: true, status: "sent to claude-x's live chat session" } });
+  await tick(); await tick();
+  assert.equal(same.els.route.className, "driven");
+  assert.match(same.els["route-text"].textContent, /driven by Bashy: claude-x/);
+  assert.equal(same.els["route-focus"].style.display, "none");
+  assert.equal(same.els["shape-to"].disabled, true);
+  same.els["shape-note"].value = "look";
+  await same.els["shape-send"].fire("click");
+  assert.deepEqual(plain(same.shapeMessages()), [{
+    type: "ycode-live:shape", tab: { id: 4711, url: TAB.url, title: TAB.title }, note: "look", to: "", useRoute: true,
+  }]);
+
+  const other = loadPopup({ route: { ...route, tabId: 99 }, shape: { ok: true, status: "kept" } });
+  await tick(); await tick();
+  assert.equal(other.els.route.className, "other");
+  assert.match(other.els["route-text"].textContent, /drives tab 99.*not driven by Bashy/);
+  assert.equal(other.els["route-focus"].style.display, "");
+  assert.equal(other.els["shape-to"].disabled, false);
+  other.els["shape-to"].value = "codex";
+  await other.els["shape-send"].fire("click");
+  assert.equal(other.shapeMessages()[0].useRoute, undefined, "an unbound tab keeps the manual recipient");
+  assert.equal(other.shapeMessages()[0].to, "codex");
+  assert.equal(other.focused, undefined);
+});
+
+test("Focus asks the worker, and only then does it focus the driven tab", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  assert.deepEqual(plain(await bg.send({ type: "ycode-live:focus" })), { ok: false, error: "no tab is driven by an agent" });
+  await bg.hub(ws, DRIVE);
+  assert.deepEqual(bg.focused, []);
+  assert.deepEqual(plain(await bg.send({ type: "ycode-live:focus" })), { ok: true });
+  assert.deepEqual(plain(bg.focused), [["tab", 4711, { active: true }], ["window", 3, { focused: true }]]);
+});
+
+test("a note on the bound tab carries the exact chat; any other tab is refused", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, DRIVE);
+  ws.sent.length = 0;
+  let resp = null;
+  bg.send({ type: "ycode-live:shape", tab: TAB, note: "n", to: "", useRoute: true }).then((r) => { resp = r; });
+  await tick();
+  assert.equal(ws.sent.length, 1);
+  assert.equal(ws.sent[0].result.tab_id, 4711);
+  assert.equal(ws.sent[0].result.chat, "chat-123");
+  await answer(ws, { nonce: ws.sent[0].result.nonce, ok: true, status: "sent to claude-x's live chat session" });
+  await tick();
+  assert.equal(resp.ok, true);
+
+  ws.sent.length = 0;
+  resp = await bg.send({ type: "ycode-live:shape", tab: { ...TAB, id: 5 }, note: "n", to: "", useRoute: true });
+  assert.equal(resp.ok, false);
+  assert.equal(ws.sent.length, 0, "a different tab never rides the bound chat");
+  // A press without useRoute is the legacy frame: no chat field at all.
+  bg.send({ type: "ycode-live:shape", tab: TAB, note: "n", to: "codex" });
+  await tick();
+  assert.equal("chat" in ws.sent[0].result, false);
+});
+
+test("a stale route is reported, the banner says so, and manual recipient still works", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, DRIVE);
+  let resp = null;
+  bg.send({ type: "ycode-live:shape", tab: TAB, note: "n", to: "", useRoute: true }).then((r) => { resp = r; });
+  await tick();
+  await answer(ws, { nonce: ws.sent[ws.sent.length - 1].result.nonce, ok: false, stale: true, error: "the agent chat bound to this tab is gone; nothing was sent" });
+  await tick();
+  assert.equal(resp.ok, false);
+  assert.equal(resp.stale, true);
+  assert.deepEqual(banners(bg).pop(), [4711, "claude-x (chat gone)"]);
+  assert.equal(plain(await bg.send({ type: "ycode-live:status" })).route.stale, true);
+
+  const refused = await bg.send({ type: "ycode-live:shape", tab: TAB, note: "n", to: "", useRoute: true });
+  assert.equal(refused.ok, false);
+  const p = loadPopup({ route: { tabId: 4711, agent: "claude-x", chat: "chat-123", stale: true } });
+  await tick(); await tick();
+  assert.equal(p.els.route.className, "stale");
+  assert.match(p.els["route-text"].textContent, /stale/);
+  assert.equal(p.els["shape-to"].disabled, false);
+});
+
+test("tab close, socket close and Disconnect each clear the route and banner", async () => {
+  for (const how of ["tab", "socket", "disconnect"]) {
+    const bg = loadBackground();
+    const ws = await bg.connect();
+    await bg.hub(ws, DRIVE);
+    assert.ok(plain(await bg.send({ type: "ycode-live:status" })).route, how);
+    const before = banners(bg).length;
+    if (how === "tab") bg.tabListeners.removed.forEach((fn) => fn(4711));
+    else if (how === "socket") ws.onclose({ code: 1006 });
+    else await bg.send({ type: "ycode-live:disconnect" });
+    await tick();
+    assert.equal(plain(await bg.send({ type: "ycode-live:status" })).route, null, how);
+    if (how !== "tab") assert.deepEqual(banners(bg).slice(before), [[4711, null]], how + ": banner removed");
+  }
+});
+
+test("a navigation repaints the banner on the bound tab only", async () => {
+  const bg = loadBackground();
+  const ws = await bg.connect();
+  await bg.hub(ws, DRIVE);
+  const n = banners(bg).length;
+  bg.tabListeners.updated.forEach((fn) => fn(5, { status: "complete" }));
+  bg.tabListeners.updated.forEach((fn) => fn(4711, { status: "loading" }));
+  await tick();
+  assert.equal(banners(bg).length, n);
+  bg.tabListeners.updated.forEach((fn) => fn(4711, { status: "complete" }));
+  await tick();
+  assert.deepEqual(banners(bg).slice(n), [[4711, "claude-x"]]);
 });

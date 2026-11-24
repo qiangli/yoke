@@ -467,3 +467,32 @@ func TestHubRoutesAShapePress(t *testing.T) {
 	}
 	wantAll(t, "steer", w.steers[0].text, []string{"tab 12", `"https://example.com/"`, `"Example"`, "--id 12", "Their note: hello"})
 }
+
+// A bound tab's note goes to that exact chat or nowhere: not to a nick or
+// prefix match, not to the most recent session, not to a DM.
+func TestShapeBoundChatIsExactOrStale(t *testing.T) {
+	w := newShapeWorld(t)
+	bound := w.session("claude-x")
+	other := w.session("codex")
+	m := live.ShapeMessage{Browser: "chrome", Port: 58082, TabID: 7, URL: "https://e.com/", Title: "t", Note: "look", Chat: bound.ID}
+
+	rec, err := deliverShape(context.Background(), m)
+	if err != nil || rec.Via != "steer" || len(w.steers) != 1 || w.steers[0].to != bound.ID {
+		t.Fatalf("rec=%+v err=%v steers=%v", rec, err, w.steers)
+	}
+	if strings.Contains(w.steers[0].to, other.ID) || !strings.Contains(w.steers[0].text, "look") {
+		t.Fatalf("steer = %+v", w.steers[0])
+	}
+
+	// Stale: the chat is gone, though another session and a nick match exist.
+	w.steers = nil
+	for _, chat := range []string{"gone-chat", strings.ToUpper(other.Nick)} {
+		m.Chat = chat
+		if _, err := deliverShape(context.Background(), m); !errors.Is(err, live.ErrShapeRouteStale) {
+			t.Fatalf("chat %q: err = %v, want a stale route", chat, err)
+		}
+	}
+	if len(w.steers)+len(w.dms)+len(w.pubs) != 0 {
+		t.Fatalf("a stale route delivered somewhere: %+v %+v %+v", w.steers, w.dms, w.pubs)
+	}
+}

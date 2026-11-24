@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
+	"github.com/qiangli/yoke/pkg/browser/wire"
 )
 
 // extOrigin is the Origin a browser sends for an extension's socket.
@@ -343,8 +344,8 @@ func TestPopupHasTheShapeControls(t *testing.T) {
 			t.Errorf("popup.html lacks %s", want)
 		}
 	}
-	if n := strings.Count(html, "<button"); n != 5 {
-		t.Errorf("popup.html has %d buttons, want the four it had and Shape", n)
+	if n := strings.Count(html, "<button"); n != 6 {
+		t.Errorf("popup.html has %d buttons, want the four it had, Shape and Focus", n)
 	}
 	if strings.Count(html, "<textarea") != 1 {
 		t.Error("popup.html should have exactly one textarea, the note")
@@ -434,5 +435,52 @@ func TestShapeAddsNoPermission(t *testing.T) {
 	}
 	if strings.Join(manifest.Hosts, ",") != "<all_urls>" {
 		t.Errorf("host_permissions = %v", manifest.Hosts)
+	}
+}
+
+// A press from a tab bound to a chat carries that exact chat id to the
+// handler, and a handler that finds the chat gone answers with a stale route:
+// the popup is told so, and nothing is delivered anywhere else.
+func TestShapeCarriesTheBoundChatAndReportsAStaleRoute(t *testing.T) {
+	_, dial := shapeHub(t)
+	got := captureShape(t, ShapeReceipt{Via: "steer", To: "claude-x", Status: "sent"}, nil)
+	c := dial(extOrigin)
+	res := press(t, c, extShape{Nonce: "r1", TabID: 9, Note: "hi", Chat: " chat-123 "})
+	if res["ok"] != true {
+		t.Fatalf("answer = %v", res)
+	}
+	if m := <-got; m.Chat != "chat-123" || m.TabID != 9 {
+		t.Fatalf("handler saw %+v", m)
+	}
+	if res := press(t, c, extShape{Nonce: "r2", TabID: 9}); res["stale"] != nil {
+		t.Fatalf("an unbound press is never stale: %v", res)
+	}
+	<-got
+
+	SetShapeHandler(func(context.Context, ShapeMessage) (ShapeReceipt, error) {
+		return ShapeReceipt{}, ErrShapeRouteStale
+	})
+	res = press(t, c, extShape{Nonce: "r3", TabID: 9, Chat: "chat-123"})
+	if res["ok"] != false || res["stale"] != true || res["error"] != ErrShapeRouteStale.Error() {
+		t.Fatalf("stale answer = %v", res)
+	}
+}
+
+// Agent and chat ride on the action's params only when both are named, so a
+// legacy call is byte-for-byte what it was.
+func TestActionParamsCarryTheRouteOnlyWhenBothAreNamed(t *testing.T) {
+	for _, tc := range []struct {
+		agent, chat string
+		want        bool
+	}{{"", "", false}, {"a", "", false}, {"", "c", false}, {"a", "c", true}} {
+		_, p, err := actionToParams(wire.Action{Type: wire.ActionExtract, Agent: tc.agent, Chat: tc.chat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, hasA := p["agent"]
+		_, hasC := p["chat"]
+		if hasA != tc.want || hasC != tc.want {
+			t.Errorf("agent=%q chat=%q: params %v", tc.agent, tc.chat, p)
+		}
 	}
 }
