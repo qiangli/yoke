@@ -1,13 +1,16 @@
 package coopauth
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,32 +115,60 @@ func TestVerifyRelationship(t *testing.T) {
 	const secret = "relationship-secret"
 	now := time.Now().Unix()
 	tests := []struct {
-		name string
-		req  *http.Request
-		want Relationship
+		name    string
+		req     *http.Request
+		want    Relationship
+		wantLog bool
 	}{
-		{"member", relationshipRequest(secret, "member", "recruiter", "contacts,certificates", "", "member@example.com", now), Relationship{Kind: "member", Circle: "recruiter", Groups: []string{"contacts", "certificates"}}},
-		{"owner", relationshipRequest(secret, "owner", "", "", "", "owner@example.com", now), Relationship{Kind: "owner"}},
-		{"signed-in pseudonym", relationshipRequest(secret, "signed-in", "", "", "0123456789abcdef0123456789abcdef", "", now), Relationship{Kind: "signed-in", Visitor: "0123456789abcdef0123456789abcdef"}},
+		{"member", relationshipRequest(secret, "member", "recruiter", "contacts,certificates", "", "member@example.com", now), Relationship{Kind: RelMember, Circle: "recruiter", Groups: []string{"contacts", "certificates"}}, false},
+		{"owner", relationshipRequest(secret, "owner", "", "", "", "owner@example.com", now), Relationship{Kind: RelOwner}, false},
+		{"account pseudonym", relationshipRequest(secret, "account", "", "", "0123456789abcdef0123456789abcdef", "", now), Relationship{Kind: RelAccount, Visitor: "0123456789abcdef0123456789abcdef"}, false},
+		{"signed-in alias", relationshipRequest(secret, "signed-in", "", "", "0123456789abcdef0123456789abcdef", "", now), Relationship{Kind: RelAccount, Visitor: "0123456789abcdef0123456789abcdef"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(old) })
+
 			got, ok := VerifyRelationship(tt.req, []byte(secret))
 			if !ok || !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("VerifyRelationship = (%+v, %v), want (%+v, true)", got, ok, tt.want)
+			}
+			logged := strings.Contains(buf.String(), "signed-in")
+			if logged != tt.wantLog {
+				t.Fatalf("alias warning logged = %v (buf=%q), want %v", logged, buf.String(), tt.wantLog)
 			}
 		})
 	}
 
 	forged := relationshipRequest(secret, "member", "recruiter", "contacts", "", "member@example.com", now)
 	forged.Header.Set(HdrCircle, "owner")
+	forgedAlias := relationshipRequest(secret, "signed-in", "", "", "0123456789abcdef0123456789abcdef", "", now)
+	forgedAlias.Header.Set(HdrVisitor, "fedcba9876543210fedcba9876543210")
 	stale := relationshipRequest(secret, "member", "recruiter", "contacts", "", "member@example.com", now-120)
 	unsigned := relationshipRequest(secret, "member", "recruiter", "contacts", "", "member@example.com", now)
 	unsigned.Header.Del(HdrRelationshipSig)
-	for name, req := range map[string]*http.Request{"forged circle": forged, "stale timestamp": stale, "unsigned": unsigned} {
+	unknown := relationshipRequest(secret, "user", "", "", "0123456789abcdef0123456789abcdef", "", now)
+	for name, req := range map[string]*http.Request{
+		"forged circle":   forged,
+		"forged alias":    forgedAlias,
+		"stale timestamp": stale,
+		"unsigned":        unsigned,
+		"unknown kind":    unknown,
+	} {
 		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(old) })
+
 			if got, ok := VerifyRelationship(req, []byte(secret)); ok || !reflect.DeepEqual(got, Relationship{}) {
 				t.Fatalf("VerifyRelationship = (%+v, %v), want zero relationship and false", got, ok)
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("failed verification must not log alias warning, got %q", buf.String())
 			}
 		})
 	}

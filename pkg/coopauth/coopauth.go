@@ -20,6 +20,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -37,7 +38,7 @@ const (
 	HdrRemoteUser      = "Remote-User"   // cloud-vouched OAuth email
 	HdrRemoteEmail     = "Remote-Email"  // same identity, explicit email header
 	HdrRemoteName      = "Remote-Name"   // display name
-	HdrRemoteGroups    = "Remote-Groups" // "admin" | "user" — cloud tier, NOT app RBAC
+	HdrRemoteGroups    = "Remote-Groups" // "admin" | "user" — OS elevation on the host, NOT app RBAC or relationship
 	HdrIdentityTs      = "X-Outpost-Identity-Ts"
 	HdrIdentitySig     = "X-Outpost-Identity-Sig"
 	HdrRelationship    = "X-Outpost-Relationship"
@@ -53,29 +54,42 @@ const (
 	RoleUser  = "user"
 )
 
+// Relationship kinds stamped in X-Outpost-Relationship.
+// The legacy wire value "signed-in" is accepted as a logged alias of RelAccount
+// for one release window.
+const (
+	RelOwner   = "owner"
+	RelMember  = "member"
+	RelAccount = "account"
+
+	relSignedInAlias = "signed-in"
+)
+
 // clockSkew is the accepted signature age, matching the window outpost enforces.
 const clockSkew = 60 * time.Second
 
 // Identity is a resolved caller. User/Email/Name/Groups come off the vouch;
 // Username is the sanitized, collision-free app-local name; Role is the app's
 // verdict (admin|user) after applying the Policy.
+// Groups carries Remote-Groups ("admin" | "user"), which is OS elevation on the
+// host (mirroring X-Periscope-Role), never the caller's relationship to the owner.
 type Identity struct {
 	User     string // email (Remote-User / Remote-Email) — the canonical identity
 	Email    string // real address (may differ from User only in exotic setups)
 	Name     string // display name
-	Groups   string // cloud tier: "admin" | "user" | "" — advisory only
+	Groups   string // OS elevation on the host: "admin" | "user" | "" — advisory only, never the relationship
 	Username string // Username(User): valid, collision-free app username
 	Role     string // RoleAdmin | RoleUser — the APP's decision (Policy)
 	Loopback bool   // arrived on loopback (the on-host owner)
 }
 
 // Relationship is the host owner's signed relationship to a cloud caller.
-// Groups are the owner's groups for a member, not the cloud tier in Identity.
+// Groups are the owner's groups for a member, not the OS elevation in Identity.
 type Relationship struct {
-	Kind    string // "owner" | "member" | "signed-in"
+	Kind    string // "owner" | "member" | "account"
 	Circle  string
 	Groups  []string
-	Visitor string // app-scoped pseudonym for a signed-in non-member
+	Visitor string // app-scoped pseudonym for a logged-in account holder who is not a member
 }
 
 // Authenticated reports whether a caller was established at all.
@@ -252,13 +266,15 @@ func VerifyOutpost(r *http.Request, secret []byte) bool {
 
 // VerifyRelationship verifies outpost's version-2 relationship stamp. It does
 // not infer a relationship from the unsigned headers or from Identity.
+// The legacy wire value "signed-in" is accepted as a logged alias of "account"
+// for one release window and normalized to Relationship{Kind: RelAccount}.
 func VerifyRelationship(r *http.Request, secret []byte) (Relationship, bool) {
 	var zero Relationship
 	if len(secret) == 0 {
 		return zero, false
 	}
 	kind := r.Header.Get(HdrRelationship)
-	if kind != "owner" && kind != "member" && kind != "signed-in" {
+	if kind != RelOwner && kind != RelMember && kind != RelAccount && kind != relSignedInAlias {
 		return zero, false
 	}
 	prefix := r.Header.Get(HdrForwardedPrefix)
@@ -285,7 +301,12 @@ func VerifyRelationship(r *http.Request, secret []byte) (Relationship, bool) {
 	if err != nil || !hmac.Equal(got, mac.Sum(nil)) {
 		return zero, false
 	}
-	rel := Relationship{Kind: kind, Circle: circle, Visitor: visitor}
+	canonicalKind := kind
+	if kind == relSignedInAlias {
+		slog.Warn("coopauth: deprecated relationship wire value accepted as alias", "wire", kind, "canonical", RelAccount)
+		canonicalKind = RelAccount
+	}
+	rel := Relationship{Kind: canonicalKind, Circle: circle, Visitor: visitor}
 	if groups != "" {
 		rel.Groups = strings.Split(groups, ",")
 	}
