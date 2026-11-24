@@ -3,18 +3,20 @@ package webconsole
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	core "github.com/qiangli/yoke/pkg/shape"
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 )
 
 // LocalIncidentReport is the same bounded report accepted by the console.
 type LocalIncidentReport = incidentReport
 
 func localShaped(app core.App, opts core.Options) *shapedApp {
-	return &shapedApp{name: app.Name, repo: app.SourceDir, shaping: app.Shaping, releasePath: app.ReleasePath, releaseRevision: app.ReleaseRevision, protected: app.Protected, seed: app.Seed, opts: ShapeOptions{Home: opts.Home, WorkRoot: opts.WorkRoot, ProgramRunner: opts.ProgramRunner, ServiceRuntime: opts.ServiceRuntime, Track: opts.Track, Delegate: opts.Delegate, Verifier: opts.Verifier, Activator: opts.Activator}}
+	return &shapedApp{name: app.Name, repo: app.SourceDir, shaping: app.Shaping, scopes: app.Scopes, owner: app.Owner, releasePath: app.ReleasePath, releaseRevision: app.ReleaseRevision, protected: app.Protected, seed: app.Seed, opts: ShapeOptions{Home: opts.Home, WorkRoot: opts.WorkRoot, Owner: app.Owner, Scopes: app.Scopes, ProgramRunner: opts.ProgramRunner, ServiceRuntime: opts.ServiceRuntime, Track: opts.Track, Delegate: opts.Delegate, Verifier: opts.Verifier, Activator: opts.Activator}}
 }
 
 // LocalShapeSuggest uses the console's version/config suggestion resolver directly.
@@ -115,13 +117,37 @@ func LocalShapeWish(ctx context.Context, app core.App, caller core.Caller, opts 
 	a.opts.TrackingRoot = w.TrackingRoot
 	a.opts.Actor = caller.Actor
 	a.opts.RepresentedUser = caller.RepresentedUser
+	a.opts.Tier = caller.Tier
+	a.opts.Circle = caller.Circle
+	a.opts.Groups = append([]string(nil), caller.Groups...)
+	a.opts.Email = caller.Email
 	s := &server{opts: Options{Ctx: ctx, Shape: a.opts}, liveRegistered: true}
-	c, e := s.startCandidate(a, caller.Principal, wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: true})
+	svc := a.candidateService()
+	if svc.Kind() == "web" && svc.Owner() != "" {
+		p, tier := strings.TrimSpace(caller.Principal), strings.TrimSpace(caller.Tier)
+		if p == "anonymous" || tier == "anonymous" || tier == "account" || tier == "signed-in" || strings.HasPrefix(p, "visitor:") {
+			return core.Candidate{}, fmt.Errorf("%w: caller %s is not authorized to shape %s", core.ErrUnauthorized, caller.Principal, app.Name)
+		}
+		ok, err := svc.AdmitsScope(caller, appserver.ScopeShape)
+		if err != nil {
+			return core.Candidate{}, err
+		}
+		if !ok {
+			c, e := s.fileRequest(a, caller.Principal, wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: false})
+			if e != nil {
+				return core.Candidate{}, e
+			}
+			s.shapes.wg.Wait()
+			return svc.Show(ctx, caller, c.ID)
+		}
+	}
+	isOperator := svc.Owner() == "" || strings.EqualFold(strings.TrimSpace(caller.Principal), svc.Owner())
+	c, e := s.startCandidate(a, caller.Principal, wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: isOperator})
 	if e != nil {
 		return core.Candidate{}, e
 	}
 	s.shapes.wg.Wait()
-	out, e := a.candidateService().Show(ctx, a.caller(c.Principal), c.ID)
+	out, e := svc.Show(ctx, a.caller(c.Principal), c.ID)
 	if e != nil {
 		return out, e
 	}

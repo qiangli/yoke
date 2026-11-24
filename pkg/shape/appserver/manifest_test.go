@@ -95,3 +95,63 @@ func TestParseGenieVoice(t *testing.T) {
 		t.Error(`Parse({"genie": {"voice": "yes"}}) accepted; the key is a boolean`)
 	}
 }
+
+func TestParseScopes(t *testing.T) {
+	m, err := Parse([]byte(`{
+		"scopes": {
+			"edit": {"circles": [" company ", "company"], "groups": ["support"]},
+			"shape": {"circles": ["contractor"], "groups": ["support"], "emails": [" C@Example.Test "]}
+		}
+	}`))
+	if err != nil || m.Scopes == nil {
+		t.Fatalf("Parse scopes = %+v, %v", m, err)
+	}
+	if !reflect.DeepEqual(m.Scopes.Edit.Circles, []string{"company"}) || !reflect.DeepEqual(m.Scopes.Edit.Groups, []string{"support"}) {
+		t.Fatalf("edit scope = %+v", m.Scopes.Edit)
+	}
+	if !reflect.DeepEqual(m.Scopes.Shape.Emails, []string{"c@example.test"}) {
+		t.Fatalf("shape emails = %+v", m.Scopes.Shape.Emails)
+	}
+
+	// A (company / support) gets edit only; C (contractor / support) gets shape (and edit);
+	// a support member in another circle gets neither.
+	if got := m.Scopes.MemberScope("company", []string{"support"}, "a@example.test"); got != ScopeEdit {
+		t.Fatalf("A MemberScope = %q, want edit", got)
+	}
+	if m.Scopes.AdmitsMember(ScopeShape, "company", []string{"support"}, "a@example.test") {
+		t.Fatal("A admitted to shape")
+	}
+	if !m.Scopes.AdmitsMember(ScopeEdit, "company", []string{"support"}, "a@example.test") {
+		t.Fatal("A refused edit")
+	}
+	if got := m.Scopes.MemberScope("contractor", []string{"support"}, "other@example.test"); got != ScopeShape {
+		t.Fatalf("C MemberScope = %q, want shape", got)
+	}
+	if !m.Scopes.AdmitsMember(ScopeShape, "contractor", nil, "c@example.test") {
+		t.Fatal("C email in contractor circle should match circles AND (groups OR emails)")
+	}
+	if m.Scopes.AdmitsMember(ScopeEdit, "guest", []string{"support"}, "m@example.test") {
+		t.Fatal("wrong circle admitted")
+	}
+	if empty, err := Parse([]byte(`{"scopes": {}}`)); err != nil || !empty.Scopes.Empty() {
+		t.Fatalf("empty scopes = %+v, %v", empty.Scopes, err)
+	}
+
+	for _, bad := range []string{
+		`{"scopes": {"view": {"groups": ["support"]}}}`,
+		`{"scopes": {"admin": {"groups": ["support"]}}}`,
+		`{"scopes": {"team": {"circles": ["company"]}}}`,
+		`{"scopes": {"shape": {"signed_in": true}}}`,
+		`{"scopes": {"shape": {"users": ["c@example.test"]}}}`,
+		`{"scopes": {"shape": {"circles": [""]}}}`,
+		`{"scopes": {"shape": {"circles": ["bad circle"]}}}`,
+		`{"scopes": {"shape": {"groups": [""]}}}`,
+		`{"scopes": {"shape": {"groups": ["a,b"]}}}`,
+		`{"scopes": {"edit": {"emails": ["not-an-email"]}}}`,
+		`{"scopes": {"edit": {"emails": ["@example.test"]}}}`,
+	} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("Parse(%s) accepted", bad)
+		}
+	}
+}

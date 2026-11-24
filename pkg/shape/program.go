@@ -15,6 +15,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 	"github.com/qiangli/yoke/pkg/shape/evidence"
 	state "github.com/qiangli/yoke/pkg/shape/state"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
@@ -36,10 +37,28 @@ func (s Service) Scope() string {
 	return "host"
 }
 func (s Service) ActivationPrincipal(principal string) string {
-	if s.Kind() == "web" {
-		return principal
+	return s.ActivationPrincipalFor(Caller{Principal: principal})
+}
+
+// ActivationPrincipalFor resolves whose version line a caller's candidate
+// activates on. On an owner-hosted web app (App.Owner != ""), the owner and
+// members matching the app's shaping scopes activate on the owner's line;
+// per-person versions remain unchanged everywhere else.
+func (s Service) ActivationPrincipalFor(c Caller) string {
+	if s.Kind() != "web" {
+		return HostPrincipal
 	}
-	return HostPrincipal
+	if owner := s.Owner(); owner != "" {
+		if s.isOwner(c) {
+			return owner
+		}
+		if !isStrangerCaller(c) {
+			if scopes, err := s.Scopes(); err == nil && (scopes.AdmitsMember(appserver.ScopeShape, c.Circle, c.Groups, callerEmail(c)) || scopes.AdmitsMember(appserver.ScopeEdit, c.Circle, c.Groups, callerEmail(c))) {
+				return owner
+			}
+		}
+	}
+	return c.Principal
 }
 func (s Service) Verifier() Verifier {
 	if s.Kind() == "web" {

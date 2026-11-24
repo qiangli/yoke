@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 	"github.com/qiangli/yoke/pkg/shape/evidence"
 	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 	"gopkg.in/yaml.v3"
@@ -78,11 +78,9 @@ func ReadSurface(dir string) (Surface, error) {
 			if rerr != nil {
 				return rerr
 			}
-			var m struct {
-				Properties []string `json:"properties"`
-			}
-			if jerr := json.Unmarshal(data, &m); jerr != nil {
-				return fmt.Errorf("shaped.json: %w", jerr)
+			m, jerr := appserver.Parse(data)
+			if jerr != nil {
+				return jerr
 			}
 			for _, prop := range m.Properties {
 				s[KindProperty+":"+prop] = true

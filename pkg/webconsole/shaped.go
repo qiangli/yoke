@@ -28,6 +28,7 @@ import (
 	_ "github.com/qiangli/yoke/git" // pure-Go file transport for local clones
 	"github.com/qiangli/yoke/pkg/fleet"
 	shapecore "github.com/qiangli/yoke/pkg/shape"
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 	"github.com/qiangli/yoke/pkg/shape/boundary"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	shape "github.com/qiangli/yoke/pkg/shape/state"
@@ -55,6 +56,12 @@ type ShapeOptions struct {
 	// Actor fields are supplied only by trusted local adapters, never request bodies.
 	Actor           string
 	RepresentedUser string
+	Owner           string
+	Scopes          *appserver.Scopes
+	Tier            string
+	Circle          string
+	Groups          []string
+	Email           string
 	TrackingRoot    string
 	// Home is the Bashy home holding per-principal state. Empty = shape.Home().
 	Home string
@@ -122,6 +129,8 @@ func (o ShapeOptions) runner() []string {
 // shapedApp is one shaped panel bound to its checkout.
 type shapedApp struct {
 	shaping                      *fleet.AppShaping
+	scopes                       *appserver.Scopes
+	owner                        string
 	releasePath, releaseRevision string
 	name                         string
 	repo                         string
@@ -148,7 +157,7 @@ type shapedApp struct {
 }
 
 func (s *server) shapedApp(p Panel) *shapedApp {
-	a := &shapedApp{name: p.Name, repo: p.ShapedSource, shaping: p.Shaping, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path), label: p.Label}
+	a := &shapedApp{name: p.Name, repo: p.ShapedSource, shaping: p.Shaping, scopes: s.opts.Shape.Scopes, owner: s.opts.Shape.Owner, opts: s.opts.Shape, calls: &s.calls, servers: &s.servers, mount: panelMount(p.Path), label: p.Label}
 	if p.Name == "bashy" && p.Shaping != nil && p.Shaping.Kind == "cli" {
 		a.releasePath = selfbin.Resolve("")
 		a.releaseRevision = src.ReleaseCommit()
@@ -172,7 +181,8 @@ func (a *shapedApp) store(principal string) (*shape.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return shape.OpenAt(home, a.name, a.candidateService().ActivationPrincipal(principal))
+	svc := a.candidateService()
+	return shape.OpenAt(home, a.name, svc.QueuePrincipal(svc.ActivationPrincipal(principal)))
 }
 
 func (a *shapedApp) open() (*gogit.Repository, error) {

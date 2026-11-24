@@ -62,6 +62,124 @@ type Manifest struct {
 	Properties []string `json:"properties,omitempty"`
 	// Genie places the common Genie button on this app's pages.
 	Genie *Genie `json:"genie,omitempty"`
+	// Scopes grants member audiences edit or shape rights on the owner's app.
+	Scopes *Scopes `json:"scopes,omitempty"`
+}
+
+// Scope names an owner may grant on a shared app. "view" is the existing
+// cloudbox share itself and is not stored as a shaping scope entry.
+const (
+	ScopeEdit  = "edit"
+	ScopeShape = "shape"
+)
+
+// ScopeNames lists the valid shaping scopes in shaped.json.
+var ScopeNames = []string{ScopeEdit, ScopeShape}
+
+// ValidScope reports whether name is a recognized shaping scope ("edit" or "shape").
+func ValidScope(name string) bool {
+	return name == ScopeEdit || name == ScopeShape
+}
+
+// Scopes maps each shaping scope to its member audience. Unknown scope names
+// are refused by Parse's DisallowUnknownFields.
+type Scopes struct {
+	Edit  *Audience `json:"edit,omitempty"`
+	Shape *Audience `json:"shape,omitempty"`
+}
+
+// Audience is the cloudbox member-audience grammar: circles AND (groups OR
+// emails). An empty audience admits no member — fail closed.
+type Audience struct {
+	Circles []string `json:"circles,omitempty"`
+	Groups  []string `json:"groups,omitempty"`
+	Emails  []string `json:"emails,omitempty"`
+}
+
+// Empty reports whether the audience names nothing.
+func (a *Audience) Empty() bool {
+	return a == nil || (len(a.Circles) == 0 && len(a.Groups) == 0 && len(a.Emails) == 0)
+}
+
+// AdmitsMember reports whether a verified member stamp (circle, groups, email)
+// matches this audience: circles AND (groups OR emails). An empty audience
+// admits nobody — fail closed.
+func (a *Audience) AdmitsMember(circle string, groups []string, email string) bool {
+	if a.Empty() {
+		return false
+	}
+	circle = strings.TrimSpace(circle)
+	email = strings.TrimSpace(email)
+	if len(a.Circles) > 0 && !slices.Contains(a.Circles, circle) {
+		return false
+	}
+	if len(a.Groups) == 0 && len(a.Emails) == 0 {
+		return true
+	}
+	for _, g := range groups {
+		if g = strings.TrimSpace(g); g != "" && slices.Contains(a.Groups, g) {
+			return true
+		}
+	}
+	if email == "" {
+		return false
+	}
+	return slices.ContainsFunc(a.Emails, func(e string) bool {
+		return strings.EqualFold(strings.TrimSpace(e), email)
+	})
+}
+
+// Empty reports whether no scope grants any audience.
+func (s *Scopes) Empty() bool {
+	return s == nil || (s.Edit.Empty() && s.Shape.Empty())
+}
+
+// AudienceFor returns the audience configured for scope ("edit" or "shape"),
+// or an error for an unknown scope name.
+func (s *Scopes) AudienceFor(scope string) (*Audience, error) {
+	switch scope {
+	case ScopeEdit:
+		if s == nil {
+			return nil, nil
+		}
+		return s.Edit, nil
+	case ScopeShape:
+		if s == nil {
+			return nil, nil
+		}
+		return s.Shape, nil
+	default:
+		return nil, fmt.Errorf("%s: unknown scope %q (want %s or %s)", File, scope, ScopeEdit, ScopeShape)
+	}
+}
+
+// MemberScope returns the highest shaping scope ("shape", "edit", or "")
+// granted to a verified member stamp.
+func (s *Scopes) MemberScope(circle string, groups []string, email string) string {
+	if s == nil {
+		return ""
+	}
+	if s.Shape.AdmitsMember(circle, groups, email) {
+		return ScopeShape
+	}
+	if s.Edit.AdmitsMember(circle, groups, email) {
+		return ScopeEdit
+	}
+	return ""
+}
+
+// AdmitsMember reports whether a verified member stamp holds at least scope
+// ("edit" or "shape"). "shape" includes "edit".
+func (s *Scopes) AdmitsMember(scope, circle string, groups []string, email string) bool {
+	got := s.MemberScope(circle, groups, email)
+	switch scope {
+	case ScopeShape:
+		return got == ScopeShape
+	case ScopeEdit:
+		return got == ScopeEdit || got == ScopeShape
+	default:
+		return false
+	}
 }
 
 // Genie is the app's placement of the protected Genie button.
@@ -214,6 +332,14 @@ func Parse(b []byte) (Manifest, error) {
 			m.Genie.Examples[i] = e
 		}
 	}
+	if m.Scopes != nil {
+		if err := cleanAudience(ScopeEdit, m.Scopes.Edit); err != nil {
+			return Manifest{}, err
+		}
+		if err := cleanAudience(ScopeShape, m.Scopes.Shape); err != nil {
+			return Manifest{}, err
+		}
+	}
 	if m.Server == nil {
 		return m, nil
 	}
@@ -232,6 +358,47 @@ func Parse(b []byte) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("%s: server.args must pass $ADDR or $PORT so the server listens where the console proxies", File)
 	}
 	return m, nil
+}
+
+func cleanAudience(scope string, a *Audience) error {
+	if a == nil {
+		return nil
+	}
+	circles := make([]string, 0, len(a.Circles))
+	for i, c := range a.Circles {
+		c = strings.TrimSpace(c)
+		if c == "" || strings.ContainsAny(c, " \t\r\n,<>") {
+			return fmt.Errorf("%s: scopes.%s.circles[%d] must be a non-empty circle name", File, scope, i)
+		}
+		if !slices.Contains(circles, c) {
+			circles = append(circles, c)
+		}
+	}
+	a.Circles = circles
+	groups := make([]string, 0, len(a.Groups))
+	for i, g := range a.Groups {
+		g = strings.TrimSpace(g)
+		if g == "" || strings.ContainsAny(g, ",\r\n<>") {
+			return fmt.Errorf("%s: scopes.%s.groups[%d] must be a non-empty group name", File, scope, i)
+		}
+		if !slices.Contains(groups, g) {
+			groups = append(groups, g)
+		}
+	}
+	a.Groups = groups
+	emails := make([]string, 0, len(a.Emails))
+	for i, e := range a.Emails {
+		e = strings.ToLower(strings.TrimSpace(e))
+		local, domain, ok := strings.Cut(e, "@")
+		if !ok || local == "" || domain == "" || strings.ContainsAny(e, " \t\r\n,<>") {
+			return fmt.Errorf("%s: scopes.%s.emails[%d] %q must be a valid email address", File, scope, i, e)
+		}
+		if !slices.Contains(emails, e) {
+			emails = append(emails, e)
+		}
+	}
+	a.Emails = emails
+	return nil
 }
 
 func cleanMain(m string) (string, error) {

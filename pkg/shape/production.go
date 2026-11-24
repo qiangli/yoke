@@ -132,6 +132,7 @@ type Activator interface {
 type ActivateRequest struct {
 	App          string
 	Principal    string
+	Author       string
 	SourceDir    string
 	CandidateDir string
 	BaseRev      string
@@ -226,6 +227,6 @@ func (a *ProductionActivator) Activate(ctx context.Context, req ActivateRequest)
 	if gate == nil {
 		gate = shapegate.New(home, req.Evidence)
 	}
-	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{PreSwitchHook: a.beforeActivate, ExpectedBase: req.BaseRev, Gate: gate, Request: req.Request, Trigger: req.Trigger})
+	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{PreSwitchHook: a.beforeActivate, ExpectedBase: req.BaseRev, Gate: gate, Request: req.Request, Trigger: req.Trigger, Author: req.Author})
 	return err
 }

@@ -188,6 +188,10 @@ func walkLine(r *gogit.Repository, tip string, released map[string]string) []Ver
 				version = pseudoVersion(rc)
 			}
 		}
+		author := commitTrailer(c.Message, "Author")
+		if author == "" {
+			author = c.Author.Name
+		}
 		out = append(out, VersionEntry{
 			Activation: c.Hash.String(),
 			Revision:   revision,
@@ -198,7 +202,7 @@ func walkLine(r *gogit.Repository, tip string, released map[string]string) []Ver
 			Evidence:   commitTrailer(c.Message, "Evidence"),
 			Trigger:    commitTrailer(c.Message, "Trigger"),
 			Principal:  commitTrailer(c.Message, "Principal"),
-			Author:     c.Author.Name,
+			Author:     author,
 			When:       c.Author.When,
 		})
 		if c.NumParents() == 0 {

@@ -28,6 +28,7 @@ import (
 
 	"github.com/qiangli/yoke/pkg/coopauth"
 	shapecore "github.com/qiangli/yoke/pkg/shape"
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 )
 
@@ -191,7 +192,25 @@ func (a *shapedApp) candidatesDir(principal string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, a.name, principalKey(principal)), nil
+	return filepath.Join(root, a.name, principalKey(a.candidateService().QueuePrincipal(principal))), nil
+}
+
+func (a *shapedApp) canAccessCandidate(principal string, c Candidate) bool {
+	if c.App != a.name {
+		return false
+	}
+	if c.Principal == principal {
+		return true
+	}
+	if a.candidateService().Kind() == "web" {
+		if owner := strings.TrimSpace(a.owner); owner != "" && strings.EqualFold(strings.TrimSpace(principal), owner) {
+			return true
+		}
+		if c.ActivationPrincipal != "" && strings.EqualFold(strings.TrimSpace(principal), strings.TrimSpace(c.ActivationPrincipal)) {
+			return true
+		}
+	}
+	return false
 }
 
 func validCandidateID(id string) bool {
@@ -226,7 +245,7 @@ func (a *shapedApp) loadCandidate(principal, id string) (Candidate, string, erro
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Candidate{}, "", err
 	}
-	if c.Principal != principal || c.App != a.name {
+	if !a.canAccessCandidate(principal, c) {
 		return Candidate{}, "", fs.ErrNotExist
 	}
 	return c, dir, nil
@@ -346,15 +365,19 @@ func ShapingBrief(app, request string) string {
 
 // startCandidate records a candidate and runs the agent in the background.
 func (s *server) startCandidate(a *shapedApp, principal string, w wish) (Candidate, error) {
+	return s.startCandidateFor(a, a.caller(principal), w)
+}
+
+func (s *server) startCandidateFor(a *shapedApp, caller shapecore.Caller, w wish) (Candidate, error) {
 	if a.opts.Delegate == nil {
 		return Candidate{}, errors.New("no shaping agent is configured on this console")
 	}
-	v, e := a.candidateService().Begin(s.opts.Ctx, a.caller(principal), shapecore.Wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: a.opts.TrackingRoot})
+	v, e := a.candidateService().Begin(s.opts.Ctx, caller, shapecore.Wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: a.opts.TrackingRoot})
 	if e != nil {
 		return Candidate{}, e
 	}
 	c := webCandidate(v)
-	dir, e := a.candidateDir(principal, c.ID)
+	dir, e := a.candidateDir(caller.Principal, c.ID)
 	if e != nil {
 		return c, e
 	}
@@ -463,8 +486,9 @@ func (a *shapedApp) recordWish(principal string, w wish, status, kind string) (C
 	if _, err := rand.Read(idb[:]); err != nil {
 		return Candidate{}, "", err
 	}
+	svc := a.candidateService()
 	c := Candidate{
-		ID: hex.EncodeToString(idb[:]), App: a.name, Principal: principal, Actor: a.caller(principal).Actor, RepresentedUser: a.caller(principal).RepresentedUser, Story: w.Story, Todo: w.Todo, TrackingRoot: a.opts.TrackingRoot, AppKind: "web", Scope: "principal", Request: w.Request,
+		ID: hex.EncodeToString(idb[:]), App: a.name, Principal: principal, Actor: a.caller(principal).Actor, RepresentedUser: a.caller(principal).RepresentedUser, ActivationPrincipal: svc.QueuePrincipal(principal), Story: w.Story, Todo: w.Todo, TrackingRoot: a.opts.TrackingRoot, AppKind: "web", Scope: "principal", Request: w.Request,
 		Page: w.Page, Element: w.Element, Kind: kind, Status: status, Created: time.Now().UTC(),
 	}
 	if track := shapeTracking(a.opts); track != nil {
@@ -697,6 +721,32 @@ func (s *server) handleShapeState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) requestShapeCaller(a *shapedApp, r *http.Request, principal string) shapecore.Caller {
+	c := a.caller(principal)
+	if r == nil || !coopauth.ArrivedViaCloud(r) {
+		return c
+	}
+	var secrets [][]byte
+	if s.guard != nil && len(s.guard.Secret) > 0 {
+		secrets = append(secrets, s.guard.Secret)
+	}
+	if t, ok := loadOutpostTrust(s.cloudApp()); ok && len(t.ssoSecret) > 0 {
+		secrets = append(secrets, t.ssoSecret)
+	}
+	for _, secret := range secrets {
+		if rel, ok := coopauth.VerifyRelationship(r, secret); ok {
+			c.Tier = rel.Kind
+			c.Circle = rel.Circle
+			c.Groups = rel.Groups
+			return c
+		}
+	}
+	if c.Tier == "" && !strings.EqualFold(strings.TrimSpace(principal), strings.TrimSpace(a.owner)) {
+		c.Tier = "signed-in"
+	}
+	return c
+}
+
 func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	a, principal, ok := s.shapeCaller(w, r)
 	if !ok {
@@ -706,8 +756,10 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if a.candidateService().Kind() != "web" {
-		c, e := a.candidateService().Wish(r.Context(), a.caller(principal), shapecore.Wish{Request: in.Request, Page: in.Page, Element: in.Element, Story: in.Story, Todo: in.Todo})
+	svc := a.candidateService()
+	reqCaller := s.requestShapeCaller(a, r, principal)
+	if svc.Kind() != "web" {
+		c, e := svc.Wish(r.Context(), reqCaller, shapecore.Wish{Request: in.Request, Page: in.Page, Element: in.Element, Story: in.Story, Todo: in.Todo})
 		if e != nil {
 			http.Error(w, e.Error(), http.StatusConflict)
 			return
@@ -719,6 +771,30 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	if (in.Story != "" || in.Todo != "") && !in.operator {
 		http.Error(w, "linking a story or todo requires an operator session", http.StatusForbidden)
 		return
+	}
+	if svc.Owner() != "" {
+		if reqCaller.Tier == "anonymous" || reqCaller.Tier == "account" || reqCaller.Tier == "signed-in" || strings.HasPrefix(strings.TrimSpace(principal), "visitor:") {
+			http.Error(w, "shaping requires the owner or a scoped member", http.StatusForbidden)
+			return
+		}
+		okScope, err := svc.AdmitsScope(reqCaller, appserver.ScopeShape)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if !okScope {
+			in.operator = false
+			c, err := s.fileRequest(a, principal, in)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, c)
+			return
+		}
+		if !strings.EqualFold(strings.TrimSpace(principal), svc.Owner()) {
+			in.operator = false
+		}
 	}
 	if in.Protected {
 		// A wish from a protected page (the common Genie button says which):
@@ -732,8 +808,12 @@ func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, c)
 		return
 	}
-	c, err := s.startCandidate(a, principal, in)
+	c, err := s.startCandidateFor(a, reqCaller, in)
 	if err != nil {
+		if errors.Is(err, shapecore.ErrUnauthorized) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -900,8 +980,13 @@ func (s *server) handleShapeApprove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, e := a.candidateService().Approve(r.Context(), a.caller(c.Principal), c.ID)
+	callerPrincipal, _ := PrincipalFromRequest(r)
+	v, e := a.candidateService().Approve(r.Context(), a.caller(callerPrincipal), c.ID)
 	if e != nil {
+		if errors.Is(e, shapecore.ErrUnauthorized) {
+			http.Error(w, e.Error(), http.StatusForbidden)
+			return
+		}
 		if errors.Is(e, shapecore.ErrVerification) {
 			writeJSON(w, http.StatusConflict, webCandidate(v))
 		} else {
@@ -916,7 +1001,8 @@ func (s *server) handleShapeReject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, e := a.candidateService().Reject(r.Context(), a.caller(c.Principal), c.ID)
+	callerPrincipal, _ := PrincipalFromRequest(r)
+	v, e := a.candidateService().Reject(r.Context(), a.caller(callerPrincipal), c.ID)
 	if e != nil {
 		http.Error(w, "reject: "+e.Error(), http.StatusConflict)
 		return
@@ -982,7 +1068,11 @@ func (s *server) handleShapePreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "candidate unavailable", http.StatusInternalServerError)
 		return
 	}
-	data, err := a.previewData(c.Principal, c.ID)
+	previewPrincipal := c.Principal
+	if c.ActivationPrincipal != "" && a.candidateService().Kind() == "web" {
+		previewPrincipal = c.ActivationPrincipal
+	}
+	data, err := a.previewData(previewPrincipal, c.ID)
 	if err != nil {
 		http.Error(w, "preview data unavailable", http.StatusServiceUnavailable)
 		return

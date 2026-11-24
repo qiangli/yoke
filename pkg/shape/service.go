@@ -19,25 +19,40 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/yoke/pkg/fleet"
+	"github.com/qiangli/yoke/pkg/shape/appserver"
 	state "github.com/qiangli/yoke/pkg/shape/state"
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 )
 
 const (
-	Running  = "running"
-	Ready    = "ready"
-	Verified = "verified"
-	Approved = "approved"
-	Rejected = "rejected"
-	Failed   = "failed"
+	Running   = "running"
+	Ready     = "ready"
+	Verified  = "verified"
+	Approved  = "approved"
+	Rejected  = "rejected"
+	Failed    = "failed"
+	Requested = "requested"
+
+	KindRequest = "request"
 )
 
 var ErrConflict = errors.New("shape: conflicting candidate state")
 var ErrVerification = errors.New("shape: verification failed")
+var ErrUnauthorized = errors.New("shape: caller is not authorized")
 
-type Caller struct{ Principal, Actor, RepresentedUser string }
+type Caller struct {
+	Principal       string
+	Actor           string
+	RepresentedUser string
+	Tier            string
+	Circle          string
+	Groups          []string
+	Email           string
+}
 type App struct {
 	Shaping         *fleet.AppShaping
+	Scopes          *appserver.Scopes
+	Owner           string
 	ReleasePath     string
 	ReleaseRevision string
 	Name, SourceDir string
@@ -157,12 +172,143 @@ func (s Service) validate(c Caller) error {
 	}
 	return nil
 }
+func (s Service) Owner() string { return strings.TrimSpace(s.App.Owner) }
+
+func (s Service) QueuePrincipal(p string) string {
+	if s.Kind() == "web" && s.Owner() != "" {
+		return s.Owner()
+	}
+	return p
+}
+
+func (s Service) candidateQueuePrincipal(c Candidate) string {
+	if s.Kind() == "web" && strings.TrimSpace(c.ActivationPrincipal) != "" {
+		return c.ActivationPrincipal
+	}
+	return s.QueuePrincipal(c.Principal)
+}
+
+func (s Service) candidateActivationPrincipal(c Candidate) string {
+	if s.Kind() != "web" {
+		return HostPrincipal
+	}
+	if strings.TrimSpace(c.ActivationPrincipal) != "" {
+		return c.ActivationPrincipal
+	}
+	return s.ActivationPrincipal(c.Principal)
+}
+
+func (s Service) isOwner(c Caller) bool {
+	owner := s.Owner()
+	return owner != "" && strings.EqualFold(strings.TrimSpace(c.Principal), owner)
+}
+
+func isStrangerCaller(c Caller) bool {
+	p := strings.TrimSpace(c.Principal)
+	t := strings.TrimSpace(c.Tier)
+	return p == "" || p == "anonymous" || t == "anonymous" || t == "account" || t == "signed-in" || strings.HasPrefix(p, "visitor:")
+}
+
+func callerEmail(c Caller) string {
+	if e := strings.TrimSpace(c.Email); e != "" {
+		return e
+	}
+	return strings.TrimPrefix(strings.TrimSpace(c.Principal), "cloud:")
+}
+
+func (s Service) Scopes() (*appserver.Scopes, error) {
+	if s.App.Scopes != nil {
+		return s.App.Scopes, nil
+	}
+	if s.App.SourceDir == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(filepath.Join(s.App.SourceDir, appserver.File))
+	if err == nil {
+		m, perr := appserver.Parse(b)
+		if perr != nil {
+			return nil, perr
+		}
+		return m.Scopes, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	r, err := gogit.PlainOpen(s.App.SourceDir)
+	if err != nil {
+		return nil, nil
+	}
+	head, err := r.Head()
+	if err != nil {
+		return nil, nil
+	}
+	commit, err := r.CommitObject(head.Hash())
+	if err != nil {
+		return nil, nil
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, nil
+	}
+	f, err := tree.File(appserver.File)
+	if err != nil {
+		return nil, nil
+	}
+	body, err := f.Contents()
+	if err != nil {
+		return nil, err
+	}
+	m, err := appserver.Parse([]byte(body))
+	if err != nil {
+		return nil, err
+	}
+	return m.Scopes, nil
+}
+
+func (s Service) AdmitsScope(c Caller, scope string) (bool, error) {
+	if !appserver.ValidScope(scope) {
+		return false, fmt.Errorf("shape: unknown scope %q", scope)
+	}
+	if s.Owner() == "" {
+		return true, nil
+	}
+	if isStrangerCaller(c) {
+		return false, nil
+	}
+	if s.isOwner(c) {
+		return true, nil
+	}
+	scopes, err := s.Scopes()
+	if err != nil {
+		return false, err
+	}
+	return scopes.AdmitsMember(scope, c.Circle, c.Groups, callerEmail(c)), nil
+}
+
+func (s Service) canAccessCandidate(callerPrincipal string, c Candidate) bool {
+	if c.App != s.App.Name {
+		return false
+	}
+	if c.Principal == callerPrincipal {
+		return true
+	}
+	if s.Kind() == "web" {
+		if owner := s.Owner(); owner != "" && strings.EqualFold(strings.TrimSpace(callerPrincipal), owner) {
+			return true
+		}
+		if c.ActivationPrincipal != "" && strings.EqualFold(strings.TrimSpace(callerPrincipal), c.ActivationPrincipal) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s Service) CandidateDir(p, id string) (string, error) {
 	if !ValidID(id) {
 		return "", fs.ErrNotExist
 	}
 	r, e := s.root()
-	return filepath.Join(r, s.App.Name, PrincipalKey(p), id), e
+	return filepath.Join(r, s.App.Name, PrincipalKey(s.QueuePrincipal(p)), id), e
 }
 func (s Service) lock(c Caller) (*lockfile.Lock, error) {
 	if e := s.validate(c); e != nil {
@@ -172,7 +318,7 @@ func (s Service) lock(c Caller) (*lockfile.Lock, error) {
 	if e != nil {
 		return nil, e
 	}
-	return lockfile.AcquireWithin(filepath.Join(r, ".locks", s.App.Name+"-"+PrincipalKey(c.Principal)+".lock"), 30*time.Second, lockfile.Holder{Name: c.Actor, Intent: "shape candidate transition"})
+	return lockfile.AcquireWithin(filepath.Join(r, ".locks", s.App.Name+"-"+PrincipalKey(s.QueuePrincipal(c.Principal))+".lock"), 30*time.Second, lockfile.Holder{Name: c.Actor, Intent: "shape candidate transition"})
 }
 func SaveCandidate(dir string, c Candidate) error {
 	b, e := json.MarshalIndent(c, "", "  ")
@@ -215,15 +361,15 @@ func (s Service) load(p, id string) (Candidate, string, error) {
 	if e = json.Unmarshal(b, &c); e != nil {
 		return c, d, e
 	}
-	if c.App != s.App.Name || c.Principal != p {
+	if !s.canAccessCandidate(p, c) {
 		return Candidate{}, d, fs.ErrNotExist
 	}
 	// Older web candidates predate actor/represented-user metadata.
 	if c.Actor == "" {
-		c.Actor = p
+		c.Actor = c.Principal
 	}
 	if c.RepresentedUser == "" {
-		c.RepresentedUser = p
+		c.RepresentedUser = c.Principal
 	}
 	return c, d, nil
 }
@@ -279,7 +425,7 @@ func (s Service) Status(ctx context.Context, c Caller) (Status, error) {
 	if s.isBashy() {
 		return s.bashyStatus(ctx, c)
 	}
-	active, e := s.active(c.Principal)
+	active, e := s.active(s.QueuePrincipal(c.Principal))
 	if e != nil {
 		return Status{}, e
 	}
@@ -295,7 +441,7 @@ func (s Service) Status(ctx context.Context, c Caller) (Status, error) {
 	if e != nil {
 		return out, e
 	}
-	entries, e := os.ReadDir(filepath.Join(r, s.App.Name, PrincipalKey(c.Principal)))
+	entries, e := os.ReadDir(filepath.Join(r, s.App.Name, PrincipalKey(s.QueuePrincipal(c.Principal))))
 	if e != nil && !os.IsNotExist(e) {
 		return out, e
 	}
@@ -312,6 +458,18 @@ func (s Service) Begin(ctx context.Context, caller Caller, w Wish) (Candidate, e
 func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool) (Candidate, error) {
 	if s.isBashy() {
 		return s.bashyRecord(ctx, caller, w)
+	}
+	if s.Kind() == "web" && s.Owner() != "" {
+		if isStrangerCaller(caller) {
+			return Candidate{}, fmt.Errorf("%w: caller %s is not authorized to shape %s", ErrUnauthorized, caller.Principal, s.App.Name)
+		}
+		ok, err := s.AdmitsScope(caller, appserver.ScopeShape)
+		if err != nil {
+			return Candidate{}, err
+		}
+		if !ok {
+			return Candidate{}, fmt.Errorf("%w: caller %s lacks shape scope on %s", ErrUnauthorized, caller.Principal, s.App.Name)
+		}
 	}
 	if s.Kind() != "web" {
 		if e := s.RecoverProgram(ctx); e != nil {
@@ -338,7 +496,8 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if w.Story != "" && w.Todo != "" {
 		return Candidate{}, errors.New("shape: choose story or todo")
 	}
-	base, e := s.active(caller.Principal)
+	actPrincipal := s.ActivationPrincipalFor(caller)
+	base, e := s.active(actPrincipal)
 	if e != nil {
 		return Candidate{}, e
 	}
@@ -349,11 +508,14 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if _, e = rand.Read(id[:]); e != nil {
 		return Candidate{}, e
 	}
-	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: s.Kind(), Scope: s.Scope(), ActivationPrincipal: s.ActivationPrincipal(caller.Principal), Created: time.Now().UTC()}
+	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: s.Kind(), Scope: s.Scope(), ActivationPrincipal: actPrincipal, Created: time.Now().UTC()}
+	if c.Actor == "" {
+		c.Actor = c.Principal
+	}
 	if c.RepresentedUser == "" {
 		c.RepresentedUser = c.Principal
 	}
-	dir, e := s.CandidateDir(c.Principal, c.ID)
+	dir, e := s.CandidateDir(s.candidateQueuePrincipal(c), c.ID)
 	if e != nil {
 		return c, e
 	}
@@ -362,6 +524,71 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 		if e = s.Options.Track(ctx, &c); e != nil {
 			return c, e
 		}
+	}
+	if e = os.MkdirAll(dir, 0700); e != nil {
+		return c, e
+	}
+	return c, SaveCandidate(dir, c)
+}
+
+// FileRequest records an out-of-scope or protected wish as a request on the
+// owner's queue (or the caller's own queue when the app has no separate owner).
+// No workspace is created and no shaping agent runs.
+func (s Service) FileRequest(ctx context.Context, caller Caller, w Wish) (Candidate, error) {
+	if s.isBashy() {
+		return s.bashyRecord(ctx, caller, w)
+	}
+	if s.Owner() != "" && isStrangerCaller(caller) {
+		return Candidate{}, fmt.Errorf("%w: caller %s is not authorized to file a request on %s", ErrUnauthorized, caller.Principal, s.App.Name)
+	}
+	l, e := s.lock(caller)
+	if e != nil {
+		return Candidate{}, e
+	}
+	defer l.Release()
+	if strings.TrimSpace(w.Request) == "" {
+		return Candidate{}, errors.New("shape: request is required")
+	}
+	if w.Story != "" && w.Todo != "" {
+		return Candidate{}, errors.New("shape: choose story or todo")
+	}
+	var id [8]byte
+	if _, e = rand.Read(id[:]); e != nil {
+		return Candidate{}, e
+	}
+	c := Candidate{
+		ID:                  hex.EncodeToString(id[:]),
+		App:                 s.App.Name,
+		Principal:           caller.Principal,
+		Actor:               caller.Actor,
+		RepresentedUser:     caller.RepresentedUser,
+		ActivationPrincipal: s.QueuePrincipal(caller.Principal),
+		Request:             strings.TrimSpace(w.Request),
+		Page:                w.Page,
+		Element:             w.Element,
+		Story:               w.Story,
+		Todo:                w.Todo,
+		TrackingRoot:        w.TrackingRoot,
+		Kind:                KindRequest,
+		Status:              Requested,
+		AppKind:             s.Kind(),
+		Scope:               s.Scope(),
+		Created:             time.Now().UTC(),
+	}
+	if c.Actor == "" {
+		c.Actor = c.Principal
+	}
+	if c.RepresentedUser == "" {
+		c.RepresentedUser = c.Principal
+	}
+	if s.Options.Track != nil {
+		if e = s.Options.Track(ctx, &c); e != nil {
+			return c, e
+		}
+	}
+	dir, e := s.CandidateDir(s.candidateQueuePrincipal(c), c.ID)
+	if e != nil {
+		return c, e
 	}
 	if e = os.MkdirAll(dir, 0700); e != nil {
 		return c, e
@@ -377,7 +604,7 @@ func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runEr
 	now, d, e := s.load(c.Principal, c.ID)
 	if e != nil {
 		if os.IsNotExist(e) {
-			if dir, de := s.CandidateDir(c.Principal, c.ID); de == nil {
+			if dir, de := s.CandidateDir(s.candidateQueuePrincipal(c), c.ID); de == nil {
 				_ = os.RemoveAll(dir)
 			}
 		}
@@ -410,6 +637,18 @@ func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runEr
 func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, error) {
 	if s.isBashy() {
 		return s.bashyRecord(ctx, caller, w)
+	}
+	if s.Kind() == "web" && s.Owner() != "" {
+		if isStrangerCaller(caller) {
+			return Candidate{}, fmt.Errorf("%w: caller %s is not authorized to shape %s", ErrUnauthorized, caller.Principal, s.App.Name)
+		}
+		ok, err := s.AdmitsScope(caller, appserver.ScopeShape)
+		if err != nil {
+			return Candidate{}, err
+		}
+		if !ok {
+			return s.FileRequest(ctx, caller, w)
+		}
 	}
 	if s.Options.Delegate == nil {
 		return Candidate{}, errors.New("shape: no shaping agent configured")
@@ -457,7 +696,7 @@ func (s Service) Diff(ctx context.Context, caller Caller, id string) (string, er
 	if c.Rev == "" {
 		return "", ErrConflict
 	}
-	d, e := s.CandidateDir(c.Principal, c.ID)
+	d, e := s.CandidateDir(s.candidateQueuePrincipal(c), c.ID)
 	if e != nil {
 		return "", e
 	}
@@ -484,7 +723,7 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
 	if s.Verifier() == nil {
 		return errors.New("shape: no verifier configured")
 	}
-	v, e := s.Verifier().Verify(ctx, VerifyRequest{App: c.App, Principal: s.ActivationPrincipal(c.Principal), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(dir, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Agent: c.Agent})
+	v, e := s.Verifier().Verify(ctx, VerifyRequest{App: c.App, Principal: s.candidateActivationPrincipal(*c), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(dir, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Agent: c.Agent})
 	if e != nil {
 		return e
 	}
@@ -540,6 +779,10 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 	if e != nil {
 		return c, e
 	}
+	actPrincipal := s.candidateActivationPrincipal(c)
+	if s.Kind() == "web" && !strings.EqualFold(strings.TrimSpace(caller.Principal), strings.TrimSpace(actPrincipal)) {
+		return c, fmt.Errorf("%w: only %s may approve candidates for %s", ErrUnauthorized, actPrincipal, s.App.Name)
+	}
 	root, e := s.root()
 	if e != nil {
 		return c, e
@@ -554,7 +797,7 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 			return c, e
 		}
 	}
-	active, e := s.active(c.Principal)
+	active, e := s.active(actPrincipal)
 	if e != nil {
 		return c, e
 	}
@@ -567,12 +810,12 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 			return s.finishApproval(ctx, c, d)
 		}
 		if active != c.BaseRev {
-			return c, fmt.Errorf("%w: unresolved interrupted activation", ErrConflict)
+			return c, fmt.Errorf("%w: unresolved interrupted activation (base %s, active %s)", ErrConflict, c.BaseRev, active)
 		}
 		c.Status = Ready
 	}
 	if active != c.BaseRev {
-		return c, fmt.Errorf("%w: active revision changed; create a fresh candidate", ErrConflict)
+		return c, fmt.Errorf("%w: active revision changed (base %s, active %s); create a fresh candidate", ErrConflict, c.BaseRev, active)
 	}
 	if e = s.verify(ctx, &c, d); e != nil {
 		return c, e
@@ -597,12 +840,16 @@ func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candida
 		return c, e
 	}
 	if s.Kind() == "web" {
-		e = s.Options.Activator.Activate(ctx, ActivateRequest{App: c.App, Principal: s.ActivationPrincipal(c.Principal), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(d, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: message, Agent: c.Agent, Evidence: c.Verdict.Evidence})
+		author := c.RepresentedUser
+		if author == "" {
+			author = c.Principal
+		}
+		e = s.Options.Activator.Activate(ctx, ActivateRequest{App: c.App, Principal: actPrincipal, Author: author, SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(d, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: message, Agent: c.Agent, Evidence: c.Verdict.Evidence})
 	} else {
 		e = s.activateProgram(ctx, c)
 	}
 	if e != nil {
-		current, readErr := s.active(c.Principal)
+		current, readErr := s.active(actPrincipal)
 		if readErr == nil && current == c.Rev {
 			if s.Kind() != "web" {
 				if recoverErr := s.RecoverProgram(ctx); recoverErr != nil {
@@ -643,7 +890,8 @@ func (s Service) finishApproval(ctx context.Context, c Candidate, d string) (Can
 		_ = SaveCandidate(d, c)
 	}
 	// Keep the identity record outside disposable candidate directories.
-	ad, e := s.approvedDir(c.Principal, c.ID)
+	qp := s.candidateQueuePrincipal(c)
+	ad, e := s.approvedDir(qp, c.ID)
 	if e != nil {
 		return c, fmt.Errorf("shape: activated, but archive unavailable: %w", e)
 	}
@@ -658,7 +906,7 @@ func (s Service) finishApproval(ctx context.Context, c Candidate, d string) (Can
 			return c, fmt.Errorf("shape: activated, but tracking update failed: %w", e)
 		}
 	}
-	if e = s.remove(c.Principal, c.ID, d); e != nil {
+	if e = s.remove(qp, c.ID, d); e != nil {
 		return c, fmt.Errorf("shape: activated; disposable cleanup failed: %w", e)
 	}
 	return c, nil
@@ -677,7 +925,7 @@ func (s Service) Reject(ctx context.Context, caller Caller, id string) (Candidat
 	if c.Status == Approved || c.Status == "activating" {
 		return c, ErrConflict
 	}
-	if e = s.remove(c.Principal, c.ID, d); e != nil {
+	if e = s.remove(s.candidateQueuePrincipal(c), c.ID, d); e != nil {
 		return c, e
 	}
 	c.Status = Rejected
@@ -693,7 +941,7 @@ func (s Service) approvedDir(p, id string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	return filepath.Join(r, ".approved", s.App.Name, PrincipalKey(p), id), nil
+	return filepath.Join(r, ".approved", s.App.Name, PrincipalKey(s.QueuePrincipal(p)), id), nil
 }
 func (s Service) remove(p, id, dir string) error {
 	if s.isBashy() {
@@ -710,7 +958,7 @@ func (s Service) remove(p, id, dir string) error {
 	if e != nil {
 		return e
 	}
-	if st, e := state.OpenAt(home, s.App.Name, s.ActivationPrincipal(p)); e == nil {
+	if st, e := state.OpenAt(home, s.App.Name, s.QueuePrincipal(s.ActivationPrincipal(p))); e == nil {
 		if e = os.RemoveAll(filepath.Join(st.Dir(), "preview", id)); e != nil {
 			return e
 		}

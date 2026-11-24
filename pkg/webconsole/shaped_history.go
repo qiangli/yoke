@@ -183,7 +183,8 @@ func (s *server) historyFor(w http.ResponseWriter, r *http.Request) (*shapedApp,
 		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return nil, "", "", src.VersionHistory{}, false
 	}
-	h, err := src.History(home, a.name, a.candidateService().ActivationPrincipal(principal))
+	svc := a.candidateService()
+	h, err := src.History(home, a.name, svc.QueuePrincipal(svc.ActivationPrincipal(principal)))
 	if err != nil {
 		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return nil, "", "", src.VersionHistory{}, false

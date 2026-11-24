@@ -266,6 +266,7 @@ type ActivateOptions struct {
 	PreSwitchHook func() error
 	Request       string
 	Trigger       string // incident ID for a verified repair
+	Author        string // version author when distinct from Principal (a scoped member)
 	When          time.Time
 }
 
@@ -278,6 +279,7 @@ func oneLineRequest(s string) string { return strings.Join(strings.Fields(s), " 
 type ActivateResult struct {
 	App        string
 	Principal  string
+	Author     string
 	Revision   string
 	Activation string
 	Previous   string
@@ -380,8 +382,15 @@ func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (A
 	if reqText == "" {
 		reqText = revSHA
 	}
+	author := strings.TrimSpace(opts.Author)
+	if author == "" {
+		author = principal
+	}
 	msg := fmt.Sprintf("Activate %s %s for %s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
 		app, shortSHA(revSHA), principal, revSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
+	if author != principal {
+		msg += "Author: " + oneLineRequest(author) + "\n"
+	}
 	if opts.Trigger != "" {
 		msg += "Trigger: " + oneLineRequest(opts.Trigger) + "\n"
 	}
@@ -389,7 +398,7 @@ func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (A
 	// parent. Its tree is what state.ActiveRevision names and what the next
 	// shaping request clones; the first parent remains the linear audit line.
 	activation, err := recordLineCommit(dir, plumbing.NewHash(lineParent), candidate.TreeHash, msg,
-		principal, "bashy@localhost", opts.When, candidate.Hash)
+		author, "bashy@localhost", opts.When, candidate.Hash)
 	if err != nil {
 		return out, err
 	}
@@ -407,7 +416,7 @@ func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (A
 	if previous == "" {
 		previous = gateBase
 	}
-	out = ActivateResult{App: app, Principal: principal, Revision: revSHA, Activation: activation, Previous: previous}
+	out = ActivateResult{App: app, Principal: principal, Author: author, Revision: revSHA, Activation: activation, Previous: previous}
 	if previous != "" && previous != revSHA {
 		st.LastKnownGood = previous
 	}
