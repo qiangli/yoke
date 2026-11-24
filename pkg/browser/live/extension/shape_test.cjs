@@ -97,6 +97,7 @@ function loadBackground(opts = {}) {
     windows: { update: async (id, p) => { focused.push(["window", id, p]); return {}; } },
     scripting: { executeScript: async (c) => {
       scripted.push(c);
+      if (state.holdRemoval && c.func.name === "paintBanner" && !c.args[0]) await new Promise((r) => state.holdRemoval.push(r));
       if (state.failScript && c.func.name !== "paintBanner") throw new Error("page action failed");
       return [{}];
     } },
@@ -708,6 +709,60 @@ test("a restarted worker removes orphan banners from stored tab ids and restores
   const ws2 = await after.connect();
   assert.deepEqual(await routesOf(after), []);
   assert.equal(ws2.sent.length, 0);
+});
+
+const settle = async () => { for (let i = 0; i < 8; i++) await tick(); };
+
+test("an interrupted clear keeps stored ids; the next worker sweeps them", async () => {
+  const session = {};
+  const before = loadBackground({ session });
+  const ws = await before.connect();
+  await before.hub(ws, DRIVE);
+  await before.hub(ws, DRIVE2);
+  assert.deepEqual(plain(session.liveBannerTabs), [4711, 4712]);
+  before.state.holdRemoval = []; // banner removal never completes: the worker dies
+  ws.onclose({ code: 1006 });
+  await settle();
+  assert.deepEqual(await routesOf(before), [], "routes are gone at once");
+  assert.deepEqual(plain(session.liveBannerTabs), [4711, 4712], "ids stay stored until removal completes");
+
+  const after = loadBackground({ session });
+  await settle();
+  assert.deepEqual(banners(after).sort(), [[4711, null], [4712, null]]);
+  assert.deepEqual(plain(session.liveBannerTabs), [], "dropped only after removal");
+  assert.deepEqual(await routesOf(after), [], "chat routes did not survive");
+});
+
+test("a bind stores the tab id before the banner is painted", async () => {
+  const session = {};
+  const bg = loadBackground({ session });
+  const ws = await bg.connect();
+  let atPaint = null;
+  const orig = bg.sandbox.chrome.scripting.executeScript;
+  bg.sandbox.chrome.scripting.executeScript = async (c) => {
+    if (c.args && c.args[0]) atPaint = plain(session.liveBannerTabs);
+    return orig(c);
+  };
+  await bg.hub(ws, DRIVE);
+  assert.deepEqual(atPaint, [4711]);
+});
+
+test("an old socket's late close is inert: no receipts drained, no reconnect, no status change", async () => {
+  const bg = loadBackground();
+  const old = await bg.connect();
+  await bg.send({ type: "ycode-live:disconnect" });
+  const fresh = await bg.connect();
+  let resp = null;
+  bg.send({ type: "ycode-live:shape", tab: { ...TAB }, note: "n", to: "" }).then((r) => { resp = r; });
+  await tick();
+  const timers = bg.timers.length;
+  old.onclose({ code: 1006 });
+  await tick();
+  assert.equal(resp, null, "the newer socket's pending press was not failed");
+  assert.equal(bg.timers.length, timers, "no reconnect scheduled");
+  await answer(fresh, { nonce: fresh.sent[0].result.nonce, ok: true, status: "ok" });
+  await tick();
+  assert.equal(resp.ok, true);
 });
 
 test("tab close and disconnect drop stored banner ids", async () => {

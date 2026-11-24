@@ -108,24 +108,41 @@ function routeLabel(r) {
   return r.agent + (r.stale ? " (chat gone)" : "");
 }
 
+// Writes to session storage are serialized: each one stores the set as it is
+// WHEN it runs, so a slow older write can never overwrite a newer one.
+let persistChain = Promise.resolve();
 function persistBanners() {
-  try {
-    const p = chrome.storage.session.set({ [BANNER_KEY]: [...bannerTabs] });
-    if (p && p.catch) p.catch(() => {});
-  } catch (_) { /* session storage unavailable: orphans are not swept */ }
+  persistChain = persistChain.then(async () => {
+    try {
+      await chrome.storage.session.set({ [BANNER_KEY]: [...bannerTabs] });
+    } catch (_) { /* session storage unavailable: orphans are not swept */ }
+  });
+  return persistChain;
 }
 
-// sweepOrphanBanners runs once at worker start: tabs marked by a previous
-// worker lose their banner, then the stored ids are replaced by the ones this
-// worker has marked since (usually none). Tabs with a live route are skipped.
+// removeBanner takes the banner off one tab and only THEN forgets its id, so a
+// worker that dies mid-removal still finds the id stored. A tab that was bound
+// again meanwhile keeps its id (and banner).
+async function removeBanner(id) {
+  if (routes.has(id)) return;
+  await paintTab(id, null);
+  if (!routes.has(id)) bannerTabs.delete(id);
+  await persistBanners();
+}
+
+// sweepOrphanBanners runs once at worker start: every id a previous worker
+// marked is kept (stored again) until its banner removal has been attempted.
+// Tabs with a live route are skipped.
 async function sweepOrphanBanners() {
   let ids = [];
   try {
+    await persistChain;
     const got = await chrome.storage.session.get(BANNER_KEY);
     if (got && Array.isArray(got[BANNER_KEY])) ids = got[BANNER_KEY].filter(Number.isInteger);
   } catch (_) { return; }
-  for (const id of ids) if (!routes.has(id)) await paintTab(id, null);
-  persistBanners();
+  for (const id of ids) bannerTabs.add(id);
+  await persistBanners();
+  for (const id of ids) await removeBanner(id);
 }
 
 async function bindRoute(tabId, agent, chat) {
@@ -134,17 +151,15 @@ async function bindRoute(tabId, agent, chat) {
   r.color = agentColor(r.agent);
   routes.set(tabId, r);
   bannerTabs.add(tabId);
-  persistBanners();
-  await paintTab(tabId, routeLabel(r), r.color);
+  await persistBanners(); // the id is stored BEFORE the banner can exist
+  if (routes.get(tabId) === r) await paintTab(tabId, routeLabel(r), r.color);
 }
 
 function clearRoutes() {
-  const old = [...routes.keys()];
   routes.clear();
-  const marked = [...new Set([...old, ...bannerTabs])];
-  bannerTabs.clear();
-  persistBanners();
-  for (const id of marked) paintTab(id, null);
+  const marked = [...bannerTabs];
+  // Ids stay stored until each removal attempt completes.
+  return Promise.all(marked.map(removeBanner));
 }
 sweepOrphanBanners();
 
@@ -424,11 +439,11 @@ function openWS() {
   ws.onerror = (e) => console.warn("ycode-live: socket error", e);
   const sock = ws;
   ws.onclose = (ev) => {
-    // An old socket closing late must not clear the routes of a newer one.
-    if (ws === sock) {
-      ws = null;
-      clearRoutes();
-    }
+    // An old socket closing late is inert: it must not clear the routes,
+    // drain receipts, alarms or status, or schedule a reconnect for a newer one.
+    if (ws !== sock) return;
+    ws = null;
+    clearRoutes();
     chrome.alarms.clear("ycode-live-keepalive");
     for (const finish of [...shapeWaiting.values()]) {
       finish({ ok: false, error: "the bashy hub disconnected before it answered" });
