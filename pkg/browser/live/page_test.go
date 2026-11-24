@@ -71,6 +71,12 @@ func newPageHarness(t *testing.T, fixtures map[string]string) *pageHarness {
 	ctx, cancelCtx := chromedp.NewContext(alloc)
 	ctx, cancelTimeout := context.WithTimeout(ctx, 60*time.Second)
 	t.Cleanup(func() { cancelTimeout(); cancelCtx(); cancelAlloc() })
+	// Readiness, not retry: allocate the browser and its first tab and wait for
+	// the initial blank document before any Navigate, so the first Navigate is
+	// not aborted (net::ERR_ABORTED) by the tab's own initial load under load.
+	if err := chromedp.Run(ctx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		t.Fatalf("browser tab not ready: %v", err)
+	}
 	return &pageHarness{t: t, ctx: ctx, srv: srv, script: script}
 }
 
