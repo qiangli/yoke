@@ -21,7 +21,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -456,6 +458,9 @@ func (f *Fake) auth(r *http.Request, scopes ...string) (*token, *apiError) {
 	if !tok.expires.IsZero() && !f.now().Before(tok.expires) {
 		return nil, errf(401, "unauthorized", "token expired")
 	}
+	if len(scopes) == 0 {
+		return tok, nil
+	}
 	for _, want := range scopes {
 		for _, have := range tok.scopes {
 			if have == want {
@@ -605,6 +610,8 @@ func (f *Fake) serveMaster(w http.ResponseWriter, r *http.Request) {
 	p, m := r.URL.Path, r.Method
 	var e *apiError
 	switch {
+	case p == "/api/v1/tokens" && m == http.MethodPost:
+		e = f.createToken(w, r)
 	case p == "/api/v1/members" && m == http.MethodGet:
 		e = f.listMembers(w, r)
 	case p == "/api/v1/members" && m == http.MethodPost:
@@ -1148,6 +1155,53 @@ func (f *Fake) detach(w http.ResponseWriter, r *http.Request, id string) *apiErr
 }
 
 // --- satellite --------------------------------------------------------------
+
+// createToken models only the public attenuated mint endpoint.
+func (f *Fake) createToken(w http.ResponseWriter, r *http.Request) *apiError {
+	caller, e := f.auth(r)
+	if e != nil {
+		return e
+	}
+	var body struct {
+		Name   string   `json:"name"`
+		Scopes []string `json:"scopes"`
+		TTL    string   `json:"ttl"`
+	}
+	if e := decode(r, &body); e != nil {
+		return e
+	}
+	if !regexp.MustCompile(`^[a-z0-9._-]{1,64}$`).MatchString(body.Name) || len(body.Scopes) == 0 {
+		return errf(400, "bad_request", "name and scopes required")
+	}
+	parts := regexp.MustCompile(`^([0-9]+)(h|d)$`).FindStringSubmatch(body.TTL)
+	if parts == nil {
+		return errf(400, "invalid_ttl", "ttl must be 1h to 365d")
+	}
+	n, err := strconv.Atoi(parts[1])
+	if err != nil || n < 1 || n > 365*24 {
+		return errf(400, "invalid_ttl", "ttl must be 1h to 365d")
+	}
+	ttl := time.Duration(n) * time.Hour
+	if parts[2] == "d" {
+		ttl *= 24
+	}
+	if ttl > 365*24*time.Hour {
+		return errf(400, "invalid_ttl", "ttl must be 1h to 365d")
+	}
+	for _, scope := range body.Scopes {
+		if strings.HasSuffix(scope, ":admin") || !hasScope(caller, scope) {
+			return errf(403, "insufficient_scope", "scope %s is not held by the calling token", scope)
+		}
+	}
+	value := f.nextID("tok")
+	expires := f.now().Add(ttl)
+	f.tokens[value] = &token{email: caller.email, scopes: append([]string(nil), body.Scopes...), expires: expires}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id": f.nextID("tid"), "name": body.Name, "scopes": body.Scopes,
+		"token": value, "expires_at": expires,
+	})
+	return nil
+}
 
 func (f *Fake) serveSatellite(s *satServer, w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()

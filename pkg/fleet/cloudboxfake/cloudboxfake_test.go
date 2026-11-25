@@ -756,3 +756,42 @@ func TestSatelliteTokenExchangeAndMountedApp(t *testing.T) {
 	now = now.Add(11 * time.Minute)
 	sat.want(401, "POST", "/matrix/h/studio/app/site/mcp", xtok, nil, "Idempotency-Key", "call")
 }
+
+func TestChildTokenMintAttenuation(t *testing.T) {
+	f := New(t)
+	now := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	f.SetNow(func() time.Time { return now })
+	parent := f.AddOwner("owner@example.com")
+	c := call{t, f.URL()}
+	body := map[string]any{"name": "mcp-connect-test", "scopes": []string{ScopeSatellitesDelegate, ScopeHostProxy}, "ttl": "1h"}
+	status, minted, _ := c.do("POST", "/api/v1/tokens", parent, body)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d", status)
+	}
+	child := minted["token"].(string)
+	f.mu.Lock()
+	tok := f.tokens[child]
+	if child == parent || len(tok.scopes) != 2 || !hasScope(tok, ScopeSatellitesDelegate) || !hasScope(tok, ScopeHostProxy) || tok.email != "owner@example.com" || !tok.expires.Equal(now.Add(time.Hour)) {
+		t.Error("child identity, exact attenuation or expiry incorrect")
+	}
+	f.mu.Unlock()
+	// Assert at the satellite fake that the exchange carries only the child.
+	sat := f.AddSatellite(t, "owner@example.com", "test")
+	s := call{t, f.SatelliteURL(sat)}
+	status, _, _ = s.do("POST", "/api/v1/tokens/exchange", child, map[string]any{"scopes": []string{ScopeHostProxy}, "ttl": "10m"})
+	if status != 201 {
+		t.Fatalf("child exchange status = %d", status)
+	}
+	for _, scopes := range [][]string{{ScopeHostProxy}, {ScopeSatellitesDelegate}, {"other:read"}} {
+		limited := f.AddToken("owner@example.com", scopes...)
+		status, _, _ = c.do("POST", "/api/v1/tokens", limited, body)
+		if status != 403 {
+			t.Fatalf("unheld scope mint status = %d", status)
+		}
+	}
+	f.SetNow(func() time.Time { return now.Add(time.Hour) })
+	status, _, _ = s.do("POST", "/api/v1/tokens/exchange", child, map[string]any{"scopes": []string{ScopeHostProxy}, "ttl": "10m"})
+	if status != 401 {
+		t.Fatalf("expired child exchange status = %d", status)
+	}
+}
