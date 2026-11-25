@@ -24,7 +24,8 @@ import (
 type Block struct {
 	Name        string // `name` as written
 	Description string // `description`, trimmed
-	Type        string // `type` — the OKF page type (`dag`)
+	Type        string // `metadata.type`, falling back to legacy top-level `type` (`dag`)
+	TypeWarning string // non-empty when both `metadata.type` and top-level `type` are set and differ
 
 	// Metadata is the `metadata:` mapping's scalar values, keys as written
 	// (skills stringifies them into Skill.Meta). nil when `metadata:` is
@@ -80,13 +81,22 @@ func Read(block string) Block {
 	b.Top = top
 	b.Name = Scalar(top["name"])
 	b.Description = strings.TrimSpace(Scalar(top["description"]))
-	b.Type = Scalar(top["type"])
 	if mn := top["metadata"]; mn != nil && mn.Kind == yaml.MappingNode {
 		b.Meta = keyedMapping(mn)
 		b.Metadata = make(map[string]string, len(mn.Content)/2)
 		for i := 0; i+1 < len(mn.Content); i += 2 {
 			b.Metadata[mn.Content[i].Value] = Scalar(mn.Content[i+1])
 		}
+	}
+	topType := strings.TrimSpace(Scalar(top["type"]))
+	metaType := strings.TrimSpace(Scalar(b.Meta["type"]))
+	if metaType != "" {
+		b.Type = metaType
+		if topType != "" && topType != metaType {
+			b.TypeWarning = fmt.Sprintf("frontmatter: metadata.type (%q) differs from top-level type (%q); using metadata.type", metaType, topType)
+		}
+	} else {
+		b.Type = topType
 	}
 	return b
 }

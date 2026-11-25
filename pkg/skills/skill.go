@@ -16,7 +16,8 @@ import (
 type Skill struct {
 	Name          string
 	Description   string
-	Type          string // frontmatter `type` — the OKF page type (dag skills carry `dag`)
+	Type          string // frontmatter `metadata.type`, falling back to legacy top-level `type` (dag skills carry `dag`)
+	TypeWarning   string // non-empty when both `metadata.type` and top-level `type` are set and differ
 	Ring          Ring
 	Dir           string            // source dir ("" for embedded)
 	Meta          map[string]string // frontmatter `metadata` string map
@@ -48,6 +49,7 @@ func ParseFrontmatter(b []byte) (Skill, error) {
 		Name:          fm.Name,
 		Description:   fm.Description,
 		Type:          fm.Type,
+		TypeWarning:   fm.TypeWarning,
 		Compatibility: strings.TrimSpace(frontmatter.Scalar(fm.Top["compatibility"])),
 		Meta:          fm.Metadata,
 	}

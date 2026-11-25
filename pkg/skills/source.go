@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/qiangli/yoke/pkg/assetring"
 	"github.com/qiangli/yoke/pkg/dag"
@@ -110,9 +111,14 @@ func (c *Catalog) List(ps *ProbeSet) ([]Listing, error) {
 	for _, r := range rows {
 		l := Listing{Skill: r.Entry, Shadows: r.Shadows, RecordLifecycle: c.Lifecycle(r.Name)}
 		l.Verdict = verdictOf(l.Skill, ps)
+		var warns []string
 		if l.RequiresErr != "" {
-			l.Warning = "requires unparsable: " + l.RequiresErr
+			warns = append(warns, "requires unparsable: "+l.RequiresErr)
 		}
+		if l.TypeWarning != "" {
+			warns = append(warns, l.TypeWarning)
+		}
+		l.Warning = strings.Join(warns, "; ")
 		out = append(out, l)
 	}
 	return out, nil

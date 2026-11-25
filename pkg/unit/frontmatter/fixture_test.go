@@ -71,6 +71,14 @@ var fmFixtures = []struct {
 		wantType: "skill",
 	},
 	{
+		name: "strict skill validator metadata.type only",
+		fm: "name: form-pilot\ndescription: Shapeware form pilot.\n" +
+			"metadata:\n  type: shapeware\n",
+		wantName: "form-pilot",
+		wantDesc: "Shapeware form pilot.",
+		wantType: "shapeware",
+	},
+	{
 		name:      "not strict yaml",
 		fm:        "name: x\ndescription: runs it: fast\n",
 		wantName:  "x",

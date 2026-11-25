@@ -60,6 +60,70 @@ func TestRead(t *testing.T) {
 	}
 }
 
+func TestReadTypeResolution(t *testing.T) {
+	cases := []struct {
+		name     string
+		block    string
+		wantType string
+		wantWarn bool
+	}{
+		{
+			name:     "top-level only",
+			block:    "name: x\ntype: dag\n",
+			wantType: "dag",
+		},
+		{
+			name:     "metadata only",
+			block:    "name: x\nmetadata:\n  type: shapeware\n",
+			wantType: "shapeware",
+		},
+		{
+			name:     "metadata capitalized key",
+			block:    "name: x\nmetadata:\n  Type: shapeware\n",
+			wantType: "shapeware",
+		},
+		{
+			name:     "both equal",
+			block:    "name: x\ntype: shapeware\nmetadata:\n  type: shapeware\n",
+			wantType: "shapeware",
+		},
+		{
+			name:     "both differ",
+			block:    "name: x\ntype: dag\nmetadata:\n  type: shapeware\n",
+			wantType: "shapeware",
+			wantWarn: true,
+		},
+		{
+			name:     "metadata empty falls back to top-level",
+			block:    "name: x\ntype: dag\nmetadata:\n  type: \"\"\n",
+			wantType: "dag",
+		},
+		{
+			name:     "neither",
+			block:    "name: x\n",
+			wantType: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Read(tc.block)
+			if b.YAMLErr != "" {
+				t.Fatalf("YAMLErr = %q", b.YAMLErr)
+			}
+			if b.Type != tc.wantType {
+				t.Errorf("Type = %q, want %q", b.Type, tc.wantType)
+			}
+			if tc.wantWarn {
+				if b.TypeWarning == "" {
+					t.Errorf("TypeWarning = %q, want non-empty warning", b.TypeWarning)
+				}
+			} else if b.TypeWarning != "" {
+				t.Errorf("TypeWarning = %q, want empty", b.TypeWarning)
+			}
+		})
+	}
+}
+
 func TestReadRecordsWhyNotYAML(t *testing.T) {
 	if b := Read("description: runs it: fast\n"); b.YAMLErr == "" {
 		t.Errorf("mapping-value error not recorded: %+v", b)
