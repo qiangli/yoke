@@ -139,6 +139,21 @@ func Run(ctx context.Context, mode string, action wire.Action) (*wire.Result, er
 	return &wire.Result{Error: fmt.Sprintf("%s: action %q not supported", mode, action.Type)}, nil
 }
 
+// Navigate loads url in the attached target and returns its rendered
+// body text.
+//
+// Known issue (Sprint 708, Story #3230, f43b87c31cf6): on Windows
+// Chrome-for-Testing, a fresh profile's first navigation can fail before
+// commit with net::ERR_ABORTED. Possible cause: the first network-service
+// instance dies before initializing; during crash recovery, recreating the
+// profile NetworkContext resets the previous URLLoader factory, destroying
+// a navigation loader created against it before dispatch. Workaround: if
+// the first navigation in a fresh profile fails this way and did not
+// commit, retry the same navigation once after browser startup settles;
+// use an installed Chrome or an ACL-clean bundle/profile so the sandboxed
+// network service launches cleanly. This function deliberately does not
+// retry every ERR_ABORTED, because it cannot distinguish this known
+// pre-dispatch mode from a genuine navigation abort.
 func Navigate(ctx context.Context, url string) (*wire.Result, error) {
 	if url == "" {
 		return &wire.Result{Error: "navigate: url required"}, nil
