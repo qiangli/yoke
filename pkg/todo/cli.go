@@ -29,11 +29,12 @@ import (
 // label so every command can print WHICH list it is acting on.
 type storeFunc func() (*issue.Store, string, error)
 
-// itemJSON wraps an issue for JSON output, computing the overdue flag.
+// itemJSON wraps an issue for JSON output, computing the overdue and expired flags.
 type itemJSON struct {
 	*issue.Issue
 	Ref     string `json:"ref"` // todo:<full id> — the canonical address (pkg/ref)
 	Overdue bool   `json:"overdue"`
+	Expired bool   `json:"expired,omitempty"`
 }
 
 // refOf is the item's canonical ref, full id.
@@ -52,28 +53,31 @@ func shortRef(id string) string {
 // issue into the fields a list consumer needs, rather than the full issue
 // record (which drags in register-only fields like kind/stage/refs/weave).
 //
-//	state    — the lifecycle vocabulary (todo|assigned|doing|blocked|done|wontfix);
+//	state    — the lifecycle vocabulary (todo|assigned|doing|blocked|known|done|wontfix);
 //	           this is the issue's Status under the name a list consumer reads.
 //	scope    — the resolved scope label, repeated per row so an item stays
 //	           self-describing once rows from several lists are merged.
 //	age      — the human-readable duration the text view shows (3d, 5h, 12m);
 //	created  — the machine timestamp behind it.
 type listItem struct {
-	ID        string     `json:"id"`
-	Seq       int        `json:"seq,omitempty"`
-	Title     string     `json:"title"`
-	State     string     `json:"state"`
-	Priority  string     `json:"priority,omitempty"`
-	Kind      string     `json:"kind,omitempty"`
-	Labels    []string   `json:"labels,omitempty"`
-	Scope     string     `json:"scope"`
-	Created   time.Time  `json:"created"`
-	Age       string     `json:"age"`
-	Due       *time.Time `json:"due,omitempty"`
-	Overdue   bool       `json:"overdue,omitempty"`
-	Recurring string     `json:"recurring,omitempty"`
-	Assignee  string     `json:"assignee,omitempty"`
-	Closed    *time.Time `json:"closed,omitempty"`
+	ID         string     `json:"id"`
+	Seq        int        `json:"seq,omitempty"`
+	Title      string     `json:"title"`
+	State      string     `json:"state"`
+	Priority   string     `json:"priority,omitempty"`
+	Kind       string     `json:"kind,omitempty"`
+	Labels     []string   `json:"labels,omitempty"`
+	Scope      string     `json:"scope"`
+	Created    time.Time  `json:"created"`
+	Age        string     `json:"age"`
+	Due        *time.Time `json:"due,omitempty"`
+	Overdue    bool       `json:"overdue,omitempty"`
+	Recurring  string     `json:"recurring,omitempty"`
+	Assignee   string     `json:"assignee,omitempty"`
+	Workaround string     `json:"workaround,omitempty"`
+	Expires    string     `json:"expires,omitempty"`
+	Expired    bool       `json:"expired,omitempty"`
+	Closed     *time.Time `json:"closed,omitempty"`
 
 	// Sprint is the sprint card this item is a story of, or 0 when it is a
 	// free-standing item. Emitted so a reader (the steward board, the web
@@ -103,23 +107,26 @@ func toListItems(items []*issue.Issue, scope string) []listItem {
 	out := make([]listItem, 0, len(items))
 	for _, it := range items {
 		out = append(out, listItem{
-			ID:        it.ID,
-			Seq:       it.Seq,
-			Title:     it.Title,
-			State:     it.Status,
-			Priority:  it.Priority,
-			Kind:      it.Kind,
-			Labels:    it.Labels,
-			Scope:     scope,
-			Created:   it.Created,
-			Age:       age(it.Created),
-			Due:       it.Due,
-			Overdue:   IsOverdue(it),
-			Recurring: it.Recurring,
-			Assignee:  it.Assignee,
-			Closed:    it.Closed,
-			Sprint:    it.Sprint,
-			SprintID:  it.SprintID,
+			ID:         it.ID,
+			Seq:        it.Seq,
+			Title:      it.Title,
+			State:      it.Status,
+			Priority:   it.Priority,
+			Kind:       it.Kind,
+			Labels:     it.Labels,
+			Scope:      scope,
+			Created:    it.Created,
+			Age:        age(it.Created),
+			Due:        it.Due,
+			Overdue:    IsOverdue(it),
+			Recurring:  it.Recurring,
+			Assignee:   it.Assignee,
+			Workaround: it.Workaround,
+			Expires:    it.Expires,
+			Expired:    IsExpired(it),
+			Closed:     it.Closed,
+			Sprint:     it.Sprint,
+			SprintID:   it.SprintID,
 		})
 	}
 	return out
@@ -325,7 +332,8 @@ func parseSprintSelector(selector string, allowUnlink bool) (int64, error) {
 }
 
 func newAddCmd(sf storeFunc) *cobra.Command {
-	var priority, note, kind string
+	var priority, note, kind, status string
+	var workaround, expiresStr string
 	var labels []string
 	var dueStr, recurring, assignee string
 	var sprintSelector string
@@ -346,6 +354,18 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			due, err := parseDue(dueStr)
 			if err != nil {
 				return err
+			}
+			expires, err := ParseExpires(expiresStr)
+			if err != nil {
+				return err
+			}
+			if status != "" {
+				if !ValidStatus(status) {
+					return fmt.Errorf("unknown status %q (want one of: %s)", status, strings.Join(statuses, ", "))
+				}
+				if status == StatusAssigned && strings.TrimSpace(assignee) == "" {
+					return fmt.Errorf("todo: assigned status requires an owner (assignee) — pass --owner NAME from `bashy agent list`")
+				}
 			}
 			if note, err = noteArg(cmd, note); err != nil {
 				return err
@@ -378,6 +398,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 					return err
 				}
 			}
+			if status == StatusDone && selected != 0 {
+				return fmt.Errorf("sprint story cannot be created as done through generic todo; accept via `bashy sprint accept %d <id>`", selected)
+			}
 			if selected != 0 && PrepareSprint != nil {
 				if err := PrepareSprint(st, selected); err != nil {
 					return err
@@ -387,6 +410,15 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 				if selected != 0 {
 					LinkSprint(it, selected)
 				}
+				if status != "" {
+					it.Status = status
+					if IsClosed(status) {
+						now := time.Now().UTC()
+						it.Closed = &now
+					}
+				}
+				it.Workaround = workaround
+				it.Expires = expires
 				it.Kind = kind
 				it.Labels = labels
 			})
@@ -405,6 +437,12 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 				if len(it.Labels) > 0 {
 					out["labels"] = it.Labels
 				}
+				if it.Workaround != "" {
+					out["workaround"] = it.Workaround
+				}
+				if it.Expires != "" {
+					out["expires"] = it.Expires
+				}
 				if notice.Assignee != "" {
 					out["assignee_notified"] = notice.Notified
 					if !notice.Notified {
@@ -422,6 +460,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&priority, "priority", "", "priority tier (p0|p1|p2|p3)")
+	cmd.Flags().StringVar(&status, "status", "", "initial status (default todo, or assigned with --owner; e.g. known)")
+	cmd.Flags().StringVar(&workaround, "workaround", "", "bounded workaround for a known issue")
+	cmd.Flags().StringVar(&expiresStr, "expires", "", "expiry for a known issue (YYYY-MM-DD, RFC3339, or +Nd/+Nh)")
 	cmd.Flags().StringVar(&kind, "kind", issue.KindTask, issue.KindHelp)
 	cmd.Flags().StringArrayVar(&labels, "label", nil, issue.LabelHelp)
 	cmd.Flags().StringVar(&note, "note", "", "task body/details (- reads stdin); this item's own facts — a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
@@ -439,15 +480,24 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 func newListCmd(sf storeFunc) *cobra.Command {
 	var status, kind string
 	var labels []string
-	var jsonOut, all, reverse bool
+	var jsonOut, all, knownOnly, reverse bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "list tasks (priority first — p0 before p1 …; ties by number #1 first; --reverse flips; open by default, --all includes done)",
+		Short: "list tasks (priority first — p0 before p1 …; ties by number #1 first; --reverse flips; open by default, --known lists known issues, --all includes all)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, scope, err := sf()
 			if err != nil {
 				return err
+			}
+			if knownOnly {
+				if all {
+					return fmt.Errorf("--known and --all cannot be combined")
+				}
+				if status != "" && status != StatusKnown {
+					return fmt.Errorf("--known and --status cannot be combined")
+				}
+				status = StatusKnown
 			}
 			items, err := List(st, status)
 			if err != nil {
@@ -456,7 +506,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			if status == "" && !all {
 				var open []*issue.Issue
 				for _, it := range items {
-					if !IsClosed(it.Status) {
+					if IsOpen(it.Status) {
 						open = append(open, it)
 					}
 				}
@@ -499,7 +549,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			// #  is the stable running number — the short handle for `todo show 3`,
 			// `todo done 3`, etc. ID stays for scripts / cross-tool references.
-			hasAssignee, hasKind := false, false
+			hasAssignee, hasKind, hasExpires := false, false, false
 			for _, it := range items {
 				if it.Assignee != "" {
 					hasAssignee = true
@@ -509,12 +559,18 @@ func newListCmd(sf storeFunc) *cobra.Command {
 				if it.Kind != "" && it.Kind != issue.KindTask {
 					hasKind = true
 				}
+				if it.Expires != "" || it.Status == StatusKnown {
+					hasExpires = true
+				}
 			}
 			headerStr := "#\tREF\tSTATUS\tPRIO"
 			if hasKind {
 				headerStr += "\tKIND"
 			}
 			headerStr += "\tAGE\tDUE"
+			if hasExpires {
+				headerStr += "\tEXPIRES"
+			}
 			if hasAssignee {
 				headerStr += "\tASSIGNEE"
 			}
@@ -533,6 +589,13 @@ func newListCmd(sf storeFunc) *cobra.Command {
 					row += fmt.Sprintf("\t%s", dash(it.Kind))
 				}
 				row += fmt.Sprintf("\t%s\t%s", age(it.Created), dueStr)
+				if hasExpires {
+					expStr := dash(it.Expires)
+					if IsExpired(it) {
+						expStr += " (EXPIRED)"
+					}
+					row += fmt.Sprintf("\t%s", expStr)
+				}
 				if hasAssignee {
 					row += fmt.Sprintf("\t%s", dash(it.Assignee))
 				}
@@ -542,10 +605,11 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			return w.Flush()
 		},
 	}
-	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|done|wontfix)")
+	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|known|done|wontfix)")
+	cmd.Flags().BoolVar(&knownOnly, "known", false, "list known issues (shorthand for --status known)")
 	cmd.Flags().StringVar(&kind, "kind", "", "`word` — only items of this kind (todo kinds lists the words in use)")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "`word` — only items carrying every given label; repeatable or comma-separated (todo labels lists the words in use)")
-	cmd.Flags().BoolVar(&all, "all", false, "include done tasks")
+	cmd.Flags().BoolVar(&all, "all", false, "include known and closed tasks")
 	cmd.Flags().BoolVar(&reverse, "reverse", false, "reverse the order (default is priority first, then #1 first)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
@@ -573,11 +637,12 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 						*issue.Issue
 						Ref      string    `json:"ref"`
 						Overdue  bool      `json:"overdue"`
+						Expired  bool      `json:"expired,omitempty"`
 						Outbound []linkRef `json:"outbound"`
 						Inbound  []linkRef `json:"inbound"`
-					}{Issue: it, Ref: refOf(it), Overdue: IsOverdue(it), Outbound: out, Inbound: in})
+					}{Issue: it, Ref: refOf(it), Overdue: IsOverdue(it), Expired: IsExpired(it), Outbound: out, Inbound: in})
 				}
-				return emitJSON(cmd, itemJSON{Issue: it, Ref: refOf(it), Overdue: IsOverdue(it)})
+				return emitJSON(cmd, itemJSON{Issue: it, Ref: refOf(it), Overdue: IsOverdue(it), Expired: IsExpired(it)})
 			}
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "#%d  %s  %s\n\n", it.Seq, refOf(it), it.Title)
@@ -595,6 +660,16 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 					dueLine += " (OVERDUE)"
 				}
 				fmt.Fprintf(w, "  due       %s\n", dueLine)
+			}
+			if it.Workaround != "" {
+				fmt.Fprintf(w, "  workaround %s\n", it.Workaround)
+			}
+			if it.Expires != "" {
+				expLine := it.Expires
+				if IsExpired(it) {
+					expLine += " (EXPIRED)"
+				}
+				fmt.Fprintf(w, "  expires   %s\n", expLine)
 			}
 			if it.Recurring != "" {
 				fmt.Fprintf(w, "  recurring %s\n", it.Recurring)
@@ -682,8 +757,9 @@ func printLinks(w io.Writer, outbound, inbound []linkRef) {
 }
 
 func newStatusCmd(sf storeFunc) *cobra.Command {
-	return &cobra.Command{
-		Use:   "status <id|prefix> <todo|assigned|doing|blocked|done|wontfix>",
+	var workaround, expiresStr string
+	cmd := &cobra.Command{
+		Use:   "status <id|prefix> <todo|assigned|doing|blocked|known|done|wontfix>",
 		Short: "update a task's status",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -691,7 +767,21 @@ func newStatusCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			it, err := SetStatus(st, args[0], args[1])
+			var expires string
+			if cmd.Flags().Changed("expires") {
+				expires, err = ParseExpires(expiresStr)
+				if err != nil {
+					return err
+				}
+			}
+			it, err := SetStatusWith(st, args[0], args[1], func(it *issue.Issue) {
+				if cmd.Flags().Changed("workaround") {
+					it.Workaround = workaround
+				}
+				if cmd.Flags().Changed("expires") {
+					it.Expires = expires
+				}
+			})
 			if err != nil {
 				return err
 			}
@@ -700,6 +790,9 @@ func newStatusCmd(sf storeFunc) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&workaround, "workaround", "", "bounded workaround for a known issue")
+	cmd.Flags().StringVar(&expiresStr, "expires", "", "expiry for a known issue (YYYY-MM-DD, RFC3339, or +Nd/+Nh)")
+	return cmd
 }
 
 func newDoneCmd(sf storeFunc) *cobra.Command {
@@ -746,12 +839,13 @@ func newStartCmd(sf storeFunc) *cobra.Command {
 
 func newEditCmd(sf storeFunc) *cobra.Command {
 	var title, priority, note, kind string
+	var workaround, expiresStr string
 	var labels, unlabels []string
 	var dueStr, recurring, assignee string
 	var sprintSelector string
 	cmd := &cobra.Command{
 		Use:   "edit <id|prefix>",
-		Short: "modify a task's title/priority/kind/labels/note",
+		Short: "modify a task's title/priority/kind/labels/note/workaround/expires",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, _, err := sf()
@@ -799,6 +893,16 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 					return err
 				}
 				it.Due = due
+			}
+			if cmd.Flags().Changed("workaround") {
+				it.Workaround = workaround
+			}
+			if cmd.Flags().Changed("expires") {
+				expires, err := ParseExpires(expiresStr)
+				if err != nil {
+					return err
+				}
+				it.Expires = expires
 			}
 			if cmd.Flags().Changed("recurring") {
 				if err := ValidateCadence(recurring); err != nil {
@@ -890,6 +994,8 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringArrayVar(&unlabels, "unlabel", nil, "`word` — remove a label; repeatable or comma-separated")
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details (- reads stdin) — the whole body, so re-supply what should stay; a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
+	cmd.Flags().StringVar(&workaround, "workaround", "", "bounded workaround for a known issue")
+	cmd.Flags().StringVar(&expiresStr, "expires", "", "expiry for a known issue (YYYY-MM-DD, RFC3339, or +Nd/+Nh; empty clears)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
 	// ONE FLAG, DOMAIN TITLES: an item's --owner is its ASSIGNEE.
 	role.AttachOwner(cmd.Flags(), &assignee, role.Assignee,

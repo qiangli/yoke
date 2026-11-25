@@ -71,7 +71,7 @@ func sameSprintStoryRef(a, b sprintStoryRef) bool {
 
 // sprintOpenStory reports whether a story still needs work.
 func sprintOpenStory(st sprintStoryState) bool {
-	return !todopkg.IsClosed(st.Status) &&
+	return todopkg.IsOpen(st.Status) &&
 		st.Status != todopkg.StatusBlocked
 }
 

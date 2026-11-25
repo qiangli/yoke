@@ -17,6 +17,7 @@ func TestFinalizeWontfixCountsAsClosed(t *testing.T) {
 	}{
 		{"done", false},
 		{"wontfix", false},
+		{"known", false},
 		{"todo", true},
 		{"blocked", true},
 		{"assigned", true},
@@ -25,7 +26,7 @@ func TestFinalizeWontfixCountsAsClosed(t *testing.T) {
 	for i, st := range statuses {
 		// The board's open/closed buckets must agree with the shared
 		// predicate for every status in this story set.
-		if todopkg.IsClosed(st.status) == st.open {
+		if todopkg.IsOpen(st.status) != st.open {
 			t.Fatalf("shared predicate disagrees with test expectation for %q", st.status)
 		}
 		b.Todos = append(b.Todos, Todo{ID: string(rune('a' + i)), Title: st.status, Status: st.status, SprintID: 7})
@@ -37,8 +38,8 @@ func TestFinalizeWontfixCountsAsClosed(t *testing.T) {
 	b.finalize(time.Now())
 
 	sp := b.Sprints[0]
-	if sp.StoryOpen != 3 || sp.StoryClosed != 2 || sp.StoryTotal != 5 {
-		t.Fatalf("wrong sprint counts: open=%d closed=%d total=%d, want 3/2/5",
+	if sp.StoryOpen != 3 || sp.StoryClosed != 3 || sp.StoryTotal != 6 {
+		t.Fatalf("wrong sprint counts: open=%d closed=%d total=%d, want 3/3/6",
 			sp.StoryOpen, sp.StoryClosed, sp.StoryTotal)
 	}
 }

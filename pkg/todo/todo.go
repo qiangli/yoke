@@ -44,11 +44,12 @@ const (
 	StatusAssigned = "assigned" // delegated to an agent — in that agent's hands (auto-set)
 	StatusDoing    = "doing"    // in progress by ME (the steward/human works it directly)
 	StatusBlocked  = "blocked"  // waiting on something else
+	StatusKnown    = "known"    // known issue, worked around, tracked until it expires
 	StatusDone     = "done"     // completed
 	StatusWontfix  = "wontfix"  // closed by decision, nothing delivered
 )
 
-var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, StatusDone, StatusWontfix}
+var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, StatusKnown, StatusDone, StatusWontfix}
 
 // IsClosed reports whether a status ends an item's life: done (delivered),
 // wontfix (closed by decision, nothing delivered) or the issue register's
@@ -57,6 +58,13 @@ var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, 
 // without claiming a delivery.
 func IsClosed(status string) bool {
 	return status == StatusDone || status == StatusWontfix || status == issue.StatusClosed
+}
+
+// IsOpen reports whether a status counts as open work: neither closed nor a
+// tracked known issue. Known issues carry a workaround and an expiry, so they
+// stay out of the open-work queue without being closed.
+func IsOpen(status string) bool {
+	return !IsClosed(status) && status != StatusKnown
 }
 
 var todoAgentCatalog = func() *fleet.Catalog { return fleet.New() }
@@ -316,6 +324,13 @@ func ResolveRef(st *issue.Store, ref string) (*issue.Issue, error) {
 
 // SetStatus moves an item to a new status (done stamps Closed).
 func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
+	return SetStatusWith(st, ref, status, nil)
+}
+
+// SetStatusWith moves an item to a new status with an optional prepare hook
+// applied before the single save (e.g. setting workaround and expires when
+// moving an item to StatusKnown).
+func SetStatusWith(st *issue.Store, ref, status string, prepare func(*issue.Issue)) (*issue.Issue, error) {
 	if !ValidStatus(status) {
 		return nil, fmt.Errorf("unknown status %q (want one of: %s)", status, strings.Join(statuses, ", "))
 	}
@@ -372,6 +387,9 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 			it.Closed = nil
 		}
 	}
+	if prepare != nil {
+		prepare(it)
+	}
 	if _, err := st.Save(it); err != nil {
 		return nil, err
 	}
@@ -392,13 +410,92 @@ func Remove(st *issue.Store, ref string) (*issue.Issue, error) {
 	return it, st.Remove(it)
 }
 
-// IsOverdue reports whether an item's due date is in the past. Closed items
-// are never overdue, and a nil due date is never overdue.
+// IsOverdue reports whether an item's due date is in the past. Closed and
+// known items are never overdue, and a nil due date is never overdue.
 func IsOverdue(it *issue.Issue) bool {
-	if IsClosed(it.Status) || it.Due == nil {
+	if !IsOpen(it.Status) || it.Due == nil {
 		return false
 	}
 	return it.Due.Before(time.Now().UTC())
+}
+
+// ParseExpires validates and normalizes an expiry specification for a known
+// issue: an ISO date (YYYY-MM-DD), timestamp (YYYY-MM-DDTHH:MM or RFC3339), or
+// relative offset (+Nd, +Nh, +duration). Empty clears the expiry.
+func ParseExpires(s string) (string, error) {
+	return parseExpiresAt(s, time.Now().UTC())
+}
+
+func parseExpiresAt(s string, now time.Time) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(s, "+") {
+		rest := s[1:]
+		if strings.HasSuffix(rest, "d") {
+			days, err := strconv.Atoi(rest[:len(rest)-1])
+			if err != nil {
+				return "", fmt.Errorf("invalid relative expiry days: %s", s)
+			}
+			return now.UTC().AddDate(0, 0, days).Format("2006-01-02"), nil
+		}
+		if strings.HasSuffix(rest, "h") {
+			hours, err := strconv.Atoi(rest[:len(rest)-1])
+			if err != nil {
+				return "", fmt.Errorf("invalid relative expiry hours: %s", s)
+			}
+			return now.UTC().Add(time.Duration(hours) * time.Hour).Format(time.RFC3339), nil
+		}
+		if d, err := time.ParseDuration(rest); err == nil {
+			return now.UTC().Add(d).Format(time.RFC3339), nil
+		}
+		return "", fmt.Errorf("invalid relative expiry: %s", s)
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	if _, err := time.Parse("2006-01-02T15:04", s); err == nil {
+		return s, nil
+	}
+	if _, err := time.Parse("2006-01-02", s); err == nil {
+		return s, nil
+	}
+	return "", fmt.Errorf("invalid expires format %q (want YYYY-MM-DD, RFC3339, or +Nd/+Nh)", s)
+}
+
+// IsExpired reports whether a known issue's expiry date has passed. Only items
+// in StatusKnown expire; items without a parseable date are not expired.
+func IsExpired(it *issue.Issue) bool {
+	return IsExpiredAt(it, time.Now().UTC())
+}
+
+// IsExpiredAt reports whether a known issue's expiry has passed relative to now.
+func IsExpiredAt(it *issue.Issue, now time.Time) bool {
+	if it == nil || it.Status != StatusKnown {
+		return false
+	}
+	s := strings.TrimSpace(it.Expires)
+	if s == "" {
+		return false
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.Before(now)
+	}
+	if t, err := time.Parse("2006-01-02T15:04", s); err == nil {
+		return t.Before(now.UTC())
+	}
+	nowUTC := now.UTC()
+	today := time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day(), 0, 0, 0, 0, time.UTC)
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t.Before(today)
+	}
+	if len(s) > 10 && (s[10] == ' ' || s[10] == '\t' || s[10] == '(') {
+		if t, err := time.Parse("2006-01-02", s[:10]); err == nil {
+			return t.Before(today)
+		}
+	}
+	return false
 }
 
 // List returns a store's items sorted by PRIORITY then sequence: most urgent

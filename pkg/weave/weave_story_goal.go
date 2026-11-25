@@ -297,7 +297,7 @@ func sprintGoalDone(s *weaveStory, g sprintGoalItem) bool {
 	}
 	for _, ref := range g.Stories {
 		story := resolveSprintGoalStory(s, ref)
-		if story.Missing || (!todopkg.IsClosed(story.Status)) {
+		if story.Missing || todopkg.IsOpen(story.Status) {
 			return false
 		}
 	}
@@ -374,7 +374,7 @@ func nextSprintStory(s *weaveStory) (*sprintStoryState, error) {
 		return nil, err
 	}
 	for i := range stories {
-		if !todopkg.IsClosed(stories[i].Status) && stories[i].Status != todopkg.StatusBlocked {
+		if todopkg.IsOpen(stories[i].Status) && stories[i].Status != todopkg.StatusBlocked {
 			return &stories[i], nil
 		}
 	}

@@ -381,12 +381,12 @@ func (b *Board) finalize(now time.Time) {
 			continue
 		}
 		counts := storyCounts[t.SprintID]
-		// Closed is whatever `bashy sprint show` calls closed: the shared
-		// todo.IsClosed predicate (done OR wontfix), never a restated rule.
-		if todopkg.IsClosed(t.Status) {
-			counts[1]++
-		} else {
+		// Open work excludes both closed statuses (done/wontfix) and tracked
+		// known issues, via the shared todo.IsOpen predicate.
+		if todopkg.IsOpen(t.Status) {
 			counts[0]++
+		} else {
+			counts[1]++
 		}
 		storyCounts[t.SprintID] = counts
 	}

@@ -403,7 +403,7 @@ func sprintTickReadBoard(s *weaveStory, since time.Time) sprintTickBoard {
 			if it.Closed != nil && it.Closed.After(since) {
 				b.Closed++
 			}
-			if todopkg.IsClosed(it.Status) {
+			if !todopkg.IsOpen(it.Status) {
 				continue
 			}
 			b.Open++
@@ -436,7 +436,7 @@ func sprintTickReadBoard(s *weaveStory, since time.Time) sprintTickBoard {
 		return stories[i].Ref.ID < stories[j].Ref.ID
 	})
 	for _, story := range stories {
-		if todopkg.IsClosed(story.Status) || story.Status == todopkg.StatusBlocked {
+		if !todopkg.IsOpen(story.Status) || story.Status == todopkg.StatusBlocked {
 			continue
 		}
 		b.Next = story.Ref.ID
