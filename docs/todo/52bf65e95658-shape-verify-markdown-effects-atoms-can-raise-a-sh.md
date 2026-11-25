@@ -3,15 +3,18 @@ id: 52bf65e95658
 kind: bug
 title: 'shape verify: Markdown @effects atoms can raise a shapeware app''s base cap'
 seq: 3156
-status: todo
+status: done
 priority: p1
 labels:
     - shaping
     - security
 created: 2026-11-25T16:05:09.934438Z
+assignee: agy-gemini4-neon
 sprint: 721
 sprint_id: 69fc2c51-8faf-58e7-83ac-f27007837ae7
 sprint_title: 'Shapeware pilot on form: spec v0 layout, one-step launch'
+closed: 2026-11-25T17:59:39.268982Z
+closed_by: claude-opus5.5
 ---
 
 From the umbrella Sprint 712 vendor review (GLM #2, operator-accepted g1; spec v0.1 §7, finding F7).
