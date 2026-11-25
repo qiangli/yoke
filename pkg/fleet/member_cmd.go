@@ -64,7 +64,12 @@ func NewMemberCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		isInvite := cmd.Name() == "invite"
 		if asJSON {
+			if isInvite {
+				_, err = cmd.OutOrStdout().Write(raw)
+				return err
+			}
 			if len(raw) == 0 {
 				return output(cmd, map[string]any{"removed": true}, "")
 			}
@@ -74,17 +79,36 @@ func NewMemberCmd() *cobra.Command {
 		if method == http.MethodDelete {
 			return output(cmd, nil, "removed")
 		}
-		var env map[string]json.RawMessage
+		var env struct {
+			Member      json.RawMessage `json:"member"`
+			Resent      bool            `json:"resent"`
+			EmailStatus string          `json:"email_status"`
+			EmailError  string          `json:"email_error"`
+		}
 		if err = json.Unmarshal(raw, &env); err != nil {
 			return err
 		}
-		if m := env["member"]; len(m) > 0 {
-			var row boundary.Member
-			if json.Unmarshal(m, &row) == nil {
-				return output(cmd, nil, fmt.Sprintf("%s\t%s\t%s\t%s", row.ID, row.Email, row.Circle, row.Status))
+		var row boundary.Member
+		if json.Unmarshal(env.Member, &row) != nil {
+			return output(cmd, nil, string(raw))
+		}
+		plain := fmt.Sprintf("%s\t%s\t%s\t%s", row.ID, row.Email, row.Circle, row.Status)
+		if isInvite {
+			switch {
+			case env.EmailStatus == "sent" && env.Resent:
+				plain += "\nre-sent invitation mail"
+			case env.EmailStatus == "sent":
+				plain += "\ninvitation mail sent"
+			case env.EmailStatus == "not_sent":
+				plain += "\ninvitation mail NOT sent"
+				if env.EmailError != "" {
+					plain += ": " + strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(env.EmailError)
+				}
+			case env.EmailStatus == "skipped":
+				plain += "\nalready a member; no mail"
 			}
 		}
-		return output(cmd, nil, string(raw))
+		return output(cmd, nil, plain)
 	}
 	resolve := func(ctx context.Context, c *boundary.Client, key string) (string, error) {
 		if strings.HasPrefix(key, "mem_") {

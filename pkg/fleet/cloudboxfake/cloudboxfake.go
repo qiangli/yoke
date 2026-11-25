@@ -258,6 +258,8 @@ type Fake struct {
 	groups      map[string]*Group
 	idem        map[string]*idemEntry
 	admitRules  map[string][]AdmitRule
+
+	invitationMailDisabled bool
 }
 
 // New starts a fake master; it is closed (with every satellite) at t's end.
@@ -294,6 +296,13 @@ func (f *Fake) SetNow(now func() time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.now = now
+}
+
+// SetInvitationMailConfigured controls whether the fake reports invitation mail as sent.
+func (f *Fake) SetInvitationMailConfigured(configured bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invitationMailDisabled = !configured
 }
 
 // URL is the master base URL.
@@ -733,7 +742,7 @@ func (f *Fake) addMember(w http.ResponseWriter, r *http.Request) *apiError {
 	var body struct {
 		Email  string `json:"email"`
 		Circle string `json:"circle"`
-		Notify *bool  `json:"notify"` // false: no invitation email (the fake sends none anyway)
+		Notify *bool  `json:"notify"`
 	}
 	if e := decode(r, &body); e != nil {
 		return e
@@ -751,17 +760,42 @@ func (f *Fake) addMember(w http.ResponseWriter, r *http.Request) *apiError {
 	if email == tok.email {
 		return errf(422, "self_member", "cannot add yourself as a member")
 	}
-	if m := f.memberRow(tok.email, email); m != nil {
-		writeJSON(w, 200, map[string]any{"member": f.view(m)})
-		return nil
-	}
+	m := f.memberRow(tok.email, email)
+	status := http.StatusOK
 	now := f.now()
-	inv := &Invitation{ID: f.nextID("inv"), FromEmail: tok.email, Status: "pending", CreatedAt: now, ExpiresAt: now.Add(InvitationTTL), to: email}
-	m := &Member{ID: f.nextID("mem"), Email: email, Circle: body.Circle, Status: "pending", InvitationID: inv.ID, CreatedAt: now, owner: tok.email}
-	inv.memberID = m.ID
-	f.members[m.ID] = m
-	f.invitations[inv.ID] = inv
-	writeJSON(w, 201, map[string]any{"member": f.view(m), "invitation": inv})
+	if m == nil {
+		status = http.StatusCreated
+		m = &Member{ID: f.nextID("mem"), Email: email, Circle: body.Circle, Status: "pending", CreatedAt: now, owner: tok.email}
+		f.members[m.ID] = m
+	}
+	response := map[string]any{}
+	emailStatus := "skipped"
+	if m.Status == "pending" {
+		inv := f.invitations[m.InvitationID]
+		if inv == nil {
+			inv = &Invitation{ID: f.nextID("inv"), FromEmail: tok.email, Status: "pending", to: email, memberID: m.ID}
+			m.InvitationID = inv.ID
+			f.invitations[inv.ID] = inv
+		}
+		inv.CreatedAt = now
+		inv.ExpiresAt = now.Add(InvitationTTL)
+		response["invitation"] = inv
+		if body.Notify == nil || *body.Notify {
+			emailStatus = "sent"
+			if f.invitationMailDisabled {
+				emailStatus = "not_sent"
+				const emailError = "mail not configured; invitation not sent"
+				response["email_error"] = emailError
+				w.Header().Set("X-Invitation-Email-Error", emailError)
+			}
+		}
+	}
+	response["member"] = f.view(m)
+	response["resent"] = status == http.StatusOK && emailStatus == "sent"
+	response["email_sent"] = emailStatus == "sent"
+	response["email_status"] = emailStatus
+	w.Header().Set("X-Invitation-Email", emailStatus)
+	writeJSON(w, status, response)
 	return nil
 }
 

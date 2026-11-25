@@ -3,6 +3,9 @@ package fleet
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -35,10 +38,15 @@ func TestMemberVerbsAgainstWire(t *testing.T) {
 	if got := run(alice, "ls"); len(got["members"].([]any)) != 0 {
 		t.Fatal("dry run sent request")
 	}
-	if got := run(alice, "add", "quiet@example.com", "--circle", "family")["member"].(map[string]any); got["status"] != "pending" || got["circle"] != "family" {
+	add := run(alice, "add", "quiet@example.com", "--circle", "family")
+	if got := add["member"].(map[string]any); got["status"] != "pending" || got["circle"] != "family" || add["email_status"] != "skipped" {
 		t.Fatal(got)
 	}
-	invitation := run(alice, "invite", "bob@example.com", "--circle", "family")["invitation"].(map[string]any)["id"].(string)
+	invite := run(alice, "invite", "bob@example.com", "--circle", "family")
+	if invite["email_status"] != "sent" || invite["email_sent"] != true || invite["resent"] != false {
+		t.Fatal(invite)
+	}
+	invitation := invite["invitation"].(map[string]any)["id"].(string)
 	if got := run(alice, "check", "bob@example.com"); got["reason"] != "inactive" {
 		t.Fatal(got)
 	}
@@ -70,6 +78,64 @@ func TestMemberVerbsAgainstWire(t *testing.T) {
 	if got := run(bob, "invitations"); len(got["invitations"].([]any)) != 0 {
 		t.Fatal(got)
 	}
+}
+
+func TestMemberInviteDelivery(t *testing.T) {
+	f := cloudboxfake.New(t)
+	const invitee = "bob@example.com"
+	alice := f.AddOwner("alice@example.com")
+	bob := f.AddOwner(invitee)
+	run := func(token string, args ...string) string {
+		t.Helper()
+		cmd := NewMemberCmd()
+		var out, stderr bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&stderr)
+		cmd.SetArgs(append([]string{"--master", f.URL(), "--token", token}, args...))
+		if err := cmd.Execute(); err != nil || stderr.Len() != 0 {
+			t.Fatalf("member %v returned %v, stderr %q", args, err, stderr.String())
+		}
+		return out.String()
+	}
+	assertInvite := func(email, status, mailLine string) string {
+		t.Helper()
+		got := run(alice, "invite", email)
+		id, _, _ := strings.Cut(got, "\t")
+		want := fmt.Sprintf("%s\t%s\tguest\t%s\n%s\n", id, email, status, mailLine)
+		if !strings.HasPrefix(id, "mem_") || got != want {
+			t.Fatalf("invite %s: got %q, want member row and %q", email, got, mailLine)
+		}
+		return id
+	}
+
+	id := assertInvite(invitee, "pending", "invitation mail sent")
+	if got := assertInvite(invitee, "pending", "re-sent invitation mail"); got != id {
+		t.Fatalf("re-invite changed member ID from %q to %q", id, got)
+	}
+	var resent struct {
+		Invitation cloudboxfake.Invitation `json:"invitation"`
+		Resent     bool                    `json:"resent"`
+	}
+	if err := json.Unmarshal([]byte(run(alice, "invite", invitee, "--json")), &resent); err != nil || !resent.Resent || resent.Invitation.ID == "" {
+		t.Fatalf("re-invite JSON: %+v, %v", resent, err)
+	}
+	run(bob, "accept", resent.Invitation.ID)
+	assertInvite(invitee, "active", "already a member; no mail")
+
+	// Compare the active-member JSON output directly with the fake's wire body.
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/members", strings.NewReader(`{"email":"bob@example.com","circle":"guest"}`))
+	request.Header.Set("Authorization", "Bearer "+alice)
+	response := httptest.NewRecorder()
+	f.Master.Config.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("X-Invitation-Email") != "skipped" {
+		t.Fatalf("active member response: %d, %v", response.Code, response.Header())
+	}
+	if got := run(alice, "invite", invitee, "--json"); got != response.Body.String() {
+		t.Fatalf("invite --json got %q, want %q", got, response.Body.String())
+	}
+
+	f.SetInvitationMailConfigured(false)
+	assertInvite("carol@example.com", "pending", "invitation mail NOT sent: mail not configured; invitation not sent")
 }
 
 func TestMemberRejectsBadCircleBeforeNetwork(t *testing.T) {
