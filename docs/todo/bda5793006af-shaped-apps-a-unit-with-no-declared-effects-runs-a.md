@@ -3,15 +3,18 @@ id: bda5793006af
 kind: bug
 title: 'shaped apps: a unit with no declared effects runs at read+write; shapeware needs default-deny'
 seq: 3157
-status: todo
+status: done
 priority: p1
 labels:
     - shaping
     - security
 created: 2026-11-25T16:05:10.152714Z
+assignee: agy-gemini4-hydrogen
 sprint: 721
 sprint_id: 69fc2c51-8faf-58e7-83ac-f27007837ae7
 sprint_title: 'Shapeware pilot on form: spec v0 layout, one-step launch'
+closed: 2026-11-25T18:07:48.76308Z
+closed_by: claude-opus5.5
 ---
 
 From the umbrella Sprint 712 vendor review (codex #1, muse #3; operator-accepted m2; spec v0.1 §7, finding F8).
