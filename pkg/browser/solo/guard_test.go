@@ -158,8 +158,8 @@ func TestSoloExtractHidesGuardedValues(t *testing.T) {
 		t.Skip("no Chrome or Chromium binary found")
 	}
 	defer c.Close()
-	if _, err := c.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: srv.URL}); err != nil {
-		t.Fatal(err)
+	if nav, err := c.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: srv.URL}); err != nil || nav == nil || !nav.Success {
+		t.Fatalf("navigate: %+v, %v", nav, err)
 	}
 	res, err := c.Execute(ctx, wire.Action{Type: wire.ActionExtract})
 	if err != nil || !res.Success {
