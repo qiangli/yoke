@@ -65,6 +65,102 @@ func TestDecoratorReader(t *testing.T) {
 	}
 }
 
+// For type: shapeware folders (both metadata.type and legacy top-level type),
+// Markdown fences (SKILL.md, references/, dag.md, known issues) cannot raise
+// the base effect cap or inject contracted functions; the cap comes from
+// contract.bsh and raw code files only. Non-shapeware folders keep reading
+// Markdown fences unchanged.
+func TestShapewareIgnoresMarkdownEffects(t *testing.T) {
+	readers := []struct {
+		name string
+		r    ContractReader
+	}{
+		{"DecoratorReader", DecoratorReader{}},
+		{"UnitReader", UnitReader{}},
+	}
+	cases := []struct {
+		name      string
+		files     map[string]string
+		wantCap   string
+		wantFuncs string
+	}{
+		{
+			name: "shapeware metadata.type ignores SKILL.md and reference fences",
+			files: map[string]string{
+				"SKILL.md":                   "---\nname: form\ndescription: Shapeware form.\nmetadata:\n  type: shapeware\n---\n\n```bsh\n@effects(\"net\")\n@ensure('true')\ninjected() { true; }\n```\n",
+				"references/known-issues.md": "```bsh\n@guard(effects: \"exec,write\")\n```\n",
+				"dag.md":                     "```bashsharp\n@effects(\"net,exec\")\n```\n",
+				"contract.bsh":               "@effects(\"read\")\n",
+				"checks/smoke.bsh":           "test -f contract.bsh\n",
+			},
+			wantCap:   "read",
+			wantFuncs: "",
+		},
+		{
+			name: "shapeware legacy top-level type ignores SKILL.md fence",
+			files: map[string]string{
+				"SKILL.md":     "---\nname: form\ndescription: Shapeware form.\ntype: shapeware\n---\n\n```bsh\n@effects(\"net\")\n```\n",
+				"contract.bsh": "@effects(\"read\")\n",
+			},
+			wantCap:   "read",
+			wantFuncs: "",
+		},
+		{
+			name: "shapeware takes cap from contract.bsh and code only",
+			files: map[string]string{
+				"SKILL.md":     "---\nname: form\ndescription: Shapeware form.\nmetadata:\n  type: shapeware\n---\n\n```bsh\n@effects(\"net\")\n```\n",
+				"contract.bsh": "@effects(\"read\")\n",
+				"lib/work.bsh": "@guard(effects: \"write\")\n@ensure('true')\nwork() { true; }\n",
+			},
+			wantCap:   "read,write",
+			wantFuncs: "work",
+		},
+		{
+			name: "non-shapeware skill keeps reading SKILL.md fence",
+			files: map[string]string{
+				"SKILL.md":     "---\nname: plain-skill\ndescription: Plain skill.\n---\n\n```bsh\n@effects(\"net\")\n@ensure('true')\nfetch() { true; }\n```\n",
+				"contract.bsh": "@effects(\"read\")\n",
+			},
+			wantCap:   "net,read",
+			wantFuncs: "fetch",
+		},
+		{
+			name: "dag folder keeps reading Markdown fences",
+			files: map[string]string{
+				"SKILL.md":     "---\nname: workflow\ndescription: Dag workflow.\ntype: dag\n---\n\n```bsh\n@effects(\"net\")\n```\n",
+				"contract.bsh": "@effects(\"read\")\n",
+			},
+			wantCap:   "net,read",
+			wantFuncs: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tree(t, tc.files)
+			var digests []string
+			for _, rd := range readers {
+				t.Run(rd.name, func(t *testing.T) {
+					c, err := rd.r.ReadContract(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if c.Cap() != tc.wantCap {
+						t.Fatalf("cap = %q, want %q", c.Cap(), tc.wantCap)
+					}
+					if got := strings.Join(c.FunctionNames(), ","); got != tc.wantFuncs {
+						t.Fatalf("functions = %q, want %q", got, tc.wantFuncs)
+					}
+					digests = append(digests, c.Digest())
+				})
+			}
+			if len(digests) == 2 && digests[0] != digests[1] {
+				t.Fatalf("DecoratorReader and UnitReader digests differ: %s vs %s", digests[0], digests[1])
+			}
+		})
+	}
+}
+
 // The digest is what an evidence binding pins the contract with: equal
 // contracts must digest equally, and every part of a contract must move it.
 func TestContractDigestIsStableAndSensitive(t *testing.T) {

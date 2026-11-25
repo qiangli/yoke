@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
 // ContractReader reads the shaping contract out of one checked-out tree.
@@ -106,7 +108,9 @@ func (c Contract) Cap() string { return strings.Join(c.Effects, ",") }
 
 // DecoratorReader is the minimal contract reader: it reads @require,
 // @ensure, @guard and @effects decorators out of the tree's Bash# units.
-// A unit is a .bsh/.bash file or a Markdown document with bsh fences.
+// A unit is a .bsh/.bash file or, for non-shapeware folders, a Markdown
+// document with bsh fences. For type: shapeware folders, Markdown files are
+// ignored so prose fences cannot raise the base effect cap.
 //
 // It is deliberately small, and it stays as the fallback inside UnitReader
 // for files where pkg/unit finds no contract.
@@ -115,8 +119,46 @@ type DecoratorReader struct {
 	// Empty means .bsh and .bash.
 	Exts []string
 	// FenceExts are the extensions read as fenced documents. Empty means
-	// .md.
+	// .md (excluded for type: shapeware folders).
 	FenceExts []string
+}
+
+// isShapewareDir reports whether dir is a shapeware folder: its root
+// SKILL.md declares type "shapeware" in YAML frontmatter (metadata.type,
+// falling back to legacy top-level type via pkg/unit/frontmatter).
+func isShapewareDir(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		return false
+	}
+	fm, err := frontmatter.Parse(data)
+	if err != nil || fm.YAMLErr != "" {
+		return false
+	}
+	return strings.EqualFold(fm.Type, "shapeware")
+}
+
+// effectiveFenceExts returns the fenced-document extensions to walk for dir.
+// Empty configured defaults to .md. For a type: shapeware folder, Markdown
+// extensions are excluded so prose fences (SKILL.md, references/, known
+// issues, dag.md) cannot contribute @effects/@guard atoms to the base cap.
+func effectiveFenceExts(dir string, configured []string) []string {
+	fences := configured
+	if len(fences) == 0 {
+		fences = []string{".md"}
+	}
+	if !isShapewareDir(dir) {
+		return fences
+	}
+	out := make([]string, 0, len(fences))
+	for _, ext := range fences {
+		low := strings.ToLower(ext)
+		if low == ".md" || low == ".markdown" {
+			continue
+		}
+		out = append(out, ext)
+	}
+	return out
 }
 
 // decoratorLine matches a contract decorator at the start of a line. The
@@ -136,10 +178,7 @@ func (r DecoratorReader) ReadContract(dir string) (Contract, error) {
 	if len(exts) == 0 {
 		exts = []string{".bsh", ".bash"}
 	}
-	fences := r.FenceExts
-	if len(fences) == 0 {
-		fences = []string{".md"}
-	}
+	fences := effectiveFenceExts(dir, r.FenceExts)
 	var c Contract
 	effects := map[string]bool{}
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {

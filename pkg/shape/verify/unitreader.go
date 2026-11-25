@@ -24,14 +24,16 @@ import (
 // back to the minimal line-based reader, so the verifier keeps answering
 // everywhere it used to.
 //
-// A unit is a .bsh/.bash file or a Markdown document with Bash# fences;
-// files under checks/ are required checks, as with the minimal reader.
+// A unit is a .bsh/.bash file or, for non-shapeware folders, a Markdown
+// document with Bash# fences; for type: shapeware folders, Markdown files are
+// ignored so prose fences cannot raise the base effect cap. Files under
+// checks/ are required checks, as with the minimal reader.
 type UnitReader struct {
 	// Exts are the file extensions read as raw Bash# bodies.
 	// Empty means .bsh and .bash.
 	Exts []string
 	// FenceExts are the extensions read as fenced documents. Empty means
-	// .md.
+	// .md (excluded for type: shapeware folders).
 	FenceExts []string
 }
 
@@ -41,10 +43,7 @@ func (r UnitReader) ReadContract(dir string) (Contract, error) {
 	if len(exts) == 0 {
 		exts = []string{".bsh", ".bash"}
 	}
-	fences := r.FenceExts
-	if len(fences) == 0 {
-		fences = []string{".md"}
-	}
+	fences := effectiveFenceExts(dir, r.FenceExts)
 	var c Contract
 	effects := map[string]bool{}
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
