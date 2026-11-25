@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/shape/contain"
 	"github.com/qiangli/yoke/pkg/shape/evidence"
@@ -287,6 +288,26 @@ func TestTrustedRunnerChecksSeeTheGoCaches(t *testing.T) {
 	}
 	if want := mod + "\n" + build; !strings.Contains(out.Detail, want) {
 		t.Fatalf("check did not see the host Go caches:\n%s", out.Detail)
+	}
+}
+
+func TestCheckEnvSharesBinCache(t *testing.T) {
+	t.Setenv("GOMODCACHE", t.TempDir())
+	t.Setenv("GOCACHE", t.TempDir())
+	for _, tc := range []struct{ name, cache string }{
+		{"default", ""},
+		{"explicit", t.TempDir()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("BASHY_BIN_CACHE", tc.cache)
+			want, err := binmgr.CacheDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := checkEnv(filepath.Join(t.TempDir(), "calls.log"))["BASHY_BIN_CACHE"]; got != want {
+				t.Fatalf("check BASHY_BIN_CACHE = %q, want host cache %q", got, want)
+			}
+		})
 	}
 }
 

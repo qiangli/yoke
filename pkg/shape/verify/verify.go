@@ -44,6 +44,7 @@ import (
 	"time"
 
 	ygit "github.com/qiangli/yoke/git"
+	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/gomod"
 	"github.com/qiangli/yoke/pkg/policy/advice"
 	"github.com/qiangli/yoke/pkg/shape/contain"
@@ -631,6 +632,11 @@ func checkEnv(callLog string) map[string]string {
 	// the verifier's own values win, else what the go tool reports.
 	for k, v := range goCaches() {
 		env[k] = v
+	}
+	// Resolve managed tools before HOME is isolated, so checks using bashy go
+	// reuse the host's toolchain instead of downloading it into each clone.
+	if cache, err := binmgr.CacheDir(); err == nil {
+		env["BASHY_BIN_CACHE"] = cache
 	}
 	return env
 }
