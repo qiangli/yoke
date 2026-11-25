@@ -286,6 +286,11 @@ type Server struct {
 	// Args is the server's argv after the binary. It must name $ADDR or
 	// $PORT: a server that is not told where to listen cannot be reached.
 	Args []string `json:"args"`
+	// Digest pins the trusted core (shapeware spec v0.1 section 9):
+	// "sha256:" + 64 lowercase hex over the core's source files. It is
+	// optional; when present it must be well formed, and the run path
+	// refuses a core that does not match it.
+	Digest string `json:"digest,omitempty"`
 }
 
 // Parse decodes and validates a manifest. Unknown fields are an error so a
@@ -357,7 +362,23 @@ func Parse(b []byte) (Manifest, error) {
 	if !listens {
 		return Manifest{}, fmt.Errorf("%s: server.args must pass $ADDR or $PORT so the server listens where the console proxies", File)
 	}
+	if m.Server.Digest != "" && !validDigest(m.Server.Digest) {
+		return Manifest{}, fmt.Errorf("%s: server.digest must be sha256: followed by 64 lowercase hex digits", File)
+	}
 	return m, nil
+}
+
+func validDigest(d string) bool {
+	hex, ok := strings.CutPrefix(d, "sha256:")
+	if !ok || len(hex) != 64 {
+		return false
+	}
+	for _, c := range hex {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func cleanAudience(scope string, a *Audience) error {

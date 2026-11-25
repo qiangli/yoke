@@ -5,6 +5,7 @@ package appserver
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -152,6 +153,22 @@ func TestParseScopes(t *testing.T) {
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("Parse(%s) accepted", bad)
+		}
+	}
+}
+
+func TestParseServerDigest(t *testing.T) {
+	const ok = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	m, err := Parse([]byte(`{"server":{"main":"server","args":["serve","-addr","$ADDR"],"digest":"` + ok + `"}}`))
+	if err != nil || m.Server == nil || m.Server.Digest != ok {
+		t.Fatalf("valid digest: %+v, %v", m.Server, err)
+	}
+	if m, err := Parse([]byte(`{"server":{"args":["-addr","$ADDR"]}}`)); err != nil || m.Server.Digest != "" {
+		t.Fatalf("digest is optional: %+v, %v", m.Server, err)
+	}
+	for _, bad := range []string{"sha256:abc", "md5:" + ok[7:], ok[7:], "sha256:" + strings.ToUpper(ok[7:]), "sha256:" + ok[8:] + "g"} {
+		if _, err := Parse([]byte(`{"server":{"args":["-addr","$ADDR"],"digest":"` + bad + `"}}`)); err == nil {
+			t.Fatalf("malformed digest %q accepted", bad)
 		}
 	}
 }
