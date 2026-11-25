@@ -211,7 +211,17 @@ func Run(ctx context.Context, g *Guard, script, name, dir string, env []string, 
 	if err != nil {
 		return 2, err
 	}
-	opts := append(g.RunnerOptions(shell.Handler()), interp.Decorators(Decorators()),
+	decs := Decorators()
+	through := func(ctx context.Context, c *interp.Call, _ []interp.DecoratorArg) error {
+		c.Next(ctx)
+		return nil
+	}
+	for _, k := range []string{"effects", "guard"} {
+		if _, exists := decs[k]; !exists {
+			decs[k] = through
+		}
+	}
+	opts := append(g.RunnerOptions(shell.Handler()), interp.Decorators(decs),
 		interp.Dir(dir), interp.Env(expand.ListEnviron(env...)), interp.StdIO(stdin, stdout, stderr))
 	r, err := interp.New(opts...)
 	if err != nil {

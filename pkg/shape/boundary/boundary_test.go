@@ -243,3 +243,40 @@ func TestPreviewCopyCannotReachRealData(t *testing.T) {
 		t.Fatalf("preview reached real data: exit %d stderr %q", code, stderr)
 	}
 }
+
+func TestReadOnlyPolicyRefusesWrites(t *testing.T) {
+	w := newWorld(t)
+	if err := os.WriteFile(filepath.Join(w.alice, "note.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g, err := New(Policy{
+		App: "notes", Principal: "alice", Data: w.alice, Home: w.home,
+		ReadOnly: true,
+		Grants:   Grants{Write: []string{w.docs}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, stderr, code := run(t, g, "cat note.txt; echo ok > /dev/null"); code != 0 || out != "hello\n" {
+		t.Fatalf("read-only read failed: exit %d out %q stderr %q", code, out, stderr)
+	}
+	for _, script := range []string{
+		"echo x > out.txt",
+		"touch touched.txt",
+		"echo x > " + `'` + filepath.Join(w.docs, "granted.txt") + `'`,
+	} {
+		_, stderr, code := run(t, g, script)
+		if code == 0 || !strings.Contains(stderr, "read-only") {
+			t.Fatalf("read-only %q succeeded or missed reason: exit %d stderr %q", script, code, stderr)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(w.alice, "out.txt"),
+		filepath.Join(w.alice, "touched.txt"),
+		filepath.Join(w.docs, "granted.txt"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			t.Fatalf("denied write landed at %s", p)
+		}
+	}
+}

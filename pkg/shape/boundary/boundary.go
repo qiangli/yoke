@@ -90,8 +90,12 @@ type Policy struct {
 	App       string `json:"app"`
 	Principal string `json:"principal,omitempty"`
 	// Data is the app's private data for this principal (BASHY_APP_DATA):
-	// the only location writable without a grant.
+	// the only location writable without a grant unless ReadOnly is set.
 	Data string `json:"data"`
+	// ReadOnly forbids every write, including within Data and Grants.Write.
+	// Set when a unit runs without write permission (e.g. a shapeware unit
+	// with no declared effects).
+	ReadOnly bool `json:"read_only,omitempty"`
 	// Home is the bashy home. Everything under it except Data is out of
 	// reach: other principals' and apps' data, bashy state, evidence.
 	Home string `json:"home,omitempty"`
@@ -163,6 +167,9 @@ func (g *Guard) Check(op Op, dir, path string) error {
 	}
 	if isNetDevice(path) {
 		return &Denied{Op: op, Target: path, Reason: "network redirection is not an app data effect"}
+	}
+	if g.p.ReadOnly && op == OpWrite {
+		return &Denied{Op: op, Target: path, Reason: "unit is read-only (no write effect declared)"}
 	}
 	target := path
 	if !filepath.IsAbs(target) && !strings.HasPrefix(target, "/") && !strings.HasPrefix(target, `\`) {

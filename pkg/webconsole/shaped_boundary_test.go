@@ -5,8 +5,10 @@ package webconsole
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,6 +203,176 @@ func TestShapedAppDataBoundary(t *testing.T) {
 	for _, p := range []string{filepath.Join(bobData, "x"), filepath.Join(docs, "x"), filepath.Join(home, "x")} {
 		if _, err := os.Stat(p); err == nil {
 			t.Errorf("a denied write landed: %s", p)
+		}
+	}
+}
+
+func TestShapewareNoDeclaredEffectsIsReadOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BASHY_HOME", home)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []struct {
+		app  string
+		user string
+	}{
+		{"meta", "alice"},
+		{"top", "alice"},
+		{"plain", "alice"},
+		{"other", "alice"},
+	} {
+		st, err := shape.OpenAt(home, who.app, "device:"+who.user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.WriteData("seed.txt", []byte("seed\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	units := map[string]string{
+		"public/index.html":   "<h1>App</h1>\n",
+		"api/read.md":         unitDoc("cat seed.txt"),
+		"api/write-redir.md":  unitDoc("echo hi > n.txt; cat n.txt"),
+		"api/write-tool.md":   unitDoc("touch t.txt"),
+		"api/write-capped.md": unitDoc("@effects(\"read,write\")\nwrite_it() { echo ok > w.txt; cat w.txt; }\nwrite_it"),
+	}
+	cloneWith := func(skillMD string) map[string]string {
+		m := make(map[string]string, len(units)+1)
+		for k, v := range units {
+			m[k] = v
+		}
+		if skillMD != "" {
+			m["SKILL.md"] = skillMD
+		}
+		return m
+	}
+
+	metaRepo := commitApp(t, "meta", cloneWith("---\nname: meta\ndescription: shapeware via metadata.type\nmetadata:\n  type: shapeware\n---\n"))
+	topRepo := commitApp(t, "top", cloneWith("---\nname: top\ndescription: shapeware via top-level type\ntype: shapeware\n---\n"))
+	plainRepo := commitApp(t, "plain", cloneWith(""))
+	otherRepo := commitApp(t, "other", cloneWith("---\nname: other\ndescription: non-shapeware skill\nmetadata:\n  type: dag\n---\n"))
+
+	panels := []Panel{
+		{Name: "meta", Label: "Meta", Path: "/meta/", ShapedSource: metaRepo, Auth: AuthSystem, Source: "registered", Available: true},
+		{Name: "top", Label: "Top", Path: "/top/", ShapedSource: topRepo, Auth: AuthSystem, Source: "registered", Available: true},
+		{Name: "plain", Label: "Plain", Path: "/plain/", ShapedSource: plainRepo, Auth: AuthSystem, Source: "registered", Available: true},
+		{Name: "other", Label: "Other", Path: "/other/", ShapedSource: otherRepo, Auth: AuthSystem, Source: "registered", Available: true},
+	}
+	pairPath := filepath.Join(home, "pairing.json")
+	h := newTestHandler(t, Options{
+		RequireLogin: true, Sessions: websession.NewStore(time.Hour, []byte("test-key-test-key-test-key-32byt")),
+		Pairing: true, PairStorePath: pairPath, Panels: panels,
+		Shape: ShapeOptions{Home: home, Runner: []string{exe, boundaryInterpArg}, Level: contain.LevelProcess},
+	})
+	pairs := newPairStore(pairPath)
+	_, secret, err := pairs.issueTicketForPrincipal([]string{"meta", "top", "plain", "other"}, time.Hour, time.Minute, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemed := do(h, http.MethodGet, pairRedeemPath+"?v="+pairQRVersion+"&t="+url.QueryEscape(secret), "192.0.2.20:5555", nil)
+	var alice http.Header
+	for _, cookie := range redeemed.Result().Cookies() {
+		if cookie.Name == sessionCookie && cookie.Value != "" {
+			alice = withCookie(cookie)
+		}
+	}
+	if alice == nil {
+		t.Fatalf("pair redemption = %d without session cookie", redeemed.Code)
+	}
+
+	// Shapeware apps (both metadata.type and top-level type):
+	// - read succeeds with no declared effects
+	// - write without declared effects is refused (redirection and tool)
+	// - write with explicit @effects("read,write") succeeds
+	for _, appName := range []string{"meta", "top"} {
+		if w := do(h, http.MethodGet, "/"+appName+"/api/read", "192.0.2.20:5555", alice); w.Code != http.StatusOK || w.Body.String() != "seed\n" {
+			t.Fatalf("%s read = %d %q, want 200 seed", appName, w.Code, w.Body.String())
+		}
+		for _, tc := range []struct {
+			unit string
+			code string
+		}{
+			{"write-redir", "(exit 1)"},
+			{"write-tool", "(exit 126)"},
+		} {
+			w := do(h, http.MethodGet, "/"+appName+"/api/"+tc.unit, "192.0.2.20:5555", alice)
+			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), tc.code) {
+				t.Fatalf("%s %s = %d %q, want 500 %s", appName, tc.unit, w.Code, w.Body.String(), tc.code)
+			}
+			var resp struct {
+				Incident string `json:"incident"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Incident == "" {
+				t.Fatalf("%s %s missing incident id: %v %q", appName, tc.unit, err, w.Body.String())
+			}
+			st, _ := shape.OpenAt(home, appName, "device:alice")
+			incStore, err := openIncidents(st)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inc, err := incStore.Get(resp.Incident)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(inc.Evidence, "read-only") {
+				t.Fatalf("%s %s incident evidence = %q, want read-only denial", appName, tc.unit, inc.Evidence)
+			}
+		}
+		st, _ := shape.OpenAt(home, appName, "device:alice")
+		dataDir, _ := st.DataDir()
+		for _, f := range []string{"n.txt", "t.txt"} {
+			if _, err := os.Stat(filepath.Join(dataDir, f)); err == nil {
+				t.Fatalf("%s denied write created %s", appName, f)
+			}
+		}
+		if w := do(h, http.MethodGet, "/"+appName+"/api/write-capped", "192.0.2.20:5555", alice); w.Code != http.StatusOK || w.Body.String() != "ok\n" {
+			t.Fatalf("%s write-capped = %d %q, want 200 ok", appName, w.Code, w.Body.String())
+		}
+	}
+
+	// Base SKILL.md type: shapeware cannot be bypassed by a candidate dropping SKILL.md.
+	r, err := gogit.PlainOpen(metaRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, _ := r.Worktree()
+	if _, err := wt.Remove("SKILL.md"); err != nil {
+		t.Fatal(err)
+	}
+	candRev, err := wt.Commit("drop skill.md", &gogit.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.test", When: time.Now()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reset HEAD back to base commit with SKILL.md while keeping candRev in git object store.
+	baseHead, err := r.ResolveRevision("HEAD~1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.Reset(&gogit.ResetOptions{Commit: *baseHead, Mode: gogit.HardReset}); err != nil {
+		t.Fatal(err)
+	}
+	candCommit, err := r.CommitObject(candRev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candTree, err := candCommit.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(&shapedApp{name: "meta", repo: metaRepo}).isShapeware(candTree) {
+		t.Fatal("candidate dropping SKILL.md bypassed shapeware detection")
+	}
+
+	// Non-shapeware apps remain unchanged: no declared effects still allows read+write.
+	for _, appName := range []string{"plain", "other"} {
+		if w := do(h, http.MethodGet, "/"+appName+"/api/write-redir", "192.0.2.20:5555", alice); w.Code != http.StatusOK || w.Body.String() != "hi\n" {
+			t.Fatalf("%s write-redir = %d %q, want 200 hi", appName, w.Code, w.Body.String())
+		}
+		if w := do(h, http.MethodGet, "/"+appName+"/api/write-tool", "192.0.2.20:5555", alice); w.Code != http.StatusOK {
+			t.Fatalf("%s write-tool = %d %q, want 200", appName, w.Code, w.Body.String())
 		}
 	}
 }

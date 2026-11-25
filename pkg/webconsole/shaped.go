@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 	"github.com/qiangli/yoke/pkg/unit"
+	"github.com/qiangli/yoke/pkg/unit/frontmatter"
 )
 
 // A shaped app is a versioned source tree the console serves itself: its
@@ -404,12 +406,16 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		return
 	}
 	// The cap is the shaped-app ceiling; the effects are what the unit's
-	// contract declares (an uncontracted unit is taken at the ceiling). A
-	// unit declaring more — network, exec, credentials — is refused before
+	// contract declares (an uncontracted unit defaults to read-only for
+	// type: shapeware apps, and read+write for other apps). A unit
+	// declaring more — network, exec, credentials — is refused before
 	// it starts. Isolation is the unit's own request: @sandbox() — or a
 	// bare @sandbox line — routes it to bashy oci; the app never sees how
 	// the host provides it.
 	effects := []string{"read", "write"}
+	if a.isShapeware(tree) {
+		effects = []string{"read"}
+	}
 	level := a.opts.Level
 	var declared boundary.Grants
 	if c, cerr := unit.ReadContract(body); cerr != nil {
@@ -549,6 +555,7 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 	for k, v := range env {
 		set[k] = v
 	}
+	readOnly := !slices.Contains(effects, "write")
 	if level != contain.LevelSandbox {
 		pol, revoke, err := a.policy(ctx, principal, dataDir, grants)
 		if err != nil {
@@ -556,6 +563,7 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 			return out, serr, contain.Result{}, err
 		}
 		defer revoke()
+		pol.ReadOnly = readOnly
 		v, err := boundary.Env(pol)
 		if err != nil {
 			out, serr := finish()
@@ -567,11 +575,59 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
+	capSpec := "read,write"
+	if readOnly {
+		capSpec = "read"
+	}
 	argv := append(append([]string(nil), a.opts.runner()...), "-c", body, "api/"+name)
 	res, runErr := contain.Run(ctx, contain.Spec{
-		Dir: dataDir, Argv: argv, Level: level, OCI: a.opts.OCI, Cap: "read,write", Effects: effects,
+		Dir: dataDir, Argv: argv, Level: level, OCI: a.opts.OCI, Cap: capSpec, Effects: effects,
 		EnvSet: set, Timeout: timeout, Stdout: pw, Stderr: ew,
 	})
 	out, serr := finish()
 	return out, serr, res, runErr
+}
+
+// isShapeware reports whether the served revision or the app's base revision
+// declares `type: shapeware` in SKILL.md frontmatter (checking base prevents a
+// candidate from dropping SKILL.md to gain default write).
+func (a *shapedApp) isShapeware(tree *object.Tree) bool {
+	if isShapewareTree(tree) {
+		return true
+	}
+	if a == nil || a.repo == "" {
+		return false
+	}
+	r, err := gogit.PlainOpen(a.repo)
+	if err != nil {
+		return false
+	}
+	b, err := base(r)
+	if err != nil {
+		return false
+	}
+	bt, err := b.Tree()
+	if err != nil {
+		return false
+	}
+	return isShapewareTree(bt)
+}
+
+func isShapewareTree(tree *object.Tree) bool {
+	if tree == nil {
+		return false
+	}
+	f, err := tree.File("SKILL.md")
+	if err != nil {
+		return false
+	}
+	doc, err := f.Contents()
+	if err != nil {
+		return false
+	}
+	fm, err := frontmatter.Parse([]byte(doc))
+	if err != nil || fm.YAMLErr != "" {
+		return false
+	}
+	return fm.Type == "shapeware"
 }
