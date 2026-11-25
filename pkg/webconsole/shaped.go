@@ -413,7 +413,8 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 	// bare @sandbox line — routes it to bashy oci; the app never sees how
 	// the host provides it.
 	effects := []string{"read", "write"}
-	if a.isShapeware(tree) {
+	shapeware := a.isShapeware(tree)
+	if shapeware {
 		effects = []string{"read"}
 	}
 	level := a.opts.Level
@@ -449,7 +450,7 @@ func (a *shapedApp) serveAPI(w http.ResponseWriter, r *http.Request, tree *objec
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	out, stderrTail, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, principal, grants, map[string]string{
+	out, stderrTail, res, err := a.runUnit(r.Context(), dataDir, body, name, level, effects, shapeware, principal, grants, map[string]string{
 		"REQUEST_METHOD":     r.Method,
 		"QUERY_STRING":       r.URL.RawQuery,
 		"CONTENT_TYPE":       r.Header.Get("Content-Type"),
@@ -521,7 +522,7 @@ func stderrOr(tail string, err error) string {
 // Besides stdout it returns the bounded tail of the unit's stderr, kept for
 // incident evidence: it is drained fully so a chatty unit never blocks on a
 // full pipe, and kept only as a tail so a runaway one cannot grow the server.
-func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, principal string, grants boundary.Grants, env map[string]string) ([]byte, string, contain.Result, error) {
+func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, level contain.Level, effects []string, shapeware bool, principal string, grants boundary.Grants, env map[string]string) ([]byte, string, contain.Result, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, "", contain.Result{}, err
@@ -555,7 +556,9 @@ func (a *shapedApp) runUnit(ctx context.Context, dataDir, body, name string, lev
 	for k, v := range env {
 		set[k] = v
 	}
-	readOnly := !slices.Contains(effects, "write")
+	// Read-only applies to shapeware apps only; other apps keep their
+	// existing read+write data access until reviewed (story bda57930).
+	readOnly := shapeware && !slices.Contains(effects, "write")
 	if level != contain.LevelSandbox {
 		pol, revoke, err := a.policy(ctx, principal, dataDir, grants)
 		if err != nil {

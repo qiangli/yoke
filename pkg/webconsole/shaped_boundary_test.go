@@ -238,6 +238,7 @@ func TestShapewareNoDeclaredEffectsIsReadOnly(t *testing.T) {
 		"api/write-redir.md":  unitDoc("echo hi > n.txt; cat n.txt"),
 		"api/write-tool.md":   unitDoc("touch t.txt"),
 		"api/write-capped.md": unitDoc("@effects(\"read,write\")\nwrite_it() { echo ok > w.txt; cat w.txt; }\nwrite_it"),
+		"api/read-decl.md":    unitDoc("@effects(\"read\")\nput() { echo rd > r.txt; cat r.txt; }\nput"),
 	}
 	cloneWith := func(skillMD string) map[string]string {
 		m := make(map[string]string, len(units)+1)
@@ -373,6 +374,11 @@ func TestShapewareNoDeclaredEffectsIsReadOnly(t *testing.T) {
 		}
 		if w := do(h, http.MethodGet, "/"+appName+"/api/write-tool", "192.0.2.20:5555", alice); w.Code != http.StatusOK {
 			t.Fatalf("%s write-tool = %d %q, want 200", appName, w.Code, w.Body.String())
+		}
+		// A declared read-only cap keeps today's data-dir write for
+		// non-shapeware apps (unchanged until reviewed).
+		if w := do(h, http.MethodGet, "/"+appName+"/api/read-decl", "192.0.2.20:5555", alice); w.Code != http.StatusOK || w.Body.String() != "rd\n" {
+			t.Fatalf("%s read-decl = %d %q, want 200 rd", appName, w.Code, w.Body.String())
 		}
 	}
 }
