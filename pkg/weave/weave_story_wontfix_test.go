@@ -42,6 +42,13 @@ func TestSprintKnownStoryDoesNotCountAsOpenWork(t *testing.T) {
 	if sprintGoalWontfix(s, goal) {
 		t.Fatal("a known issue must not be reported as wontfix")
 	}
+	if !sprintGoalKnown(s, goal) {
+		t.Fatal("a goal whose stories are all known issues must be marked known, not delivered")
+	}
+	shipped := sprintTestStory(t, root, s.ID, "shipped", "p1", todopkg.StatusDone)
+	if sprintGoalKnown(s, sprintGoalItem{ID: "M", Stories: []sprintStoryRef{{Repo: root, ID: ki}, {Repo: root, ID: shipped}}}) {
+		t.Fatal("a goal with a delivered story is delivered, not known")
+	}
 	if next, err := nextSprintStory(s); err != nil || next != nil {
 		t.Fatalf("next story with only known stories = %#v, %v", next, err)
 	}

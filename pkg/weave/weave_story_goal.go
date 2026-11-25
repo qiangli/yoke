@@ -319,6 +319,20 @@ func sprintGoalWontfix(s *weaveStory, g sprintGoalItem) bool {
 	return true
 }
 
+// sprintGoalKnown reports whether a goal item's stories are all tracked
+// known issues: closed as open work, but worked around, not delivered.
+func sprintGoalKnown(s *weaveStory, g sprintGoalItem) bool {
+	if len(g.Stories) == 0 {
+		return false
+	}
+	for _, ref := range g.Stories {
+		if resolveSprintGoalStory(s, ref).Status != todopkg.StatusKnown {
+			return false
+		}
+	}
+	return true
+}
+
 func sprintGoalDangling(s *weaveStory, g sprintGoalItem) []string {
 	var out []string
 	for _, ref := range g.Stories {
@@ -398,6 +412,8 @@ func renderSprintExecution(w io.Writer, s *weaveStory) {
 				mark = "x"
 				if sprintGoalWontfix(s, g) {
 					mark, note = "-", " (won't do)"
+				} else if sprintGoalKnown(s, g) {
+					mark, note = "~", " (known issue, not delivered)"
 				}
 			}
 			warning := ""
