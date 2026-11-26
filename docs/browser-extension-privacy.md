@@ -65,6 +65,10 @@ connection alive.
 Remove the extension from your browser's extensions page. Its stored
 settings are deleted with it.
 
+## Limited Use
+
+Our use of information received from Google APIs adheres to the Chrome Web Store User Data Policy, including its Limited Use requirements.
+
 ## Contact
 
 Open an issue at https://github.com/qiangli/yoke/issues.
