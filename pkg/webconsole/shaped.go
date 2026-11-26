@@ -92,12 +92,16 @@ type ShapeOptions struct {
 	// ServerIdle stops a shaped app server no request has used for this
 	// long. Zero = 10m.
 	ServerIdle time.Duration
-	// RepairMaxAttempts is the host default capping self-repair attempts
-	// per incident when the app's shaped.json sets no repair.max_attempts.
-	// Nil means DefaultMaxRepairAttempts (2); 0 records and reports the
-	// incident without repairing; negative (RepairUnlimited) keeps trying
-	// until a repair activates, is refused, or the incident closes.
+	// RepairMaxAttempts is the host bound on self-repair attempts per
+	// incident. The app's shaped.json repair.max_attempts may only lower
+	// it. Nil means DefaultMaxRepairAttempts (2); 0 records and reports the
+	// incident without repairing; negative (RepairUnlimited) leaves the
+	// count to the app and, where the app sets none, keeps trying until a
+	// repair activates, is refused, or the incident closes.
 	RepairMaxAttempts *int
+	// RepairMaxWallTime bounds one incident's whole repair, on top of the
+	// window each attempt has. Zero = DefaultRepairWallTime (60m).
+	RepairMaxWallTime time.Duration
 	Delegate          Delegator
 	Verifier          Verifier
 	Activator         Activator

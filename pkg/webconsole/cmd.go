@@ -106,6 +106,7 @@ func newServeCmd() *cobra.Command {
 		appAuth  []string
 		shaper   string
 		repair   string
+		wall     time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:           "serve",
@@ -126,6 +127,10 @@ func newServeCmd() *cobra.Command {
 				return err
 			}
 			shapeOpts.RepairMaxAttempts = maxAttempts
+			if wall < 0 {
+				return fmt.Errorf("invalid --repair-max-wall-time %s: must not be negative", wall)
+			}
+			shapeOpts.RepairMaxWallTime = wall
 			// Outpost init passes the paired owner's identity through the service
 			// monitor. An unset value leaves cloud administration closed.
 			return runServe(c.Context(), c.OutOrStdout(), Options{
@@ -156,7 +161,9 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&shaper, "shape-agent", "",
 		"the tool:model the Shape panel delegates to for shaped apps (e.g. codex:<model>); empty disables new requests")
 	cmd.Flags().StringVar(&repair, "repair-max-attempts", "",
-		"host default capping self-repair attempts per incident: a non-negative number, `unlimited`, or empty for the app's shaped.json repair.max_attempts (else 2); 0 records and reports without repairing")
+		"host bound on self-repair attempts per incident: a non-negative number or `unlimited` (default 2); the app's shaped.json repair.max_attempts may only lower it; 0 records and reports without repairing")
+	cmd.Flags().DurationVar(&wall, "repair-max-wall-time", DefaultRepairWallTime,
+		"host bound on the wall time of one incident's whole repair, all attempts included")
 	cmd.Flags().BoolVar(&pair, "pair", false,
 		"accept QR device pairings (`bashy app pair`), and keep the LAN listener open "+
 			"only while a paired device exists")

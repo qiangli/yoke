@@ -57,6 +57,7 @@ func (a *shapedApp) recordIncident(principal string, kind IncidentKind, rel stri
 	if err != nil {
 		return Incident{}, false
 	}
+	a.logTrigger(in, start)
 	if start && startRepair != nil {
 		startRepair(a, principal, in)
 	}
@@ -322,6 +323,7 @@ func (s *server) handleShapeIncidentReport(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), code)
 		return
 	}
+	a.logTrigger(in, start)
 	if start && startRepair != nil {
 		startRepair(a, principal, in)
 	}

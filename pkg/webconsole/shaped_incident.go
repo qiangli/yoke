@@ -306,6 +306,28 @@ func (s *incidentStore) Heal(id string, now time.Time) (Incident, bool, error) {
 	return in, true, s.writeLocked(in)
 }
 
+// Fail closes a repairing incident the host stopped (off switch, wall-time
+// bound) so it does not read as still in repair. The previous version stays
+// active; a closed incident is left alone.
+func (s *incidentStore) Fail(id string) (Incident, error) {
+	fileLock, err := lockfile.AcquireWithin(filepath.Join(s.dir, ".incidents.lock"), 30*time.Second, lockfile.Holder{Intent: "shape incident transition"})
+	if err != nil {
+		return Incident{}, err
+	}
+	defer fileLock.Release()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	in, err := s.getLocked(id)
+	if err != nil {
+		return Incident{}, err
+	}
+	if in.State != IncidentRepairing {
+		return in, nil
+	}
+	in.State = IncidentFailed
+	return in, s.writeLocked(in)
+}
+
 // Rebase moves a waiting incident onto the newly active revision (S549.R1e)
 // so its repair verifies against what is now served: without this the
 // evidence gate refuses the attempt as bound to the moved base. A closed

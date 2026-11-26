@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/shape/appserver"
+	shape "github.com/qiangli/yoke/pkg/shape/state"
 )
 
 // RepairUnlimited is the incidentStore limit meaning no cap on repair
@@ -24,19 +25,79 @@ const RepairUnlimited = -1
 // attempt count each attempt gets its own window instead.
 const repairAttemptTimeout = 20 * time.Minute
 
-// repairLimitForRev resolves the maximum repair attempts for one incident:
-// the served revision's shaped.json repair.max_attempts first, else the
-// host default (ShapeOptions.RepairMaxAttempts), else
-// DefaultMaxRepairAttempts. A present but invalid app value warns and uses
-// the default — never unlimited by accident.
+// DefaultRepairWallTime bounds one incident's whole repair, every attempt
+// included, when the host sets no ShapeOptions.RepairMaxWallTime.
+const DefaultRepairWallTime = 60 * time.Minute
+
+// repairLimitForRev resolves the maximum repair attempts for one incident.
+// The host bound wins: it is ShapeOptions.RepairMaxAttempts, else
+// DefaultMaxRepairAttempts, and the served revision's shaped.json
+// repair.max_attempts may only lower it — never raise it, never make it
+// unlimited. A present but invalid app value warns and uses the default,
+// still under the host bound. With unattended shaping switched off on this
+// host (`bashy shape auto off`) the limit is 0: record and report only.
 func (a *shapedApp) repairLimitForRev(rev string) int {
-	if n, ok := a.repairLimitFromApp(rev); ok {
+	if !a.autoEnabled() {
+		return 0
+	}
+	return a.repairLimit(rev, false)
+}
+
+// repairLimit is repairLimitForRev without the off switch. override is one
+// run's logged permission to exceed the host bound: the app's value then
+// applies as written.
+func (a *shapedApp) repairLimit(rev string, override bool) int {
+	host := DefaultMaxRepairAttempts
+	if a.opts.RepairMaxAttempts != nil {
+		host = *a.opts.RepairMaxAttempts
+	}
+	n, ok := a.repairLimitFromApp(rev)
+	if !ok {
+		return host
+	}
+	if override || host < 0 {
 		return n
 	}
-	if a.opts.RepairMaxAttempts != nil {
-		return *a.opts.RepairMaxAttempts
+	if n < 0 || n > host {
+		return host
 	}
-	return DefaultMaxRepairAttempts
+	return n
+}
+
+func (a *shapedApp) repairWallTime() time.Duration {
+	if a.opts.RepairMaxWallTime > 0 {
+		return a.opts.RepairMaxWallTime
+	}
+	return DefaultRepairWallTime
+}
+
+// autoEnabled reads the host off switch for unattended shaping.
+func (a *shapedApp) autoEnabled() bool {
+	home, err := a.opts.home()
+	return err != nil || shape.AutoEnabled(home)
+}
+
+// logAuto appends one line to the host's decision log for incident in.
+// The log is a record, not a gate: a write error only warns.
+func (a *shapedApp) logAuto(in Incident, event, result, detail string) {
+	home, err := a.opts.home()
+	if err == nil {
+		err = shape.LogAuto(home, shape.AutoDecision{Event: event, App: a.name, Source: "incident", Ref: in.ID, Result: result, Detail: detail})
+	}
+	if err != nil {
+		slog.Warn("shaped app: decision log write failed", "app", a.name, "err", err)
+	}
+}
+
+// logTrigger records what an observed incident triggered: a repair, or a
+// refusal because unattended shaping is off on this host.
+func (a *shapedApp) logTrigger(in Incident, start bool) {
+	switch {
+	case start:
+		a.logAuto(in, "trigger", "repair", string(in.Kind)+" "+in.Path)
+	case in.Count == 1 && !a.autoEnabled():
+		a.logAuto(in, "refusal", "off", "unattended shaping is off on this host")
+	}
 }
 
 func (a *shapedApp) repairLimitFromApp(rev string) (int, bool) {

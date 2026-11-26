@@ -202,6 +202,8 @@ func TestRepairMaxAttemptsUnlimited(t *testing.T) {
 	}
 	delegate := &repairCountdown{succeedOn: 4}
 	app, base := repairLimitFixture(t, delegate, `{"repair": {"max_attempts": "unlimited"}}`)
+	// Unlimited is the host's choice to make: the app's value alone is capped.
+	app.opts.RepairMaxAttempts = repairIntPtr(RepairUnlimited)
 	s := repairLimitStore(t, app, "device:alice", base)
 	in, start, err := s.Observe(Incident{App: "notes", Kind: IncidentAPI, Path: "api/list", Status: 500, Message: "unit list failed", Evidence: "exit 1", BaseRev: base}, time.Now())
 	if err != nil || !start {
@@ -223,8 +225,9 @@ func TestRepairMaxAttemptsUnlimited(t *testing.T) {
 	}
 }
 
-// Resolution order is app config, else host default, else 2. Invalid app
-// config warns and falls back to 2 — never unlimited by accident.
+// The app config applies under the host bound (see
+// TestRepairHostBoundWins), else the host bound, else 2. Invalid app config
+// warns and falls back to 2 — never unlimited by accident.
 func TestRepairLimitResolution(t *testing.T) {
 	newRepo := func(t *testing.T, manifest string) (*shapedApp, string) {
 		t.Helper()
@@ -283,9 +286,9 @@ func TestRepairLimitResolution(t *testing.T) {
 		t.Fatalf("invalid config logged no warning: %q", warned.String())
 	}
 	app, rev = newRepo(t, `{"repair": {"max_attempts": "unlimited"}}`)
-	app.opts.RepairMaxAttempts = repairIntPtr(1)
+	app.opts.RepairMaxAttempts = repairIntPtr(RepairUnlimited)
 	if got := app.repairLimitForRev(rev); got != RepairUnlimited {
-		t.Fatalf("unlimited config = %d", got)
+		t.Fatalf("unlimited config under an unlimited host = %d", got)
 	}
 }
 

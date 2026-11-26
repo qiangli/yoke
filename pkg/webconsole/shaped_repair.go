@@ -2,6 +2,7 @@ package webconsole
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	shapecore "github.com/qiangli/yoke/pkg/shape"
+	shape "github.com/qiangli/yoke/pkg/shape/state"
 	"github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 )
@@ -78,10 +80,10 @@ func startRepairAsync(app *shapedApp, principal string, in Incident) {
 func repairLoop(app *shapedApp, principal, key, first string) {
 	cur := first
 	for {
-		// Each attempt carries its own timeout (repairAttemptTimeout);
-		// the incident as a whole is unbounded so an "unlimited" limit
-		// can keep trying until a repair lands. Cancellation still
-		// stops the loop through repairIncident's ctx checks.
+		// Each attempt carries its own timeout (repairAttemptTimeout)
+		// and repairIncident bounds the incident as a whole with the
+		// host's wall time. Cancellation still stops the loop through
+		// repairIncident's ctx checks.
 		app.repairIncident(context.Background(), principal, cur)
 		// Drain what waited: healed or already-closed incidents are
 		// skipped, and the first one still broken becomes the next
@@ -170,15 +172,46 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 	if err != nil {
 		return
 	}
-	incidents, err := openIncidentsWithLimit(st, a.repairLimitForRev(first.BaseRev))
+	// The off switch is read before an override is taken, so a switched-off
+	// host never spends one.
+	limit := 0
+	if a.autoEnabled() {
+		override := false
+		if home, err := a.opts.home(); err == nil {
+			var why string
+			if why, override = shape.TakeAutoOverride(home); override {
+				a.logAuto(first, "override", "used", why)
+			}
+		}
+		limit = a.repairLimit(first.BaseRev, override)
+	}
+	incidents, err := openIncidentsWithLimit(st, limit)
 	if err != nil {
 		return
 	}
+	// The host bounds the incident's whole repair, not only each attempt.
+	wall := a.repairWallTime()
+	ctx, stop := context.WithTimeout(ctx, wall)
+	defer stop()
 	for {
 		in, err := incidents.Get(id)
-		// A cancelled context, a closed incident (no longer
-		// repairing, or gone), or an exhausted limit stops the loop.
-		if err != nil || in.State != IncidentRepairing || ctx.Err() != nil || incidents.exhausted(len(in.Attempts)) {
+		// A closed incident (no longer repairing, or gone) or an
+		// exhausted limit stops the loop.
+		if err != nil || in.State != IncidentRepairing || incidents.exhausted(len(in.Attempts)) {
+			return
+		}
+		// The host stops a running repair before its next attempt: the
+		// off switch, the wall-time bound, or a cancelled parent.
+		if !a.autoEnabled() {
+			_, _ = incidents.Fail(id)
+			a.logAuto(in, "refusal", "off", fmt.Sprintf("stopped after %d attempts: unattended shaping is off on this host", len(in.Attempts)))
+			return
+		}
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				_, _ = incidents.Fail(id)
+				a.logAuto(in, "refusal", "wall-time", fmt.Sprintf("stopped after %d attempts: over the host bound of %s", len(in.Attempts), wall))
+			}
 			return
 		}
 		previous := ""
@@ -208,6 +241,20 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 		if err != nil {
 			return
 		}
+		a.logAuto(in, "attempt", result, reason)
+		if candidate.Verdict != nil {
+			verdict := "fail"
+			if candidate.Verdict.Pass {
+				verdict = "pass"
+			}
+			a.logAuto(in, "verdict", verdict, candidate.Verdict.Detail)
+		}
+		switch result {
+		case "activated":
+			a.logAuto(in, "activation", "activated", strings.TrimSpace(revision+" "+version))
+		case "refused":
+			a.logAuto(in, "refusal", "review", reason)
+		}
 		if refused {
 			// The candidate is a normal request for human review, with its
 			// workspace and diff retained. Never auto-activate it.
@@ -216,7 +263,7 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 			_ = saveCandidate(dir, candidate)
 			return
 		}
-		if result == "activated" || updated.State == IncidentFailed || ctx.Err() != nil {
+		if result == "activated" || updated.State == IncidentFailed {
 			return
 		}
 	}
