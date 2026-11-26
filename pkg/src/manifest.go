@@ -79,6 +79,7 @@ func ProtectedManifest() []ProtEntry {
 		{Repo: "yoke", Path: "pkg/redact", Core: false},
 		{Repo: "yoke", Path: "pkg/ask", Core: false},
 		{Repo: "yoke", Path: "pkg/binmgr", Core: false},
+		{Repo: "yoke", Path: "pkg/artifact", Reason: "offline bootstrap/seal contracts, protected roots, and GC/lease authority; skills must not weaken retention or seal guarantees"},
 		{Repo: "yoke", Path: "pkg/release", Core: false},
 		{Repo: "yoke", Path: "pkg/admission", Core: false},
 		{Repo: "yoke", Path: "pkg/mplfree", Core: false},
