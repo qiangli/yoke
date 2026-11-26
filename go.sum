@@ -846,10 +846,10 @@ github.com/qiangli/bash v0.0.0-20261122134408-5c52281f7136 h1:OmS3HLyxj5ogVLPJAx
 github.com/qiangli/bash v0.0.0-20261122134408-5c52281f7136/go.mod h1:ym1L5z/YyX0/X22h8TjjRIU2+qJyHwWHlBcKR/+CX2w=
 github.com/qiangli/bonsai v0.0.0-20261123172747-32d78887eb27 h1:4UJW3ptFwsnBqdW3HMLPwlAoufVUeAQafb326olDXt4=
 github.com/qiangli/bonsai v0.0.0-20261123172747-32d78887eb27/go.mod h1:2j+PlaUVQ2sMH7s+RrtS3M/0Sq1nnV0qLk6QuEPgoFg=
-github.com/qiangli/coreutils v0.0.0-20261126020849-bef90e271000 h1:Lzw0WdSuyp12wQRCaMwNC9tCeKAqNvFdyzvLao5N+N8=
-github.com/qiangli/coreutils v0.0.0-20261126020849-bef90e271000/go.mod h1:OE/QBDaSHfKcSbynd5TRwF9fBia/+jwzUlH2+1qIJww=
-github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261124121700-f9833f726fac h1:0WAcvMJPio/fgerZRW9/uThtCgHVhg7lyy4eRGuLB8s=
-github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261124121700-f9833f726fac/go.mod h1:Le6Thtg9hV79moxaF31tDROc0yQkfq2btRlA/a1l9ys=
+github.com/qiangli/coreutils v0.0.0-20261126092031-5f9da9132e14 h1:QUE4meHdUwImydqnF97bca+trqpmKgPzqkeIPyKZzdY=
+github.com/qiangli/coreutils v0.0.0-20261126092031-5f9da9132e14/go.mod h1:OE/QBDaSHfKcSbynd5TRwF9fBia/+jwzUlH2+1qIJww=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261126092031-5f9da9132e14 h1:DX78vUsSA//jUm/o0gndIKT/7M96uuakGWyZQTILYK8=
+github.com/qiangli/coreutils/third_party/goawk v0.0.0-20261126092031-5f9da9132e14/go.mod h1:Le6Thtg9hV79moxaF31tDROc0yQkfq2btRlA/a1l9ys=
 github.com/qiangli/filebrowser-quantum/backend v0.0.0-20261115042727-40f3c84d55a9 h1:r3yAoKYW6qO97U7/lS/z1Q5WSGU8EcdvGsUV7qT8oaA=
 github.com/qiangli/filebrowser-quantum/backend v0.0.0-20261115042727-40f3c84d55a9/go.mod h1:l2WeQgbX0mvycT8eh/cbNVfdWx6M2EJiWtYcjQxdV4k=
 github.com/qiangli/gfy v0.0.0-20261121101804-aab4f6fad5be h1:Xv6MbE4Ru3aN638bTQVkrSyp1/g5M7wozvA0rPTmoC8=
