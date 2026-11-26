@@ -30,7 +30,6 @@ import (
 	"oras.land/oras-go/v2/errdef"
 
 	"github.com/qiangli/yoke/pkg/prune"
-	"github.com/qiangli/yoke/pkg/resources"
 )
 
 var (
@@ -73,27 +72,26 @@ type AliveFunc func(pid int, startID string) bool
 // CurrentProcessIdentity returns this process's PID and native birth marker when available.
 func CurrentProcessIdentity(ctx context.Context) (int, string) {
 	pid := os.Getpid()
-	cctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	id, err := resources.LookupProcessIdentity(cctx, pid)
+	if err := ctx.Err(); err != nil {
+		return pid, ""
+	}
+	startID, err := lookupProcessStartID(pid)
 	if err != nil {
 		return pid, ""
 	}
-	return pid, id.StartID
+	return pid, startID
 }
 
-// DefaultAliveFunc checks holder liveness via resources.LookupProcessIdentity,
+// DefaultAliveFunc checks holder liveness via native OS process birth identity,
 // comparing StartID when non-empty and falling back safely if birth identity is unavailable.
 func DefaultAliveFunc(pid int, startID string) bool {
 	if pid <= 0 {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	id, err := resources.LookupProcessIdentity(ctx, pid)
-	if err == nil {
-		if startID != "" && id.StartID != "" {
-			return id.StartID == startID
+	gotStartID, err := lookupProcessStartID(pid)
+	if err == nil && gotStartID != "" {
+		if startID != "" {
+			return gotStartID == startID
 		}
 		return true
 	}

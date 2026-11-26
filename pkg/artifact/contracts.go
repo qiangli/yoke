@@ -787,8 +787,8 @@ func ApprovedReuseComponents() []UpstreamComponent {
 	return []UpstreamComponent{
 		{Concern: "cas-blobs", Module: "oras.land/oras-go/v2", License: "Apache-2.0", Mechanism: "import (v2.7.0)"},
 		{Concern: "catalog-db", Module: "go.etcd.io/bbolt", License: "MIT", Mechanism: "import (existing v1.5.0)"},
-		{Concern: "go-proxy", Module: "github.com/goproxy/goproxy", License: "MIT", Mechanism: "import"},
-		{Concern: "go-proxy-singleflight", Module: "github.com/gomods/athens", License: "MIT", Mechanism: "narrow attributed copy/import"},
+		{Concern: "go-proxy", Module: "github.com/goproxy/goproxy", License: "MIT", Mechanism: "import (v0.27.0)"},
+		{Concern: "go-proxy-singleflight", Module: "golang.org/x/sync/singleflight", License: "BSD-3-Clause", Mechanism: "import (existing v0.25.0)"},
 		{Concern: "gomod-zip-sum", Module: "golang.org/x/mod", License: "BSD-3-Clause", Mechanism: "import (existing v0.42.0)"},
 	}
 }

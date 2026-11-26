@@ -7,6 +7,7 @@ package artifact
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -15,6 +16,30 @@ import (
 )
 
 const stillActiveExitCode = 259 // STATUS_PENDING / STILL_ACTIVE
+
+func lookupProcessStartID(pid int) (string, error) {
+	if pid <= 0 || pid > 1<<31-1 {
+		return "", os.ErrInvalid
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+			return "", os.ErrNotExist
+		}
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err == nil && code != stillActiveExitCode {
+		return "", os.ErrNotExist
+	}
+	var born, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(h, &born, &exit, &kernel, &user); err != nil {
+		return "", err
+	}
+	birth := uint64(born.HighDateTime)<<32 | uint64(born.LowDateTime)
+	return fmt.Sprintf("windows:%d", birth), nil
+}
 
 func processExists(pid int) bool {
 	if pid <= 0 {

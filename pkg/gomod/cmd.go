@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/artifact"
 )
 
 // NewModCmd is `mod`: the Bash# module contract verbs. Every verb composes
@@ -30,6 +33,7 @@ go.work; a sibling pin is the go.mod require (or versioned fork replace).
   mod init  [DIR]          make a project a Go module: go.mod + doc-only pkg.go
   mod proxy publish DIR    publish a module version into the local Go module proxy
   mod proxy status         list the local proxy's modules and versions
+  mod proxy serve          serve the embedded Go module proxy over CAS + Loom
 
 DIR defaults to the current directory; at the workspace root, drift and sync
 cover every module. Exit codes: 3 a pin is stale, 5 a pin cannot be compared.`,
@@ -48,7 +52,7 @@ cover every module. Exit codes: 3 a pin is stale, 5 a pin cannot be compared.`,
 	}
 	fail := func(c *cobra.Command, name string, err error) error {
 		weavecli.EmitError(c.ErrOrStderr(), mode(), "mod "+name, ExitCodeOf(err), err)
-		return &Error{Code: ExitCodeOf(err), Msg: err.Error()}
+		return &Error{Code: ExitCodeOf(err), Msg: err.Error(), Err: err}
 	}
 	argDir := func(args []string) string {
 		if len(args) > 0 {
@@ -215,24 +219,44 @@ cover every module. Exit codes: 3 a pin is stale, 5 a pin cannot be compared.`,
 
 	proxyCmd := &cobra.Command{
 		Use:   "proxy",
-		Short: "The local Go module proxy: a GOPROXY-layout directory builds read with GOPROXY=file://DIR",
-		Long: `proxy publishes module versions into a directory in Go module proxy layout
-(<module>/@v/{list,V.info,V.mod,V.zip}). Builds read it with
-GOPROXY=file://DIR; no server runs. DIR defaults to $` + ProxyEnv + `, else
-$BASHY_HOME/gomod-proxy.`,
+		Short: "The local Go module proxy: directory layout or embedded CAS + Loom HTTP server",
+		Long: `proxy publishes module versions into a GOPROXY-layout directory
+(GOPROXY=file://DIR) or, with --catalog / --artifact-root, into the protected
+CAS artifact catalog backed by durable Loom Git refs served over loopback HTTP
+by 'mod proxy serve'.`,
 	}
 	var proxyDir, version string
+	var pubCatalog bool
+	var pubArtifactRoot, pubLoomDir string
 	publishCmd := &cobra.Command{
 		Use:   "publish DIR",
 		Short: "Publish the module at DIR (default version: the pseudo-version of HEAD); a published version is immutable",
 		Long: `publish writes the module at DIR into the local proxy. Without --version
 the version is the pseudo-version of the git commit at HEAD and the content is
-that commit's tree under DIR. With --version the content is the working copy
-of the files git tracks under DIR (every file outside a git repository).
-Publishing identical content again is a no-op; different content under an
-existing version is refused (exit 3): publish a new version.`,
+that commit's tree under DIR. With --catalog or --artifact-root, the exact git
+commit and immutable Loom ref are persisted first and canonical .info/.mod/.zip
+artifacts are recorded in the CAS catalog. Publishing identical content again is
+a no-op; different content under an existing version is refused (exit 3).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
+			if pubCatalog || strings.TrimSpace(pubArtifactRoot) != "" {
+				pub, err := PublishArtifact(c.Context(), PublishOptions{
+					Dir:          args[0],
+					Version:      version,
+					ArtifactRoot: pubArtifactRoot,
+					LoomRepoDir:  pubLoomDir,
+				})
+				if err != nil {
+					return fail(c, "proxy publish", err)
+				}
+				return ok(c, "proxy publish", pub, func(w io.Writer) {
+					state := "published"
+					if !pub.Published {
+						state = "unchanged"
+					}
+					fmt.Fprintf(w, "%s %s@%s %s\n", state, pub.Module, pub.Version, pub.Hash)
+				})
+			}
 			dir := proxyDir
 			if dir == "" {
 				dir = ProxyDir()
@@ -251,11 +275,45 @@ existing version is refused (exit 3): publish a new version.`,
 		},
 	}
 	publishCmd.Flags().StringVar(&version, "version", "", "version to publish (default: the pseudo-version of HEAD)")
+	publishCmd.Flags().BoolVar(&pubCatalog, "catalog", false, "publish into the protected CAS catalog + durable Loom repository")
+	publishCmd.Flags().StringVar(&pubArtifactRoot, "artifact-root", "", "artifact store root directory (implies --catalog)")
+	publishCmd.Flags().StringVar(&pubLoomDir, "loom-dir", "", "durable bare Loom Git repository directory (default <artifact-root>/loom/modules.git)")
+
+	var statusCatalog bool
+	var statusArtifactRoot string
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "List the modules in the local proxy and their versions",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
+			if statusCatalog || strings.TrimSpace(statusArtifactRoot) != "" {
+				artRoot := strings.TrimSpace(statusArtifactRoot)
+				if artRoot == "" {
+					artRoot = artifact.DefaultRoot()
+				}
+				mods, err := CatalogProxyStatus(c.Context(), CatalogStatusOptions{ArtifactRoot: artRoot})
+				if err != nil {
+					return fail(c, "proxy status", err)
+				}
+				if mods == nil {
+					mods = []CatalogModuleStatus{}
+				}
+				return ok(c, "proxy status", map[string]any{"artifact_root": artRoot, "modules": mods}, func(w io.Writer) {
+					if len(mods) == 0 {
+						fmt.Fprintln(w, "mod proxy: no modules in", artRoot)
+						return
+					}
+					for _, m := range mods {
+						for _, p := range m.Publications {
+							zipState := "present"
+							if !p.ZipPresent {
+								zipState = "evicted"
+							}
+							fmt.Fprintf(w, "%s %s %s zip=%s\n", m.Module, p.Version, p.Hash, zipState)
+						}
+					}
+				})
+			}
 			dir := proxyDir
 			if dir == "" {
 				dir = ProxyDir()
@@ -274,8 +332,57 @@ existing version is refused (exit 3): publish a new version.`,
 			})
 		},
 	}
+	statusCmd.Flags().BoolVar(&statusCatalog, "catalog", false, "read published modules from the protected CAS catalog")
+	statusCmd.Flags().StringVar(&statusArtifactRoot, "artifact-root", "", "artifact store root directory (implies --catalog)")
+
+	var serveAddr, serveArtifactRoot, serveLoomDir string
+	var serveSealed, serveAllowMesh bool
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve the embedded Go module proxy over the CAS catalog and Loom repository",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			baseCtx := c.Context()
+			if baseCtx == nil {
+				baseCtx = context.Background()
+			}
+			sigCtx, stop := signal.NotifyContext(baseCtx, os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			srv, err := StartProxyServer(sigCtx, ProxyServerOptions{
+				Addr:          serveAddr,
+				AllowMeshBind: serveAllowMesh,
+				ArtifactRoot:  serveArtifactRoot,
+				LoomRepoDir:   serveLoomDir,
+				Sealed:        serveSealed,
+			})
+			if err != nil {
+				return fail(c, "proxy serve", err)
+			}
+			defer srv.Close()
+
+			if mode() == weavecli.OutputJSON {
+				weavecli.EmitOK(c.OutOrStdout(), weavecli.OutputJSON, "mod proxy serve", map[string]any{
+					"url":    srv.URL(),
+					"addr":   srv.Addr(),
+					"sealed": srv.Sealed(),
+				})
+			} else {
+				fmt.Fprintln(c.OutOrStdout(), srv.URL())
+			}
+
+			<-sigCtx.Done()
+			return srv.Close()
+		},
+	}
+	serveCmd.Flags().StringVar(&serveAddr, "addr", "127.0.0.1:0", "bind address for the HTTP Go module proxy")
+	serveCmd.Flags().StringVar(&serveArtifactRoot, "artifact-root", "", "artifact store root directory")
+	serveCmd.Flags().StringVar(&serveLoomDir, "loom-dir", "", "durable bare Loom Git repository directory")
+	serveCmd.Flags().BoolVar(&serveSealed, "sealed", false, "disable all upstream/public network fetching")
+	serveCmd.Flags().BoolVar(&serveAllowMesh, "allow-mesh-bind", false, "permit binding non-loopback addresses")
+
 	proxyCmd.PersistentFlags().StringVar(&proxyDir, "dir", "", "proxy directory (default $"+ProxyEnv+" or $BASHY_HOME/gomod-proxy)")
-	proxyCmd.AddCommand(publishCmd, statusCmd)
+	proxyCmd.AddCommand(publishCmd, statusCmd, serveCmd)
 	root.AddCommand(proxyCmd)
 	return root
 }

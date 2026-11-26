@@ -247,13 +247,24 @@ func Tools(gomod []byte) ([]Tool, error) {
 	return out, nil
 }
 
-// Error carries a weavecli exit code with the message.
+// Error carries a weavecli exit code with the message and optional wrapped cause.
 type Error struct {
 	Code int
 	Msg  string
+	Err  error
 }
 
-func (e *Error) Error() string { return e.Msg }
+func (e *Error) Error() string {
+	if e.Msg != "" {
+		return e.Msg
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return ""
+}
+
+func (e *Error) Unwrap() error { return e.Err }
 
 // ExitCode is the stable weavecli exit code.
 func (e *Error) ExitCode() int { return e.Code }

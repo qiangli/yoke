@@ -18,6 +18,7 @@ require (
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/aead/serpent v0.0.0-20160714141033-fba169763ea6 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
+	github.com/aofei/backoff v1.2.0 // indirect
 	github.com/apache/arrow/go/arrow v0.0.0-20211112161151-bc219186db40 // indirect
 	github.com/asdine/storm/v3 v3.2.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -417,6 +418,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
+	github.com/goproxy/goproxy v0.27.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/gtsteffaniak/filebrowser/backend v0.0.0-20261113140828-88b90a50350d
 	github.com/hashicorp/go-multierror v1.1.1
