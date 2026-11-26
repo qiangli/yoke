@@ -50,6 +50,8 @@ type WatchConfig struct {
 	DiskCritUsed      float64 `json:"disk_crit_used"`
 	DiskFreeWarnBytes uint64  `json:"disk_free_warn_bytes"`
 	DiskFreeCritBytes uint64  `json:"disk_free_crit_bytes"`
+	InodeWarnUsed     float64 `json:"inode_warn_used"`
+	InodeCritUsed     float64 `json:"inode_crit_used"`
 
 	MemWarn  float64 `json:"mem_warn"`
 	MemCrit  float64 `json:"mem_crit"`
@@ -91,6 +93,8 @@ func DefaultWatchConfig() WatchConfig {
 		DiskCritUsed:      95,
 		DiskFreeWarnBytes: 20 << 30,
 		DiskFreeCritBytes: 10 << 30,
+		InodeWarnUsed:     85,
+		InodeCritUsed:     95,
 
 		MemWarn:  85,
 		MemCrit:  95,
@@ -160,7 +164,8 @@ func ValidateWatchOverride(key, value string) error {
 		return nil
 	}
 	switch key {
-	case "disk-warn-used", "disk-crit-used", "mem-warn", "mem-crit",
+	case "disk-warn-used", "disk-crit-used", "inode-warn-used", "inode-crit-used",
+		"mem-warn", "mem-crit",
 		"swap-warn", "swap-crit", "cpu-warn", "cpu-crit",
 		"gpu-warn", "gpu-crit", "gpu-mem-warn", "gpu-mem-crit",
 		"net-warn", "net-crit", "net-err-warn", "net-err-crit":
@@ -225,6 +230,10 @@ func applyWatchOverride(cfg *WatchConfig, key, value string) {
 		cfg.DiskFreeWarnBytes = b()
 	case "disk-free-crit":
 		cfg.DiskFreeCritBytes = b()
+	case "inode-warn-used":
+		cfg.InodeWarnUsed = f()
+	case "inode-crit-used":
+		cfg.InodeCritUsed = f()
 	case "mem-warn":
 		cfg.MemWarn = f()
 	case "mem-crit":

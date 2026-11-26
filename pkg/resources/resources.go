@@ -105,15 +105,19 @@ type Memory struct {
 // /proc/diskstats today) and are omitted where the platform or the sample
 // window cannot supply them.
 type Disk struct {
-	Mount            string  `json:"mount"`
-	Device           string  `json:"device,omitempty"`
-	FSType           string  `json:"fstype,omitempty"`
-	TotalBytes       uint64  `json:"total_bytes"`
-	UsedBytes        uint64  `json:"used_bytes"`
-	FreeBytes        uint64  `json:"free_bytes"`
-	UsedPercent      float64 `json:"used_percent"`
-	ReadBytesPerSec  float64 `json:"read_bytes_per_sec,omitempty"`
-	WriteBytesPerSec float64 `json:"write_bytes_per_sec,omitempty"`
+	Mount             string  `json:"mount"`
+	Device            string  `json:"device,omitempty"`
+	FSType            string  `json:"fstype,omitempty"`
+	TotalBytes        uint64  `json:"total_bytes"`
+	UsedBytes         uint64  `json:"used_bytes"`
+	FreeBytes         uint64  `json:"free_bytes"`
+	UsedPercent       float64 `json:"used_percent"`
+	InodesTotal       uint64  `json:"inodes_total,omitempty"`
+	InodesUsed        uint64  `json:"inodes_used,omitempty"`
+	InodesFree        uint64  `json:"inodes_free,omitempty"`
+	InodesUsedPercent float64 `json:"inodes_used_percent,omitempty"`
+	ReadBytesPerSec   float64 `json:"read_bytes_per_sec,omitempty"`
+	WriteBytesPerSec  float64 `json:"write_bytes_per_sec,omitempty"`
 }
 
 // Interface is one network interface: cumulative counters plus the rate

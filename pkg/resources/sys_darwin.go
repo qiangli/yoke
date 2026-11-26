@@ -126,6 +126,7 @@ func diskStats() ([]Disk, error) {
 			mount: unix.ByteSliceToString(st.Mntonname[:]), device: device, fstype: fstype,
 			readOnly:  st.Flags&unix.MNT_RDONLY != 0,
 			blockSize: uint64(st.Bsize), blocks: st.Blocks, bfree: st.Bfree, bavail: uint64(st.Bavail),
+			files: st.Files, ffree: uint64(st.Ffree),
 		})
 	}
 	out := candidateDisks(candidates)

@@ -127,6 +127,7 @@ func diskStats() ([]Disk, error) {
 		candidates = append(candidates, diskCandidate{
 			mount: m.point, device: m.device, fstype: m.fstype, readOnly: m.readOnly,
 			blockSize: uint64(st.Bsize), blocks: st.Blocks, bfree: st.Bfree, bavail: st.Bavail,
+			files: st.Files, ffree: uint64(st.Ffree),
 		})
 	}
 	return candidateDisks(candidates), nil

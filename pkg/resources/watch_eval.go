@@ -9,6 +9,7 @@ import (
 const (
 	metricDiskUsed      = "disk-used"
 	metricDiskFree      = "disk-free"
+	metricInodeUsed     = "inode-used"
 	metricMemUsed       = "mem-used"
 	metricSwapUsed      = "swap-used"
 	metricCPUUsed       = "cpu-used"
@@ -129,6 +130,19 @@ func extractReadings(sys *System, cfgFor func(resource string) WatchConfig) []re
 				invert:   true,
 				detail:   fmt.Sprintf("%s %s free", d.Mount, HumanBytes(d.FreeBytes)),
 				hasValue: true,
+			})
+		}
+		if d.InodesTotal > 0 && (cfg.InodeWarnUsed > 0 || cfg.InodeCritUsed > 0) {
+			inodePct := d.InodesUsedPercent
+			if inodePct == 0 && d.InodesUsed > 0 {
+				inodePct = pct(d.InodesUsed, d.InodesTotal)
+			}
+			out = append(out, reading{
+				resource: r, metric: metricInodeUsed,
+				value: inodePct, unit: "percent",
+				warn: cfg.InodeWarnUsed, crit: cfg.InodeCritUsed,
+				detail:   fmt.Sprintf("%s %.1f%% inodes used (%d free)", d.Mount, inodePct, d.InodesFree),
+				hasValue: d.InodesUsed > 0 || inodePct > 0,
 			})
 		}
 	}

@@ -44,6 +44,7 @@ type diskCandidate struct {
 	mount, device, fstype            string
 	readOnly                         bool
 	blockSize, blocks, bfree, bavail uint64
+	files, ffree                     uint64
 }
 
 // candidateDisks converts candidates to Disks, dropping mounts that carry
@@ -68,6 +69,12 @@ func candidateDisks(in []diskCandidate) []Disk {
 		d := diskFromStatfs(c.mount, c.device, c.fstype, c.blockSize, c.blocks, c.bfree, c.bavail)
 		if d.TotalBytes == 0 {
 			continue
+		}
+		if c.files > 0 {
+			d.InodesTotal = c.files
+			d.InodesFree = min(c.ffree, c.files)
+			d.InodesUsed = c.files - d.InodesFree
+			d.InodesUsedPercent = pct(d.InodesUsed, c.files)
 		}
 		out = append(out, d)
 	}
