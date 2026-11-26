@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	runner_embed "github.com/qiangli/yoke/external/ollama/runner_embed"
+	"github.com/qiangli/yoke/pkg/artifact"
 )
 
 // CmdOptions defines callbacks and settings for the Cobra command tree.
@@ -54,6 +55,8 @@ All HTTP calls go to whatever OLLAMA_HOST resolves to.`,
 	cmd.AddCommand(
 		newOllamaServeCmd(opts),
 		newOllamaPullCmd(opts),
+		newOllamaPushCmd(),
+		newOllamaSigninCmd(),
 		newOllamaListCmd(opts),
 		newOllamaRmCmd(opts),
 		newOllamaPsCmd(opts),
@@ -134,6 +137,13 @@ func newOllamaPullCmd(opts CmdOptions) *cobra.Command {
 		Short: "Download a model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if artifact.IsSealed("") {
+				if err := pullModelSealed(cmd.Context(), "", ManagedModelsDir(), args[0]); err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "restored %s from local artifact store\n", args[0])
+				return nil
+			}
 			client := NewClient(DefaultURL())
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Minute)
 			defer cancel()

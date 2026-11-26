@@ -91,6 +91,10 @@ func applyManagedEnv(port int) string {
 	// additionally disables remote inference and web search:
 	// https://github.com/ollama/ollama/blob/main/docs/faq.mdx#how-can-i-disable-ollama-cloud
 	os.Setenv("OLLAMA_NO_CLOUD", "1")
+	os.Setenv("OLLAMA_NOPRUNE", "1")
+	setProcessEnvDefault("OLLAMA_NUM_PARALLEL", defaultOfflineNumParallel)
+	setProcessEnvDefault("OLLAMA_MAX_LOADED_MODELS", defaultOfflineMaxLoadedModels)
+	setProcessEnvDefault("OLLAMA_CONTEXT_LENGTH", defaultOfflineContextLength)
 	for _, entry := range serviceenv.LocalOTLP(os.Environ(), "ollama") {
 		key, value, ok := strings.Cut(entry, "=")
 		if ok && strings.HasPrefix(key, "OTEL_") {
@@ -139,6 +143,10 @@ func managedServeEnv(env []string, port int) []string {
 	}
 	env = replaceEnv(env, "OLLAMA_HOST", managedServeHost(host, port))
 	env = replaceEnv(env, "OLLAMA_NO_CLOUD", "1")
+	env = replaceEnv(env, "OLLAMA_NOPRUNE", "1")
+	env = defaultEnvIfUnset(env, "OLLAMA_NUM_PARALLEL", defaultOfflineNumParallel)
+	env = defaultEnvIfUnset(env, "OLLAMA_MAX_LOADED_MODELS", defaultOfflineMaxLoadedModels)
+	env = defaultEnvIfUnset(env, "OLLAMA_CONTEXT_LENGTH", defaultOfflineContextLength)
 	return serviceenv.LocalOTLP(env, "ollama")
 }
 
@@ -179,6 +187,10 @@ func RunManagedServe(ctx context.Context) error {
 	url := applyManagedEnv(port)
 	dataDir := ManagedDataDir()
 	models := ManagedModelsDir()
+
+	if _, err := restoreManagedModelsIfAvailable(ctx, "", models); err != nil {
+		return fmt.Errorf("ollama: restore pinned models from artifact store: %w", err)
+	}
 
 	comp := NewOllamaComponent(&Config{ModelsDir: models}, dataDir)
 	if err := comp.Start(ctx); err != nil {

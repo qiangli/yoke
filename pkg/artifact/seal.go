@@ -204,8 +204,8 @@ func LoadSavedProfile(root string) (ProfileV1, bool, error) {
 	return prof, true, nil
 }
 
-// ResolveProfile resolves a profile name ("default", "full", "self-host",
-// "self-host-v1") or JSON file path for platform.
+// ResolveProfile resolves a profile name ("default", "full", "workstation",
+// "self-host", "self-host-v1") or JSON file path for platform.
 func ResolveProfile(spec, platform string) (ProfileV1, error) {
 	if strings.TrimSpace(platform) == "" {
 		platform = CurrentPlatform()
@@ -213,6 +213,9 @@ func ResolveProfile(spec, platform string) (ProfileV1, error) {
 	switch strings.TrimSpace(spec) {
 	case "", "default", ProfileScopeFull:
 		p := DefaultProfileV1(platform)
+		return p, p.Validate()
+	case "workstation", "workstation-v1":
+		p := WorkstationProfileV1(platform)
 		return p, p.Validate()
 	case ProfileScopeSelfHost, "self-host-v1":
 		p := SelfHostProfileV1(platform)
@@ -264,6 +267,8 @@ func resolveEffectiveProfile(root string, explicit *ProfileV1, profileSpec strin
 	switch name {
 	case "self-host-v1", ProfileScopeSelfHost:
 		return SelfHostProfileV1(platform), nil
+	case "workstation", "workstation-v1":
+		return WorkstationProfileV1(platform), nil
 	default:
 		return DefaultProfileV1(platform), nil
 	}
@@ -706,19 +711,27 @@ func inspectClosureInternal(ctx context.Context, opts InspectStatusOptions, pref
 			if !m.Required {
 				continue
 			}
-			matched := false
-			for _, r := range targetManifest.Roots {
-				if modelMatchesRoot(m.Name, r) {
-					matched = true
+			var matchedRoot *RootDescriptor
+			for i := range targetManifest.Roots {
+				if modelMatchesRoot(m.Name, targetManifest.Roots[i]) {
+					matchedRoot = &targetManifest.Roots[i]
 					break
 				}
 			}
-			if !matched {
+			if matchedRoot == nil {
 				missing = append(missing, MissingArtifact{
 					Kind:    "ollama-model",
 					Name:    m.Name,
 					Version: m.Role,
 					Reason:  fmt.Sprintf("required %s model %q missing from manifest", m.Role, m.Name),
+				})
+			} else if evalReason := checkRequiredModelEval(ctx, backend, m, matchedRoot.Digest); evalReason != "" {
+				missing = append(missing, MissingArtifact{
+					Kind:    "ollama-eval",
+					Name:    m.Name,
+					Version: m.Role,
+					Digest:  matchedRoot.Digest,
+					Reason:  evalReason,
 				})
 			}
 		}
