@@ -332,7 +332,7 @@ func parseSprintSelector(selector string, allowUnlink bool) (int64, error) {
 }
 
 func newAddCmd(sf storeFunc) *cobra.Command {
-	var priority, note, kind, status string
+	var priority, note, kind, status, reporter, origin, customID string
 	var workaround, expiresStr string
 	var labels []string
 	var dueStr, recurring, assignee string
@@ -380,6 +380,28 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("--label: %w", err)
 			}
+			reporter = strings.TrimSpace(reporter)
+			if origin != "" {
+				origin, err = issue.NormalizeWord(origin)
+				if err != nil {
+					return fmt.Errorf("--origin: %w", err)
+				}
+			}
+			if customID != "" {
+				customID, err = issue.NormalizeWord(customID)
+				if err != nil {
+					return fmt.Errorf("--id: %w", err)
+				}
+				existing, err := st.List()
+				if err != nil {
+					return err
+				}
+				for _, it := range existing {
+					if it.ID == customID {
+						return fmt.Errorf("todo %s already exists", customID)
+					}
+				}
+			}
 			selected := int64(0)
 			if cmd.Flags().Changed("sprint") {
 				selected, err = parseSprintSelector(sprintSelector, false)
@@ -407,6 +429,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 				}
 			}
 			it, err := addPrepared(st, strings.Join(args, " "), note, priority, due, recurring, assignee, func(it *issue.Issue) {
+				if customID != "" {
+					it.ID = customID
+				}
 				if selected != 0 {
 					LinkSprint(it, selected)
 				}
@@ -421,6 +446,8 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 				it.Expires = expires
 				it.Kind = kind
 				it.Labels = labels
+				it.Reporter = reporter
+				it.Origin = origin
 			})
 			if err != nil {
 				return err
@@ -436,6 +463,12 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 				}
 				if len(it.Labels) > 0 {
 					out["labels"] = it.Labels
+				}
+				if it.Reporter != "" {
+					out["reporter"] = it.Reporter
+				}
+				if it.Origin != "" {
+					out["origin"] = it.Origin
 				}
 				if it.Workaround != "" {
 					out["workaround"] = it.Workaround
@@ -465,6 +498,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&expiresStr, "expires", "", "expiry for a known issue (YYYY-MM-DD, RFC3339, or +Nd/+Nh)")
 	cmd.Flags().StringVar(&kind, "kind", issue.KindTask, issue.KindHelp)
 	cmd.Flags().StringArrayVar(&labels, "label", nil, issue.LabelHelp)
+	cmd.Flags().StringVar(&reporter, "reporter", "", "who filed the item")
+	cmd.Flags().StringVar(&origin, "origin", "", "`word` — how the item entered the tracker (e.g. feed)")
+	cmd.Flags().StringVar(&customID, "id", "", "optional stable item id (default: random 12-hex id)")
 	cmd.Flags().StringVar(&note, "note", "", "task body/details (- reads stdin); this item's own facts — a reusable procedure belongs in a kb runbook, cited as [[kb:<slug>]]")
 	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
 	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (default=driven by `sprint advance`; or daily, weekly, 24h, cron)")
@@ -676,6 +712,12 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 			}
 			if it.Assignee != "" {
 				fmt.Fprintf(w, "  assignee  %s\n", it.Assignee)
+			}
+			if it.Reporter != "" {
+				fmt.Fprintf(w, "  reporter  %s\n", it.Reporter)
+			}
+			if it.Origin != "" {
+				fmt.Fprintf(w, "  origin    %s\n", it.Origin)
 			}
 			if it.Sprint != 0 {
 				if it.SprintID != "" {

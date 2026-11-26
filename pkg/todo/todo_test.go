@@ -344,3 +344,56 @@ func TestListShowsOverdueMarker(t *testing.T) {
 		t.Fatalf("list output should mark exactly the one overdue item, got %d markers:\n%s", n, out)
 	}
 }
+
+func TestTodoAddReporterOriginAndID(t *testing.T) {
+	base := t.TempDir()
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := NewTodoCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(append([]string{"--base-dir", base}, args...))
+		err := cmd.Execute()
+		return out.String(), err
+	}
+
+	out, err := run("add", "feed item", "--no-sprint", "--reporter", "octocat", "--origin", "Feed", "--id", "a1b2c3d4e5f6", "--json")
+	if err != nil {
+		t.Fatalf("todo add: %v\n%s", err, out)
+	}
+	for _, want := range []string{`"id": "a1b2c3d4e5f6"`, `"reporter": "octocat"`, `"origin": "feed"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("add --json missing %s:\n%s", want, out)
+		}
+	}
+
+	got, err := ResolveRef(RepoStore(base), "a1b2c3d4e5f6")
+	if err != nil {
+		t.Fatalf("ResolveRef: %v", err)
+	}
+	if got.ID != "a1b2c3d4e5f6" || got.Reporter != "octocat" || got.Origin != "feed" {
+		t.Fatalf("persisted item = %+v", got)
+	}
+
+	shown, err := run("show", "a1b2c3d4e5f6")
+	if err != nil {
+		t.Fatalf("todo show: %v\n%s", err, shown)
+	}
+	if !strings.Contains(shown, "  reporter  octocat\n") || !strings.Contains(shown, "  origin    feed\n") {
+		t.Fatalf("todo show missing reporter/origin:\n%s", shown)
+	}
+
+	// Invalid --origin word is refused and writes nothing.
+	if _, err := run("add", "bad origin", "--no-sprint", "--origin", "two words"); err == nil {
+		t.Fatal("expected invalid --origin to be rejected")
+	}
+	// Duplicate --id is refused and writes nothing.
+	if _, err := run("add", "duplicate", "--no-sprint", "--id", "a1b2c3d4e5f6"); err == nil {
+		t.Fatal("expected duplicate --id to be rejected")
+	}
+	items, err := List(RepoStore(base), "")
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items = %d, err = %v", len(items), err)
+	}
+}
