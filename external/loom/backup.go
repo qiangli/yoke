@@ -26,9 +26,10 @@ import (
 )
 
 // BackupBackend extends loom without changing callers. Sync must never delete
-// or force-update a target ref. Existing tags are immutable. Divergence must
-// fail with the ref name before writing refs. Implementations must protect
-// updates against concurrent writers. Removing configuration never removes data.
+// or force-update a target ref. Existing tags and published artifact refs
+// (refs/bashy/published/*) are immutable. Divergence must fail with the ref
+// name before writing refs. Implementations must protect updates against
+// concurrent writers. Removing configuration never removes data.
 type BackupBackend interface {
 	Sync(context.Context, *git.Repository, BackupTarget) error
 }
@@ -54,7 +55,7 @@ func backupRefs(r *git.Repository) ([]*plumbing.Reference, error) {
 	defer it.Close()
 	var refs []*plumbing.Reference
 	err = it.ForEach(func(ref *plumbing.Reference) error {
-		if ref.Type() == plumbing.HashReference && (ref.Name().IsBranch() || ref.Name().IsTag()) {
+		if ref.Type() == plumbing.HashReference && (ref.Name().IsBranch() || ref.Name().IsTag() || IsPublishedArtifactRef(ref.Name())) {
 			if err := ref.Name().Validate(); err != nil {
 				return err
 			}
@@ -84,7 +85,7 @@ func backupPlan(src *git.Repository, have []*plumbing.Reference) ([]*plumbing.Re
 		}
 		if prev != nil {
 			ok := false
-			if next.Name().IsBranch() && prev.Type() == plumbing.HashReference {
+			if next.Name().IsBranch() && !IsPublishedArtifactRef(next.Name()) && prev.Type() == plumbing.HashReference {
 				ancestor, e1 := src.CommitObject(prev.Hash())
 				descendant, e2 := src.CommitObject(next.Hash())
 				if e1 == nil && e2 == nil {
