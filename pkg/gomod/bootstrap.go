@@ -60,6 +60,7 @@ type wantedModVersion struct {
 	modPath string
 	version string
 	needZip bool
+	strict  bool
 	info    string
 	gomod   string
 	zip     string
@@ -97,7 +98,7 @@ func resolveGoModCacheDir(ctx context.Context, opts ModuleClosureOptions) (strin
 }
 
 func parseWantedFromGoModAndSum(modDir string, out map[string]*wantedModVersion) error {
-	add := func(modPath, ver string, needZip bool) {
+	add := func(modPath, ver string, needZip, strict bool) {
 		if modPath == "" || ver == "" || !semver.IsValid(ver) {
 			return
 		}
@@ -107,11 +108,14 @@ func parseWantedFromGoModAndSum(modDir string, out map[string]*wantedModVersion)
 		key := modPath + "@" + ver
 		cur, exists := out[key]
 		if !exists {
-			out[key] = &wantedModVersion{modPath: modPath, version: ver, needZip: needZip}
+			out[key] = &wantedModVersion{modPath: modPath, version: ver, needZip: needZip, strict: strict}
 			return
 		}
 		if needZip {
 			cur.needZip = true
+		}
+		if strict {
+			cur.strict = true
 		}
 	}
 
@@ -119,7 +123,10 @@ func parseWantedFromGoModAndSum(modDir string, out map[string]*wantedModVersion)
 	if err != nil {
 		return fmt.Errorf("gomod bootstrap: read %s/go.mod: %w", modDir, err)
 	}
-	mf, err := modfile.ParseLax(filepath.Join(modDir, "go.mod"), gomodBytes, nil)
+	mf, err := modfile.Parse(filepath.Join(modDir, "go.mod"), gomodBytes, nil)
+	if err != nil {
+		mf, err = modfile.ParseLax(filepath.Join(modDir, "go.mod"), gomodBytes, nil)
+	}
 	if err != nil {
 		return fmt.Errorf("gomod bootstrap: parse %s/go.mod: %w", modDir, err)
 	}
@@ -137,22 +144,27 @@ func parseWantedFromGoModAndSum(modDir string, out map[string]*wantedModVersion)
 			continue
 		}
 		replacedTarget[keyOld] = rep.New
-		add(rep.New.Path, rep.New.Version, true)
+	}
+
+	resolveReplacement := func(mpath, ver string) (string, string, bool) {
+		if replacedToLocal[mpath] || replacedToLocal[mpath+"@"+ver] {
+			return "", "", false
+		}
+		if tgt, ok := replacedTarget[mpath+"@"+ver]; ok {
+			return tgt.Path, tgt.Version, true
+		}
+		if tgt, ok := replacedTarget[mpath]; ok {
+			return tgt.Path, tgt.Version, true
+		}
+		return mpath, ver, true
 	}
 
 	for _, req := range mf.Require {
-		if replacedToLocal[req.Mod.Path] || replacedToLocal[req.Mod.Path+"@"+req.Mod.Version] {
+		effPath, effVer, ok := resolveReplacement(req.Mod.Path, req.Mod.Version)
+		if !ok {
 			continue
 		}
-		if tgt, ok := replacedTarget[req.Mod.Path+"@"+req.Mod.Version]; ok {
-			add(tgt.Path, tgt.Version, true)
-			continue
-		}
-		if tgt, ok := replacedTarget[req.Mod.Path]; ok {
-			add(tgt.Path, tgt.Version, true)
-			continue
-		}
-		add(req.Mod.Path, req.Mod.Version, true)
+		add(effPath, effVer, true, !req.Indirect)
 	}
 
 	sumBytes, err := os.ReadFile(filepath.Join(modDir, "go.sum"))
@@ -164,16 +176,13 @@ func parseWantedFromGoModAndSum(modDir string, out map[string]*wantedModVersion)
 			}
 			mpath := fields[0]
 			verField := fields[1]
-			if replacedToLocal[mpath] {
-				continue
-			}
 			if ver, isModOnly := strings.CutSuffix(verField, "/go.mod"); isModOnly {
-				if !replacedToLocal[mpath+"@"+ver] {
-					add(mpath, ver, false)
+				if effPath, effVer, ok := resolveReplacement(mpath, ver); ok {
+					add(effPath, effVer, false, false)
 				}
 			} else {
-				if !replacedToLocal[mpath+"@"+verField] {
-					add(mpath, verField, true)
+				if effPath, effVer, ok := resolveReplacement(mpath, verField); ok {
+					add(effPath, effVer, true, false)
 				}
 			}
 		}
@@ -308,6 +317,7 @@ func runGoModDownloadAll(ctx context.Context, modDir string, opts ModuleClosureO
 		if item.Zip != "" {
 			cur.zip = item.Zip
 			cur.needZip = true
+			cur.strict = true
 		}
 	}
 	if sawUnpublishedErr {
@@ -424,10 +434,15 @@ func CaptureModuleClosure(ctx context.Context, opts ModuleClosureOptions) (*Modu
 			for k, w := range dirWanted {
 				if cur, exists := wanted[k]; !exists {
 					wanted[k] = w
-				} else if w.needZip {
-					cur.needZip = true
+				} else {
+					if w.needZip {
+						cur.needZip = true
+					}
+					if w.strict {
+						cur.strict = true
+					}
 				}
-				if !publishedSet[k] && !isCachedInDownloadRoot(downloadRoot, w) {
+				if !publishedSet[k] && w.strict && !isCachedInDownloadRoot(downloadRoot, w) {
 					needsDownload = true
 				}
 			}
@@ -498,11 +513,17 @@ func CaptureModuleClosure(ctx context.Context, opts ModuleClosureOptions) (*Modu
 		zipStat, zipStatErr := os.Stat(zipPath)
 		hasZip := zipStatErr == nil && zipStat.Mode().IsRegular()
 
-		if w.needZip && !hasZip {
-			return nil, fmt.Errorf("gomod bootstrap: required module zip missing from cache for %s@%s (%s)", w.modPath, w.version, zipPath)
-		}
-		if infoErr != nil && modErr != nil && !hasZip {
-			return nil, fmt.Errorf("gomod bootstrap: module %s@%s missing from cache (%s)", w.modPath, w.version, basePath)
+		if !w.strict {
+			if infoErr != nil && modErr != nil && !hasZip {
+				continue
+			}
+		} else {
+			if w.needZip && !hasZip {
+				return nil, fmt.Errorf("gomod bootstrap: required module zip missing from cache for %s@%s (%s)", w.modPath, w.version, zipPath)
+			}
+			if infoErr != nil && modErr != nil && !hasZip {
+				return nil, fmt.Errorf("gomod bootstrap: module %s@%s missing from cache (%s)", w.modPath, w.version, basePath)
+			}
 		}
 		if infoErr != nil {
 			infoBytes, _ = json.Marshal(struct {

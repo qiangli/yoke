@@ -181,3 +181,51 @@ func main() {
 		t.Fatalf("offline consumer output = %q, want %q", gotOut, "sibling-ok:ext-ok")
 	}
 }
+
+func TestCaptureModuleClosureVersionedReplaceUnusedReplaceAndPrunedGoSum(t *testing.T) {
+	ctx := context.Background()
+	artRoot := filepath.Join(t.TempDir(), "artifacts")
+	store, err := artifact.OpenStore(ctx, artifact.StoreOptions{Root: artRoot})
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	seedModCache := filepath.Join(t.TempDir(), "seed-modcache")
+	forkZipH1, forkModH1 := stageFakeCachedModule(t, seedModCache, "example.com/fork/goawk", "v1.0.1", `package goawk
+func Run() string { return "fork-ok" }
+`)
+
+	consumerDir := filepath.Join(t.TempDir(), "consumer")
+	write(t, filepath.Join(consumerDir, "go.mod"), `module example.com/consumer/rep
+
+go 1.22
+
+require example.com/upstream/goawk v1.31.0
+
+replace example.com/upstream/goawk => example.com/fork/goawk v1.0.1
+replace example.com/unused/jaeger => example.com/fork/jaeger v0.9.0
+`)
+	// go.sum intentionally contains stale upstream goawk + pruned indirect entries not in GOMODCACHE.
+	write(t, filepath.Join(consumerDir, "go.sum"), fmt.Sprintf(
+		"example.com/upstream/goawk v1.31.0 h1:deadbeef=\n"+
+			"example.com/upstream/goawk v1.31.0/go.mod h1:deadbeef=\n"+
+			"example.com/pruned/old v0.1.0 h1:deadbeef=\n"+
+			"example.com/fork/goawk v1.0.1 %s\n"+
+			"example.com/fork/goawk v1.0.1/go.mod %s\n",
+		forkZipH1, forkModH1,
+	))
+
+	res, err := CaptureModuleClosure(ctx, ModuleClosureOptions{
+		ModuleDirs:   []string{consumerDir},
+		GoModCache:   seedModCache,
+		ArtifactRoot: artRoot,
+		Backend:      store,
+	})
+	if err != nil {
+		t.Fatalf("CaptureModuleClosure failed on replaced/pruned go.mod+go.sum: %v", err)
+	}
+	if res.Ingested != 1 || len(res.Roots) != 1 || res.Roots[0].Name != "gomod-zip/example.com/fork/goawk" {
+		t.Fatalf("unexpected closure roots: %+v", res)
+	}
+}
