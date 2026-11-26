@@ -25,6 +25,7 @@ import (
 // TestCopySheetSecretRevealAndCopyInChrome is the S529.7 end-to-end check: a
 // real hub serves a rendered sheet, headless Chrome clicks Reveal and Copy,
 // and the value reaches the page and the clipboard but not the sheet file.
+// Chrome can also copy both fields again after reloading the sheet.
 func TestCopySheetSecretRevealAndCopyInChrome(t *testing.T) {
 	if os.Getenv("BASHY_BROWSER_LIVE") != "1" {
 		t.Skip("live Chrome test disabled; set BASHY_BROWSER_LIVE=1 to run (launches a headless Chrome)")
@@ -50,7 +51,11 @@ func TestCopySheetSecretRevealAndCopyInChrome(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 
-	s := &copySheet{Title: "E2E", Sections: []copySection{{Fields: []copyField{{Label: "API key", Secret: "e2e-key"}}}}}
+	const company = "Example Co"
+	s := &copySheet{Title: "E2E", Sections: []copySection{{Fields: []copyField{
+		{Label: "API key", Secret: "e2e-key"},
+		{Label: "Company", Value: company},
+	}}}}
 	if err := os.MkdirAll(live.SheetDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +120,34 @@ func TestCopySheetSecretRevealAndCopyInChrome(t *testing.T) {
 	if strings.Contains(hubLog.String(), value) || !strings.Contains(hubLog.String(), "sheet secret served") {
 		t.Errorf("hub log leaks the value or misses the event:\n%s", hubLog.String())
 	}
+
+	const companyButton = "[data-copy] button"
+	const secretButton = "[data-secret] button[data-act=copy]"
+	waitForButton := func(selector, label string) chromedp.Action {
+		return chromedp.Poll(fmt.Sprintf("document.querySelector(%q).textContent === %q", selector, label),
+			nil, chromedp.WithPollingTimeout(5*time.Second))
+	}
+	waitForClipboard := func(want string) chromedp.Action {
+		return chromedp.Poll(fmt.Sprintf("navigator.clipboard.readText().then(value => value === %q)", want),
+			nil, chromedp.WithPollingInterval(50*time.Millisecond), chromedp.WithPollingTimeout(5*time.Second))
+	}
+	runCopySheetStep(t, ctx, "copy a regular field",
+		waitForButton(companyButton, "Copy"),
+		chromedp.Click(companyButton, chromedp.ByQuery),
+		waitForClipboard(company),
+		waitForButton(companyButton, "Copy again"),
+	)
+	focusCopySheet(t, ctx, reg.URL, origin)
+	runCopySheetStep(t, ctx, "copy both fields again after reloading",
+		waitForButton(secretButton, "Copy again"),
+		waitForButton(companyButton, "Copy again"),
+		chromedp.Click(secretButton, chromedp.ByQuery),
+		waitForClipboard(value),
+		chromedp.Click(companyButton, chromedp.ByQuery),
+		waitForClipboard(company),
+		chromedp.Poll(`document.getElementById('progress').textContent === '2 of 2 copied'`,
+			nil, chromedp.WithPollingTimeout(5*time.Second)),
+	)
 }
 
 // TestCopySheetEntryRememberInChrome is the S529.8 end-to-end check: a named

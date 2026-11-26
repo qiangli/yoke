@@ -4,7 +4,7 @@ package browsercmd
 // but not fill (Sprint 529, story S529.6). Some pages refuse every extension
 // (the Chrome Web Store, many banks), so the agent prepares each field's
 // value and the human pastes it: the sheet opens beside the live page, one
-// Copy button per field, and a copied field greys out to show progress.
+// Copy button per field that changes to "Copy again" after the first copy.
 //
 // Guard parity: a value the sensitive-input guard would refuse to type is
 // never written to the sheet. Its field says "enter this yourself" and is
@@ -197,11 +197,12 @@ func renderCopySheet(s *copySheet, withheld []withheldField, live bool) string {
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:860px;margin:0 auto;padding:20px 16px 48px}h1{font-size:21px;margin:0 0 4px}.intro{color:var(--mute);margin:0 0 8px;white-space:pre-wrap}
 .progress{color:var(--mute);font-size:13px;margin:0 0 12px}h2{font-size:16px;margin:24px 0 6px;color:var(--acc)}
-.f{background:var(--card);border-radius:10px;padding:10px 14px;margin:8px 0;box-shadow:0 1px 3px #0002;transition:opacity .2s}
-.f.done{opacity:.5}.h{display:flex;justify-content:space-between;align-items:center;gap:12px}.h b{overflow-wrap:anywhere}
+.f{background:var(--card);border-radius:10px;padding:10px 14px;margin:8px 0;box-shadow:0 1px 3px #0002}
+.h{display:flex;justify-content:space-between;align-items:center;gap:12px}.h b{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;margin:6px 0 0}.note{color:var(--mute);font-size:13px;margin-top:4px}
 .held{color:var(--warn);font-size:14px;margin-top:6px}.btns{display:flex;gap:6px}.entry{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px}.entry[hidden]{display:none}.sv{flex:1 1 220px;min-width:0;padding:6px 8px;border-radius:6px;border:1px solid var(--mute);background:var(--bg);color:var(--ink);font:inherit}.rm{color:var(--mute);font-size:13px}button.ghost{background:transparent;color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
 button{flex:none;border:0;border-radius:6px;background:var(--acc);color:#fff;padding:6px 14px;font:inherit;cursor:pointer}button.ok{background:var(--ok)}
+.done .copy:not(.ok){background:transparent;color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
 </style></head><body><main><h1>`)
 	b.WriteString(esc(s.Title))
 	b.WriteString(`</h1>`)
@@ -216,11 +217,11 @@ button{flex:none;border:0;border-radius:6px;background:var(--acc);color:#fff;pad
 		}
 		for _, f := range sec.Fields {
 			if f.Secret != "" {
-				fmt.Fprintf(&b, `<div class="f" data-secret="%s" data-k="%s"><div class="h"><b>%s</b><span class="btns"><button type="button" class="ghost" data-act="reveal">Reveal</button><button type="button" data-act="copy">Copy</button></span></div><pre class="mask">••••••••</pre><div class="entry" hidden><input type="password" class="sv" autocomplete="off" spellcheck="false" aria-label="%s"><label class="rm"><input type="checkbox" class="remember"> Remember on this computer</label><button type="button" data-act="save">Save</button></div><div class="note sx">Secret <code>%s</code>: shown on Reveal, never stored in this page.</div>`, esc(f.Secret), esc(f.Label), esc(f.Label), esc(f.Label), esc(f.Secret))
+				fmt.Fprintf(&b, `<div class="f" data-secret="%s" data-k="%s"><div class="h"><b>%s</b><span class="btns"><button type="button" class="ghost" data-act="reveal">Reveal</button><button type="button" class="copy" data-act="copy">Copy</button></span></div><pre class="mask">••••••••</pre><div class="entry" hidden><input type="password" class="sv" autocomplete="off" spellcheck="false" aria-label="%s"><label class="rm"><input type="checkbox" class="remember"> Remember on this computer</label><button type="button" data-act="save">Save</button></div><div class="note sx">Secret <code>%s</code>: shown on Reveal, never stored in this page.</div>`, esc(f.Secret), esc(f.Label), esc(f.Label), esc(f.Label), esc(f.Secret))
 			} else if reason, ok := held[sec.Name+"\x00"+f.Label]; ok {
 				fmt.Fprintf(&b, `<div class="f"><div class="h"><b>%s</b></div><div class="held">Enter this yourself: bashy does not prepare guarded values (%s).</div>`, esc(f.Label), esc(reason))
 			} else {
-				fmt.Fprintf(&b, `<div class="f" data-copy data-k="%s"><div class="h"><b>%s</b><button type="button" data-i="%d">Copy</button></div><pre id="v%d">%s</pre>`, esc(f.Label), esc(f.Label), n, n, esc(f.Value))
+				fmt.Fprintf(&b, `<div class="f" data-copy data-k="%s"><div class="h"><b>%s</b><button type="button" class="copy" data-i="%d">Copy</button></div><pre id="v%d">%s</pre>`, esc(f.Label), esc(f.Label), n, n, esc(f.Value))
 				n++
 			}
 			if f.Note != "" {
@@ -234,11 +235,19 @@ const KEY='bashy-copysheet:'+location.pathname;
 function load(){try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){return {}}}
 function save(d){try{localStorage.setItem(KEY,JSON.stringify(d))}catch(e){}}
 const state=load();
-document.querySelectorAll('[data-copy]').forEach(f=>{const v=f.querySelector('pre').textContent;if(state[f.dataset.k]===v)f.classList.add('done')});
+function markDone(f){f.classList.add('done');const btn=f.querySelector('.copy');btn.textContent='Copy again';btn.classList.remove('ok');}
 try{const y=sessionStorage.getItem(KEY+':y');if(y)scrollTo(0,+y);addEventListener('scroll',()=>sessionStorage.setItem(KEY+':y',scrollY))}catch(e){}
-const total=document.querySelectorAll('[data-copy],[data-secret]').length;
-document.querySelectorAll('[data-secret]').forEach(f=>{if(state[f.dataset.k]==='secret:'+f.dataset.secret)f.classList.add('done')});
+const fields=document.querySelectorAll('[data-copy],[data-secret]');
+fields.forEach(f=>{const v=f.dataset.secret?'secret:'+f.dataset.secret:f.querySelector('pre').textContent;if(state[f.dataset.k]===v)markDone(f);});
+const total=fields.length;
 function progress(){const d=document.querySelectorAll('[data-copy].done,[data-secret].done').length;document.getElementById('progress').textContent=d+' of '+total+' copied';}
+const feedbackTimers=new WeakMap();
+function copied(btn,value){
+ const f=btn.closest('.f');f.classList.add('done');state[f.dataset.k]=value;save(state);progress();
+ btn.textContent='Copied';btn.classList.add('ok');
+ clearTimeout(feedbackTimers.get(btn));
+ feedbackTimers.set(btn,setTimeout(()=>markDone(f),1500));
+}
 // Secrets by reference: the value comes from the bashy hub on a click and is
 // never kept in this page (storage keeps only "copied").
 async function hub(body){if(location.protocol!=='http:')throw new Error('Open this sheet through bashy (the browser hub) to use secrets.');
@@ -259,15 +268,14 @@ document.addEventListener('click',async e=>{const btn=e.target.closest('[data-se
    const v=(await hub({name:f.dataset.secret})).value;pre.textContent=v;pre.classList.remove('mask');setTimeout(()=>{pre.textContent='••••••••';pre.classList.add('mask')},10000);return;}
   const v=ask?inp.value:(await hub({name:f.dataset.secret})).value;if(!v)throw new Error('Nothing to copy yet.');
   const mine=++lastSecret;await navigator.clipboard.writeText(v);
-  btn.textContent='Copied';btn.classList.add('ok');f.classList.add('done');state[f.dataset.k]='secret:'+f.dataset.secret;save(state);progress();
-  setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('ok')},1500);
+  copied(btn,'secret:'+f.dataset.secret);
   // Clear the clipboard after 30 s if it still holds the value.
   setTimeout(async()=>{if(mine!==lastSecret)return;try{if((await navigator.clipboard.readText())!==v)return}catch(_){}try{await navigator.clipboard.writeText('')}catch(_){}},30000);
  }catch(err){note.textContent=err.message;note.style.color='var(--warn)';}});
 function fallback(t){const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();}
 document.addEventListener('click',e=>{const btn=e.target.closest('button[data-i]');if(!btn)return;
  const t=document.getElementById('v'+btn.dataset.i).textContent;
- const done=()=>{btn.textContent='Copied';btn.classList.add('ok');const f=btn.closest('.f');f.classList.add('done');state[f.dataset.k]=t;save(state);progress();setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('ok')},1500);};
+ const done=()=>copied(btn,t);
  if(navigator.clipboard){navigator.clipboard.writeText(t).then(done,()=>{fallback(t);done();});}else{fallback(t);done();}});
 progress();
 </script></body></html>
