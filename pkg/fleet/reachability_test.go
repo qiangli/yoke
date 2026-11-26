@@ -12,16 +12,18 @@ import (
 func TestPairedHostReachabilityWire(t *testing.T) {
 	const status = `{"host":"fixture","state":"degraded","last_seen_at":"2026-11-21T00:00:00Z","monitoring":true,"threshold_seconds":900}`
 	for _, test := range []struct {
-		args  []string
-		patch map[string]any
+		args      []string
+		patch     map[string]any
+		satellite string
 	}{
-		{[]string{"status", "fixture"}, nil},
-		{[]string{"ack", "fixture", "fixture-alert"}, map[string]any{"ack_alert_id": "fixture-alert"}},
-		{[]string{"mute", "fixture", "20m"}, map[string]any{"mute_seconds": float64(1200)}},
-		{[]string{"threshold", "fixture", "default"}, map[string]any{"threshold_seconds": float64(900)}},
-		{[]string{"threshold", "fixture", "off"}, map[string]any{"threshold_seconds": float64(0)}},
-		{[]string{"threshold", "@all", "20m"}, map[string]any{"threshold_seconds": float64(1200)}},
-		{[]string{"threshold", "fixture", "inherit"}, map[string]any{"threshold_seconds": float64(-1)}},
+		{[]string{"status", "fixture"}, nil, ""},
+		{[]string{"status", "fixture", "--satellite", "fixture+selected"}, nil, "fixture+selected"},
+		{[]string{"ack", "fixture", "fixture-alert"}, map[string]any{"ack_alert_id": "fixture-alert"}, ""},
+		{[]string{"mute", "fixture", "20m"}, map[string]any{"mute_seconds": float64(1200)}, ""},
+		{[]string{"threshold", "fixture", "default"}, map[string]any{"threshold_seconds": float64(900)}, ""},
+		{[]string{"threshold", "fixture", "off"}, map[string]any{"threshold_seconds": float64(0)}, ""},
+		{[]string{"threshold", "@all", "20m"}, map[string]any{"threshold_seconds": float64(1200)}, ""},
+		{[]string{"threshold", "fixture", "inherit"}, map[string]any{"threshold_seconds": float64(-1)}, ""},
 	} {
 		t.Run(test.args[0]+test.args[len(test.args)-1], func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +34,9 @@ func TestPairedHostReachabilityWire(t *testing.T) {
 				if r.URL.Path != "/api/v1/hosts/"+host+"/reachability" ||
 					r.Header.Get("Authorization") != "Bearer fixture-token" {
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				if got := r.URL.Query().Get("satellite"); got != test.satellite {
+					t.Errorf("satellite = %q, want %q", got, test.satellite)
 				}
 				if test.patch == nil {
 					if r.Method != http.MethodGet {
@@ -57,5 +62,37 @@ func TestPairedHostReachabilityWire(t *testing.T) {
 				t.Fatalf("CLI changed server view: %s", &out)
 			}
 		})
+	}
+}
+
+func TestPairedHostListPreservesReachability(t *testing.T) {
+	const projection = `{"host":"fixture","state":"offline","alert_id":"fixture-alert","last_seen_at":"2026-11-21T00:00:00Z"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/hosts":
+			_, _ = w.Write([]byte(`{"hosts":[{"host":"fixture","online":false,"reachability":` + projection + `},{"host":"shared","shared":true}]}`))
+		case "/api/v1/peers":
+			_, _ = w.Write([]byte(`{"peers":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	cmd := NewPairedHostCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"ls", "--master", srv.URL, "--token", "fixture-token", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var listed struct {
+		Hosts []HostEntry `json:"hosts"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Hosts) != 2 || string(listed.Hosts[0].Reachability) != projection || listed.Hosts[1].Reachability != nil {
+		t.Fatalf("CLI changed owner-scoped projection: %s", out.Bytes())
 	}
 }

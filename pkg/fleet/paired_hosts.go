@@ -43,12 +43,13 @@ import (
 // the app catalog. Only the fields this verb prints are decoded; --json
 // passes the envelope through untouched.
 type HostEntry struct {
-	Host     string `json:"host"`
-	OsUser   string `json:"os_user,omitempty"`
-	Title    string `json:"title,omitempty"`
-	Hostname string `json:"hostname,omitempty"`
-	Online   bool   `json:"online"`
-	Shared   bool   `json:"shared,omitempty"`
+	Host         string          `json:"host"`
+	OsUser       string          `json:"os_user,omitempty"`
+	Title        string          `json:"title,omitempty"`
+	Hostname     string          `json:"hostname,omitempty"`
+	Online       bool            `json:"online"`
+	Shared       bool            `json:"shared,omitempty"`
+	Reachability json.RawMessage `json:"reachability,omitempty"`
 }
 
 // PeerEntry is one row of GET /api/v1/peers: online status, the same-LAN

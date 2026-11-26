@@ -8,13 +8,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
-func (c PairedHostsClient) reachability(ctx context.Context, host string, patch map[string]any) ([]byte, error) {
+func (c PairedHostsClient) reachability(ctx context.Context, host, satellite string, patch map[string]any) ([]byte, error) {
 	path := "/api/v1/hosts/" + url.PathEscape(host) + "/reachability"
+	if satellite != "" {
+		path += "?" + url.Values{"satellite": {satellite}}.Encode()
+	}
 	method := http.MethodGet
 	var body io.Reader
 	if patch != nil {
@@ -52,7 +56,8 @@ func (c PairedHostsClient) reachability(ctx context.Context, host string, patch 
 func newReachabilityCmd(clientFor func(context.Context) (PairedHostsClient, error), asJSON *bool) *cobra.Command {
 	root := &cobra.Command{Use: "reachability", Short: "Read host reachability and manage owner alerts"}
 	add := func(use, short, field string, count int, value func(string) (any, error)) {
-		root.AddCommand(&cobra.Command{
+		var satellite string
+		command := &cobra.Command{
 			Use: use, Short: short, Args: cobra.ExactArgs(count),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				var patch map[string]any
@@ -71,13 +76,17 @@ func newReachabilityCmd(clientFor func(context.Context) (PairedHostsClient, erro
 				if host == "@all" {
 					host = "~all"
 				}
-				raw, err := client.reachability(cmd.Context(), host, patch)
+				raw, err := client.reachability(cmd.Context(), host, strings.TrimSpace(satellite), patch)
 				if err != nil {
 					return err
 				}
 				return printReachability(cmd.OutOrStdout(), raw, *asJSON)
 			},
-		})
+		}
+		if field == "" {
+			command.Flags().StringVar(&satellite, "satellite", "", "select the reporting satellite by ID on the master")
+		}
+		root.AddCommand(command)
 	}
 	add("status HOST|@all", "Show the current state and alert", "", 1, nil)
 	add("ack HOST ALERT_ID", "Acknowledge the specified active alert", "ack_alert_id", 2, func(s string) (any, error) { return s, nil })
