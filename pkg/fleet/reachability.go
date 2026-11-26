@@ -19,6 +19,10 @@ func (c PairedHostsClient) reachability(ctx context.Context, host, satellite str
 	if satellite != "" {
 		path += "?" + url.Values{"satellite": {satellite}}.Encode()
 	}
+	return c.hostStatusRequest(ctx, path, patch)
+}
+
+func (c PairedHostsClient) hostStatusRequest(ctx context.Context, path string, patch map[string]any) ([]byte, error) {
 	method := http.MethodGet
 	var body io.Reader
 	if patch != nil {
@@ -103,6 +107,7 @@ func newReachabilityCmd(clientFor func(context.Context) (PairedHostsClient, erro
 			return reachabilitySeconds(s)
 		}
 	})
+	root.AddCommand(newDiskPressureCmd(clientFor, asJSON))
 	return root
 }
 
