@@ -34,10 +34,9 @@ type NotifyReceipt struct {
 	When          string `json:"when,omitempty"`
 }
 
-// NotifyEvent is the shared event-side implementation for --notify. Commands
-// that already have an event (at, batch, crontab, sleep, timeout) call this
-// once when that event occurs; the flag plumbing stays in their common host
-// layer instead of five command-specific publishers.
+// NotifyEvent publishes one notification from principal to target. It is the
+// shared event-side implementation behind `bashy notify` (immediate and
+// deferred delivery) and the todo assignment notice.
 func NotifyEvent(principal, target, subject string) error {
 	principal = strings.TrimSpace(principal)
 	if principal == "" || principal == "anonymous" {
