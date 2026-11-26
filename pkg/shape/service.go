@@ -78,7 +78,24 @@ type Service struct {
 	App     App
 	Options Options
 }
+
+// Source identifies the trigger for a wish. An empty Kind means human.
+type Source struct {
+	Kind string `json:"kind,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+}
+
+func (s Source) Validate() error {
+	switch s.Kind {
+	case "", "human", "incident", "feed", "schedule":
+		return nil
+	default:
+		return fmt.Errorf("shape: unknown source kind %q", s.Kind)
+	}
+}
+
 type Wish struct {
+	Source       Source `json:"source,omitempty,omitzero"`
 	Request      string `json:"request"`
 	Page         string `json:"page,omitempty"`
 	Element      string `json:"element,omitempty"`
@@ -91,11 +108,23 @@ type Wish struct {
 	Expected     string `json:"expected,omitempty"`
 	Evidence     string `json:"evidence,omitempty"`
 }
+
+func (w Wish) validate() error {
+	if strings.TrimSpace(w.Request) == "" {
+		return errors.New("shape: request is required")
+	}
+	if w.Story != "" && w.Todo != "" {
+		return errors.New("shape: choose story or todo")
+	}
+	return w.Source.Validate()
+}
+
 type CoverageSummary struct {
 	Covered    []string `json:"covered"`
 	NotCovered []string `json:"not_covered"`
 }
 type Candidate struct {
+	Source              Source           `json:"source,omitempty,omitzero"`
 	ProgramPreview      *ProgramPreview  `json:"program_preview,omitempty"`
 	ActivationPrincipal string           `json:"activation_principal,omitempty"`
 	ArtifactPath        string           `json:"artifact_path,omitempty"`
@@ -490,11 +519,8 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 		return Candidate{}, e
 	}
 	defer l.Release()
-	if strings.TrimSpace(w.Request) == "" {
-		return Candidate{}, errors.New("shape: request is required")
-	}
-	if w.Story != "" && w.Todo != "" {
-		return Candidate{}, errors.New("shape: choose story or todo")
+	if err := w.validate(); err != nil {
+		return Candidate{}, err
 	}
 	actPrincipal := s.ActivationPrincipalFor(caller)
 	if expectedBase != "" && actPrincipal != s.Owner() {
@@ -514,7 +540,7 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if _, e = rand.Read(id[:]); e != nil {
 		return Candidate{}, e
 	}
-	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: s.Kind(), Scope: s.Scope(), ActivationPrincipal: actPrincipal, Created: time.Now().UTC()}
+	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Source: w.Source, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: s.Kind(), Scope: s.Scope(), ActivationPrincipal: actPrincipal, Created: time.Now().UTC()}
 	if c.Actor == "" {
 		c.Actor = c.Principal
 	}
@@ -552,11 +578,8 @@ func (s Service) FileRequest(ctx context.Context, caller Caller, w Wish) (Candid
 		return Candidate{}, e
 	}
 	defer l.Release()
-	if strings.TrimSpace(w.Request) == "" {
-		return Candidate{}, errors.New("shape: request is required")
-	}
-	if w.Story != "" && w.Todo != "" {
-		return Candidate{}, errors.New("shape: choose story or todo")
+	if err := w.validate(); err != nil {
+		return Candidate{}, err
 	}
 	var id [8]byte
 	if _, e = rand.Read(id[:]); e != nil {
@@ -569,6 +592,7 @@ func (s Service) FileRequest(ctx context.Context, caller Caller, w Wish) (Candid
 		Actor:               caller.Actor,
 		RepresentedUser:     caller.RepresentedUser,
 		ActivationPrincipal: s.QueuePrincipal(caller.Principal),
+		Source:              w.Source,
 		Request:             strings.TrimSpace(w.Request),
 		Page:                w.Page,
 		Element:             w.Element,

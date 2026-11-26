@@ -227,3 +227,32 @@ func TestTrackingActorLocatorKeepsAuditIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestFeedWishLinksTodoAndPersistsSource(t *testing.T) {
+	s, caller, _, _, _ := testService(t)
+	s.Options.Track = NewTracking(s.Options.Home)
+	store := &issue.Store{Root: t.TempDir(), Sub: "."}
+	item := &issue.Issue{ID: "abc123", Kind: issue.KindTask, Title: "Feed request", Status: todo.StatusTodo, Origin: "feed"}
+	if _, err := store.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	w := Wish{Request: item.Title, Todo: item.ID, TrackingRoot: store.Root, Source: Source{Kind: "feed", Ref: "issue-42"}}
+	candidate, err := s.Begin(t.Context(), caller, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Show(t.Context(), caller, candidate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != w.Source || got.TrackingItem != "todo:"+item.ID {
+		t.Fatalf("source %v, link %q", got.Source, got.TrackingItem)
+	}
+	linked, err := store.Resolve(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.Origin != "feed" || len(linked.Shape) != 1 || linked.Shape[0].Candidate != candidate.ID {
+		t.Fatalf("linked item: %+v", linked)
+	}
+}

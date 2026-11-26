@@ -133,7 +133,7 @@ func LocalShapeWish(ctx context.Context, app core.App, caller core.Caller, opts 
 			return core.Candidate{}, err
 		}
 		if !ok {
-			c, e := s.fileRequest(a, caller.Principal, wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: false})
+			c, e := s.fileRequest(a, caller.Principal, wish{source: w.Source, Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: false})
 			if e != nil {
 				return core.Candidate{}, e
 			}
@@ -142,7 +142,7 @@ func LocalShapeWish(ctx context.Context, app core.App, caller core.Caller, opts 
 		}
 	}
 	isOperator := svc.Owner() == "" || strings.EqualFold(strings.TrimSpace(caller.Principal), svc.Owner())
-	c, e := s.startCandidate(a, caller.Principal, wish{Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: isOperator})
+	c, e := s.startCandidate(a, caller.Principal, wish{source: w.Source, Request: w.Request, Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, operator: isOperator})
 	if e != nil {
 		return core.Candidate{}, e
 	}

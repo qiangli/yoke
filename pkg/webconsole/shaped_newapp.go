@@ -13,6 +13,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 
 	"github.com/qiangli/yoke/pkg/fleet"
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 )
 
 // A wish is a whole change lifecycle, decided by Genie (Sprint 526.B1i,
@@ -223,8 +224,8 @@ func intentTaskFor(app string, w wish) string {
 		"If it does, answer with exactly one line:\n" + newAppMarker + " <short name> | <label>\n" +
 		"(short name: lower-case letters, digits and dashes, e.g. signup; label: what the launcher tile shows, e.g. Sign-up sheet).\n" +
 		"If it does not, answer with exactly one line:\nFILED\n\n" +
-		shapingContext(w.Page, w.Element) +
-		"The user's request (verbatim, between the markers):\n<<<REQUEST\n" + w.Request + "\nREQUEST>>>\n"
+		shapecore.ShapingContext(w.Page, w.Element) +
+		"The user's request (between the markers):\n" + shapecore.FenceUntrusted("REQUEST", w.Request)
 }
 
 // newAppBrief is the paragraph of the shaping brief that lets Genie say a

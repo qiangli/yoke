@@ -72,17 +72,14 @@ func (s Service) bashyRecord(ctx context.Context, caller Caller, w Wish) (Candid
 		return Candidate{}, e
 	}
 	defer l.Release()
-	if strings.TrimSpace(w.Request) == "" {
-		return Candidate{}, errors.New("shape: request is required")
-	}
-	if w.Story != "" && w.Todo != "" {
-		return Candidate{}, errors.New("shape: choose story or todo")
+	if err := w.validate(); err != nil {
+		return Candidate{}, err
 	}
 	var id [8]byte
 	if _, e = rand.Read(id[:]); e != nil {
 		return Candidate{}, e
 	}
-	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Request: strings.TrimSpace(w.Request), Reproduction: strings.TrimSpace(w.Reproduction), Expected: strings.TrimSpace(w.Expected), Evidence: strings.TrimSpace(w.Evidence), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, Status: Reported, AppKind: BashyKind, Scope: "host", Created: time.Now().UTC()}
+	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Source: w.Source, Request: strings.TrimSpace(w.Request), Reproduction: strings.TrimSpace(w.Reproduction), Expected: strings.TrimSpace(w.Expected), Evidence: strings.TrimSpace(w.Evidence), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, Status: Reported, AppKind: BashyKind, Scope: "host", Created: time.Now().UTC()}
 	if c.RepresentedUser == "" {
 		c.RepresentedUser = c.Principal
 	}

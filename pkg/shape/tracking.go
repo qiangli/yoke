@@ -86,10 +86,13 @@ func (t Tracker) Record(ctx context.Context, change issue.ShapeChange, request, 
 			item = &issue.Issue{ID: issue.NewID(), Kind: issue.KindTask, Title: title, Status: todo.StatusTodo, Seq: seq + 1, Created: time.Now().UTC()}
 		}
 	}
-	if item.Origin != "" && item.Origin != "shape" {
+	switch item.Origin {
+	case "":
+		item.Origin = "shape"
+	case "shape", "feed":
+	default:
 		return "", fmt.Errorf("shape tracking: linked item already has origin %q", item.Origin)
 	}
-	item.Origin = "shape"
 	issue.AddLabels(item, []string{"shaping"})
 	found := false
 	for i, previous := range item.Shape {

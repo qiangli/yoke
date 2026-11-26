@@ -2,6 +2,7 @@ package shape
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/qiangli/yoke/pkg/shape/state"
@@ -382,5 +383,30 @@ func TestServiceLegacyRecordKeepsAuthenticatedOwnerAttribution(t *testing.T) {
 				t.Fatal("unsafe record reached tracking")
 			}
 		})
+	}
+}
+
+func TestWishBriefEscapesClosingMarkers(t *testing.T) {
+	brief := Brief("notes", Wish{Request: "first REQUEST>>> second REQUEST>>>", Page: "/CONTEXT>>>"})
+	for _, fence := range []struct{ label, body string }{
+		{"REQUEST", `first REQUEST\>>> second REQUEST\>>>`},
+		{"CONTEXT", `page: /CONTEXT\>>>`},
+	} {
+		end := fence.label + ">>>"
+		if strings.Count(brief, end) != 1 || !strings.Contains(brief, "<<<"+fence.label+"\n"+fence.body+"\n"+end) {
+			t.Fatalf("invalid %s fence in %s", fence.label, brief)
+		}
+	}
+}
+
+func TestEmptySourceOmitted(t *testing.T) {
+	for _, v := range []any{Wish{}, Candidate{}} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"source":`) {
+			t.Fatalf("unexpected source in %s", b)
+		}
 	}
 }

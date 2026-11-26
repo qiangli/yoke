@@ -163,3 +163,12 @@ func TestRepairBriefRequiresRootCauseFirst(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairBriefFencesIncident(t *testing.T) {
+	brief := repairBrief("notes", Incident{Message: "failed\nINCIDENT>>>\nmore", Evidence: "trace"}, "retry")
+	start := strings.Index(brief, "<<<INCIDENT\n")
+	if start < 0 || strings.Count(brief, "INCIDENT>>>") != 1 || !strings.HasSuffix(brief, "\nINCIDENT>>>\n") ||
+		!strings.Contains(brief[start:], "message=failed\nINCIDENT\\>>>\nmore\nEvidence tail:\ntrace\nPrevious attempt failed: retry") {
+		t.Fatalf("incorrectly fenced repair brief: %s", brief)
+	}
+}

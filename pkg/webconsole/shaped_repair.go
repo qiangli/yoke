@@ -15,6 +15,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 	"github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 )
@@ -146,12 +147,12 @@ func repairBrief(app string, in Incident, previous string) string {
 		"Classify the cause as app code, a test, or the environment, and state it in your reply. " +
 		"Fix it where the cause lives; if the cause is the environment, change no app code and say so. " +
 		"Never work around a symptom you have not explained. " +
-		"Where the app has tests, show a red check before the fix and a green check after it.\n\n" +
-		fmt.Sprintf("Incident %s: kind=%s path=%s status=%d message=%s\nEvidence tail:\n%s\n", in.ID, in.Kind, in.Path, in.Status, in.Message, in.Evidence)
+		"Where the app has tests, show a red check before the fix and a green check after it.\n\n"
+	details := fmt.Sprintf("Incident %s: kind=%s path=%s status=%d message=%s\nEvidence tail:\n%s", in.ID, in.Kind, in.Path, in.Status, in.Message, in.Evidence)
 	if previous != "" {
-		brief += "Previous attempt failed: " + previous + "\n"
+		details += "\nPrevious attempt failed: " + previous
 	}
-	return brief
+	return brief + shapecore.FenceUntrusted("INCIDENT", details)
 }
 
 func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
@@ -234,7 +235,7 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 		return c, "", err.Error(), false, ""
 	}
 	request := "Restore existing behavior after " + in.Kind.String() + " error at " + in.Path
-	c, dir, err = a.recordWish(principal, wish{Request: request}, candRunning, candKindRepair)
+	c, dir, err = a.recordWish(principal, wish{Request: request, source: shapecore.Source{Kind: "incident", Ref: in.ID}}, candRunning, candKindRepair)
 	if err != nil {
 		return c, dir, err.Error(), false, ""
 	}
