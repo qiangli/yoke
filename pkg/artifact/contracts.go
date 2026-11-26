@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -23,11 +24,17 @@ import (
 )
 
 const (
-	ProfileSchemaV1       = "bashy-offline-profile-v1"
-	ManifestSchemaV1      = "bashy-artifact-manifest-v1"
-	CatalogRecordSchemaV1 = "bashy-artifact-record-v1"
-	PublicationSchemaV1   = "bashy-module-publication-v1"
-	AlertJournalSchemaV1  = "bashy-offline-alert-v1"
+	ProfileSchemaV1        = "bashy-offline-profile-v1"
+	ManifestSchemaV1       = "bashy-artifact-manifest-v1"
+	CatalogRecordSchemaV1  = "bashy-artifact-record-v1"
+	PublicationSchemaV1    = "bashy-module-publication-v1"
+	AlertJournalSchemaV1   = "bashy-offline-alert-v1"
+	SealStateSchemaV1      = "bashy-seal-state-v1"
+	PortableBundleSchemaV1 = "bashy-portable-bundle-v1"
+	OfflineStatusSchemaV1  = "bashy-offline-status-v1"
+
+	ProfileScopeFull     = "full"
+	ProfileScopeSelfHost = "self-host"
 )
 
 var (
@@ -43,7 +50,15 @@ var (
 	ErrStoreBusy                    = errors.New("artifact: catalog database locked by another writer")
 	ErrNonLoopbackBind              = errors.New("artifact: non-loopback bind requires explicit mesh configuration")
 	ErrSharingViolation             = errors.New("artifact: blob has open reader or file sharing lock")
+	ErrIncompleteClosure            = errors.New("artifact: incomplete bootstrap closure")
+	ErrInsufficientCapacity         = errors.New("artifact: insufficient disk capacity for closure and rebuild reserve")
+	ErrPlatformMismatch             = errors.New("artifact: bundle platform mismatch")
 )
+
+// CurrentPlatform returns the running host's goos/goarch identifier.
+func CurrentPlatform() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
+}
 
 var sha256DigestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -265,7 +280,8 @@ func (p ResourcePolicy) Validate() error {
 type ProfileV1 struct {
 	SchemaVersion string             `json:"schema_version"`
 	Name          string             `json:"name"`
-	Platform      string             `json:"platform"` // goos/goarch
+	Scope         string             `json:"scope,omitempty"` // "" or "full" vs "self-host"
+	Platform      string             `json:"platform"`        // goos/goarch
 	TierOrder     []Tier             `json:"tier_order"`
 	OfflineFloor  Tier               `json:"offline_floor"`
 	Languages     []string           `json:"languages"`
@@ -308,6 +324,45 @@ func DefaultProfileV1(platform string) ProfileV1 {
 	}
 }
 
+// SelfHostProfileV1 returns the self-hosting offline profile for platform
+// (Go + Bash# language packs and self-rebuild closure without mandatory LLM weights).
+func SelfHostProfileV1(platform string) ProfileV1 {
+	if strings.TrimSpace(platform) == "" {
+		platform = CurrentPlatform()
+	}
+	return ProfileV1{
+		SchemaVersion: ProfileSchemaV1,
+		Name:          "self-host-v1",
+		Scope:         ProfileScopeSelfHost,
+		Platform:      platform,
+		TierOrder:     DefaultTierOrder(),
+		OfflineFloor:  TierUserland,
+		Languages:     []string{"go", "bashsharp"},
+		Models: []ModelProfileSpec{
+			{
+				Name:            "qwen3.5:4b",
+				Role:            "coding",
+				ContextLength:   4096,
+				MaxConcurrency:  1,
+				MaxLoadedModels: 1,
+				RequiredEvals:   []string{"tool-call", "code-edit", "repair"},
+				Required:        false,
+			},
+			{
+				Name:            "qwen3-embedding:0.6b",
+				Role:            "embedding",
+				ContextLength:   4096,
+				MaxConcurrency:  1,
+				MaxLoadedModels: 1,
+				RequiredEvals:   []string{"retrieval"},
+				Required:        false,
+			},
+		},
+		Capacity:  CapacityPolicy{RebuildReserveBytes: 2 << 30},
+		Resources: DefaultResourcePolicy(),
+	}
+}
+
 func validPlatform(p string) bool {
 	osName, arch, ok := strings.Cut(strings.TrimSpace(p), "/")
 	return ok && osName != "" && arch != "" && !strings.Contains(arch, "/")
@@ -319,6 +374,12 @@ func (p ProfileV1) Validate() error {
 	}
 	if strings.TrimSpace(p.Name) == "" || !SafeLogicalPath(p.Name) {
 		return fmt.Errorf("artifact: invalid profile name %q", p.Name)
+	}
+	scope := strings.TrimSpace(p.Scope)
+	switch scope {
+	case "", ProfileScopeFull, ProfileScopeSelfHost:
+	default:
+		return fmt.Errorf("artifact: unsupported profile scope %q", p.Scope)
 	}
 	if !validPlatform(p.Platform) {
 		return fmt.Errorf("artifact: invalid platform %q (want goos/goarch)", p.Platform)
@@ -371,7 +432,7 @@ func (p ProfileV1) Validate() error {
 			hasEmbedding = true
 		}
 	}
-	if !hasCoding || !hasEmbedding {
+	if scope != ProfileScopeSelfHost && (!hasCoding || !hasEmbedding) {
 		return errors.New("artifact: profile requires at least one coding/general model and one embedding model")
 	}
 	if p.Capacity.RebuildReserveBytes == 0 {

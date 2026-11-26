@@ -254,8 +254,47 @@ func TestConcurrentPutFetchLeaseAndPruneRace(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
+	var writerWG sync.WaitGroup
+	var leasesReady sync.WaitGroup
+	startReaders := make(chan struct{})
 	errCh := make(chan error, 64)
 	stopPrune := make(chan struct{})
+
+	// Acquire active read leases BEFORE launching concurrent pruners so the test
+	// deterministically exercises lease protection rather than pre-lease eviction.
+	leasesReady.Add(numLeased)
+	for i := range numLeased {
+		writerWG.Add(1)
+		go func(idx int) {
+			defer writerWG.Done()
+			dgst := leasedDigests[idx]
+			want := leasedPayloads[idx]
+			readySignaled := false
+			err := store.WithReadLease(ctx, 0, "", 5*time.Minute, []string{dgst}, func(lctx context.Context) error {
+				leasesReady.Done()
+				readySignaled = true
+				<-startReaders
+				for range 12 {
+					got, err := store.FetchVerified(lctx, dgst)
+					if err != nil {
+						return fmt.Errorf("leased FetchVerified(%s): %w", dgst, err)
+					}
+					if !bytes.Equal(got, want) {
+						return fmt.Errorf("leased content mismatch for %s", dgst)
+					}
+				}
+				return nil
+			})
+			if !readySignaled {
+				leasesReady.Done()
+			}
+			if err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+	leasesReady.Wait()
+	close(startReaders)
 
 	// Concurrent pruners.
 	for range 3 {
@@ -282,7 +321,6 @@ func TestConcurrentPutFetchLeaseAndPruneRace(t *testing.T) {
 	}
 
 	// Concurrent writers adding both protected and disposable scratch artifacts.
-	var writerWG sync.WaitGroup
 	protectedExtras := make([]string, 8)
 	scratchExtras := make([]string, 8)
 	for i := range 8 {
@@ -304,31 +342,6 @@ func TestConcurrentPutFetchLeaseAndPruneRace(t *testing.T) {
 				return
 			}
 			scratchExtras[idx] = sr.Digest
-		}(i)
-	}
-
-	// Concurrent leased readers repeatedly verifying leased reconstructible payloads.
-	for i := range numLeased {
-		writerWG.Add(1)
-		go func(idx int) {
-			defer writerWG.Done()
-			dgst := leasedDigests[idx]
-			want := leasedPayloads[idx]
-			err := store.WithReadLease(ctx, 0, "", 5*time.Minute, []string{dgst}, func(lctx context.Context) error {
-				for range 12 {
-					got, err := store.FetchVerified(lctx, dgst)
-					if err != nil {
-						return fmt.Errorf("leased FetchVerified(%s): %w", dgst, err)
-					}
-					if !bytes.Equal(got, want) {
-						return fmt.Errorf("leased content mismatch for %s", dgst)
-					}
-				}
-				return nil
-			})
-			if err != nil {
-				errCh <- err
-			}
 		}(i)
 	}
 

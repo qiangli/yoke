@@ -6,16 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/artifact"
 )
 
 // Offline forbids managed-tool network acquisition, not local execution.
-func Offline() bool { return strings.TrimSpace(os.Getenv("BASHY_OFFLINE")) == "1" }
+// It activates when BASHY_OFFLINE=1 or when the host artifact store is sealed.
+func Offline() bool {
+	return strings.TrimSpace(os.Getenv("BASHY_OFFLINE")) == "1" || artifact.IsSealed("")
+}
 
 func offlineMissing(name, version string) error {
 	if version == "" {
 		version = "latest"
 	}
-	return fmt.Errorf("binmgr: %s %s is not cached; BASHY_OFFLINE=1 forbids downloading it (install a matching seed cache)", name, version)
+	return fmt.Errorf("%w: binmgr: %s %s is not cached; BASHY_OFFLINE=1 forbids downloading it (install a matching seed cache)", artifact.ErrSealedNetworkDenied, name, version)
 }
 
 type cachedResolution struct {

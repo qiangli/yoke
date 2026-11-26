@@ -1013,11 +1013,11 @@ type ProxyServerOptions struct {
 	OnRegenerate           func(module, version string)
 }
 
-func effectiveSealed(explicit bool) bool {
+func effectiveSealed(explicit bool, artifactRoot string) bool {
 	if explicit {
 		return true
 	}
-	return strings.TrimSpace(os.Getenv("BASHY_OFFLINE")) == "1"
+	return artifact.IsSealed(artifactRoot)
 }
 
 func validateProxyBindAddr(addr string, allowMesh bool) (string, error) {
@@ -1140,7 +1140,7 @@ func StartProxyServer(ctx context.Context, opts ProxyServerOptions) (*ProxyServe
 	srv := &ProxyServer{
 		addr:         addr,
 		url:          "http://" + addr,
-		sealed:       effectiveSealed(opts.Sealed),
+		sealed:       effectiveSealed(opts.Sealed, artRoot),
 		backend:      backend,
 		closeBackend: closeBackend,
 		ln:           ln,
@@ -1223,7 +1223,7 @@ func NewProxyHandler(opts ProxyServerOptions) (http.Handler, error) {
 		loomDir = resolved
 	}
 
-	sealed := effectiveSealed(opts.Sealed)
+	sealed := effectiveSealed(opts.Sealed, opts.ArtifactRoot)
 	var upstream goproxy.Fetcher
 	if sealed {
 		upstream = sealedFetcher{}
@@ -1244,9 +1244,10 @@ func NewProxyHandler(opts ProxyServerOptions) (http.Handler, error) {
 		onRegenerate: opts.OnRegenerate,
 	}
 	fetcher := &catalogFetcher{
-		backend:  opts.Backend,
-		sealed:   sealed,
-		upstream: upstream,
+		backend:      opts.Backend,
+		artifactRoot: opts.ArtifactRoot,
+		sealed:       sealed,
+		upstream:     upstream,
 	}
 
 	gp := &goproxy.Goproxy{
@@ -1302,9 +1303,14 @@ func (sealedFetcher) Download(ctx context.Context, modPath, version string) (io.
 }
 
 type catalogFetcher struct {
-	backend  artifact.Backend
-	sealed   bool
-	upstream goproxy.Fetcher
+	backend      artifact.Backend
+	artifactRoot string
+	sealed       bool
+	upstream     goproxy.Fetcher
+}
+
+func (f *catalogFetcher) isSealed() bool {
+	return f.sealed || effectiveSealed(false, f.artifactRoot)
 }
 
 func (f *catalogFetcher) List(ctx context.Context, modPath string) ([]string, error) {
@@ -1326,7 +1332,7 @@ func (f *catalogFetcher) List(ctx context.Context, modPath string) ([]string, er
 		vers = slices.Compact(vers)
 		return vers, nil
 	}
-	if f.sealed || effectiveSealed(false) {
+	if f.isSealed() {
 		return sealedFetcher{}.List(ctx, modPath)
 	}
 	return f.upstream.List(ctx, modPath)
@@ -1350,7 +1356,7 @@ func (f *catalogFetcher) Query(ctx context.Context, modPath, query string) (stri
 			return matched.Version, t, nil
 		}
 		// Never fall back to network for an unknown query on a published internal module in sealed mode.
-		if f.sealed || effectiveSealed(false) {
+		if f.isSealed() {
 			return sealedFetcher{}.Query(ctx, modPath, query)
 		}
 	}
@@ -1363,7 +1369,7 @@ func (f *catalogFetcher) Query(ctx context.Context, modPath, query string) (stri
 		}
 	}
 
-	if f.sealed || effectiveSealed(false) {
+	if f.isSealed() {
 		return sealedFetcher{}.Query(ctx, modPath, query)
 	}
 	return f.upstream.Query(ctx, modPath, query)
@@ -1376,7 +1382,7 @@ func (f *catalogFetcher) Download(ctx context.Context, modPath, version string) 
 		setProxyDiag(ctx, missErr)
 		return nil, nil, nil, missErr
 	}
-	if f.sealed || effectiveSealed(false) {
+	if f.isSealed() {
 		return sealedFetcher{}.Download(ctx, modPath, version)
 	}
 	return f.upstream.Download(ctx, modPath, version)

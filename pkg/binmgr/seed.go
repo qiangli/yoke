@@ -111,6 +111,12 @@ func seedDigest(file string) (string, error) {
 // and special files are refused rather than exporting content outside the
 // selected cache. No network or installed-tool execution is involved.
 func ExportSeed(ctx context.Context, archivePath string) error {
+	return ExportSeedFiltered(ctx, archivePath, nil)
+}
+
+// ExportSeedFiltered writes a portable, checksummed tar of entries in CacheDir()
+// matching match(name, version) (or all entries when match is nil).
+func ExportSeedFiltered(ctx context.Context, archivePath string, match func(name, version string) bool) error {
 	root, err := CacheDir()
 	if err != nil {
 		return err
@@ -141,7 +147,9 @@ func ExportSeed(ctx context.Context, archivePath string) error {
 		if file == root {
 			return nil
 		}
-		if strings.HasPrefix(d.Name(), ".seed-") || strings.HasPrefix(d.Name(), ".dl-") || strings.HasPrefix(d.Name(), ".resolution-") {
+		if strings.HasPrefix(d.Name(), ".seed-") || strings.HasPrefix(d.Name(), ".dl-") ||
+			strings.HasPrefix(d.Name(), ".resolution-") || strings.HasPrefix(d.Name(), ".stage-") ||
+			d.Name() == ".tree.lock" {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -171,6 +179,9 @@ func ExportSeed(ctx context.Context, archivePath string) error {
 		if len(parts) >= 3 {
 			version = parts[1]
 		}
+		if match != nil && !match(name, version) {
+			return nil
+		}
 		if isLink {
 			target, err := exportLinkTarget(file, rel)
 			if err != nil {
@@ -192,8 +203,196 @@ func ExportSeed(ctx context.Context, archivePath string) error {
 	if err != nil {
 		return err
 	}
+	return writeSeedArchive(ctx, root, target, manifest)
+}
+
+// BuildTreeSeedArchive packages srcDir as a verified binmgr Tree seed archive at
+// archivePath under cache/<name>/<version>/<subPath>/... (plus .binmgr-tree-complete)
+// so ImportSeed restores it into CacheDir() offline.
+func BuildTreeSeedArchive(ctx context.Context, archivePath, name, version, subPath, srcDir string) error {
+	if !cacheComponent(name) || !cacheComponent(version) {
+		return fmt.Errorf("binmgr: invalid seed tool/version %q/%q", name, version)
+	}
+	subPath = strings.Trim(filepath.ToSlash(subPath), "/")
+	if subPath != "" && !safeSeedPath(subPath) {
+		return fmt.Errorf("binmgr: invalid seed subpath %q", subPath)
+	}
+	realSrc, err := filepath.EvalSymlinks(srcDir)
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(archivePath)
+	if err != nil {
+		return err
+	}
+	if target == realSrc || strings.HasPrefix(target, realSrc+string(filepath.Separator)) {
+		return fmt.Errorf("binmgr: seed output must be outside source tree")
+	}
+
+	prefix := name + "/" + version
+	treePrefix := prefix
+	if subPath != "" {
+		treePrefix = prefix + "/" + subPath
+	}
+
+	type sourceMap struct {
+		diskPath string
+		inline   []byte
+	}
+	sources := make(map[string]sourceMap)
+	manifest := seedManifest{Schema: 1, Platform: Platform()}
+
+	markerRel := prefix + "/.binmgr-tree-complete"
+	markerBytes := []byte("ok\n")
+	markerSum := sha256.Sum256(markerBytes)
+	manifest.Entries = append(manifest.Entries, seedEntry{
+		Path:    markerRel,
+		Name:    name,
+		Version: version,
+		SHA256:  hex.EncodeToString(markerSum[:]),
+		Size:    int64(len(markerBytes)),
+		Mode:    0o644,
+	})
+	sources[markerRel] = sourceMap{inline: markerBytes}
+
+	err = filepath.WalkDir(realSrc, func(file string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if file == realSrc {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		st, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(realSrc, file)
+		if err != nil {
+			return err
+		}
+		relSlash := treePrefix + "/" + filepath.ToSlash(rel)
+		if !safeSeedPath(relSlash) {
+			return fmt.Errorf("binmgr: invalid tree path %q", relSlash)
+		}
+		isLink := st.Mode()&fs.ModeSymlink != 0
+		if !st.Mode().IsRegular() && !isLink {
+			return nil
+		}
+		if isLink {
+			linkTarget, err := exportLinkTarget(file, relSlash)
+			if err != nil {
+				return err
+			}
+			if err := resolvedInside(realSrc, file); err != nil {
+				return err
+			}
+			manifest.Entries = append(manifest.Entries, seedEntry{
+				Path:    relSlash,
+				Name:    name,
+				Version: version,
+				SHA256:  linkDigest(linkTarget),
+				Size:    int64(len(linkTarget)),
+				Mode:    0o777,
+				Link:    linkTarget,
+			})
+			return nil
+		}
+		digest, err := seedDigest(file)
+		if err != nil {
+			return err
+		}
+		manifest.Entries = append(manifest.Entries, seedEntry{
+			Path:     relSlash,
+			Name:     name,
+			Version:  version,
+			SHA256:   digest,
+			Size:     st.Size(),
+			Mode:     int64(st.Mode().Perm()),
+			Modified: st.ModTime().UnixNano(),
+		})
+		sources[relSlash] = sourceMap{diskPath: file}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
 	data, err := json.Marshal(manifest)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(target), ".seed-export-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	tw := tar.NewWriter(f)
+	if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o600, Size: int64(len(data))}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(data); err != nil {
+		return err
+	}
+	for _, entry := range manifest.Entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.Link != "" {
+			if err := tw.WriteHeader(&tar.Header{Name: "cache/" + entry.Path, Typeflag: tar.TypeSymlink, Linkname: entry.Link, Mode: entry.Mode}); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: "cache/" + entry.Path, Mode: entry.Mode, Size: entry.Size}); err != nil {
+			return err
+		}
+		sm := sources[entry.Path]
+		if sm.inline != nil {
+			if _, err := tw.Write(sm.inline); err != nil {
+				return err
+			}
+			continue
+		}
+		in, err := os.Open(sm.diskPath)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		_, copyErr := io.Copy(io.MultiWriter(tw, h), in)
+		_ = in.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
+			return fmt.Errorf("binmgr: tree file changed during seed export: %s", entry.Path)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), target)
+}
+
+func writeSeedArchive(ctx context.Context, root, target string, manifest seedManifest) error {
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(filepath.Dir(target), ".seed-export-*")

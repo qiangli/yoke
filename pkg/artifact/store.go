@@ -952,6 +952,102 @@ func (s *Store) LookupLogical(ctx context.Context, name, version string) (Record
 	return s.GetRecordStatus(ctx, dgst)
 }
 
+// ListRecords returns all catalog records sorted deterministically by digest.
+func (s *Store) ListRecords(ctx context.Context) ([]RecordStatus, error) {
+	if err := s.enterOp(); err != nil {
+		return nil, err
+	}
+	defer s.exitOp()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var out []RecordStatus
+	err := s.db.View(func(tx *bolt.Tx) error {
+		rb := tx.Bucket(bucketRecords)
+		if rb == nil {
+			return nil
+		}
+		return rb.ForEach(func(_, v []byte) error {
+			var st RecordStatus
+			if err := json.Unmarshal(v, &st); err != nil {
+				return err
+			}
+			s.readersMu.Lock()
+			if ts, ok := s.lastAccess[st.Record.Digest]; ok && ts.After(st.Record.LastAccessedAt) {
+				st.Record.LastAccessedAt = ts
+			}
+			s.readersMu.Unlock()
+			out = append(out, st)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b RecordStatus) int {
+		return strings.Compare(a.Record.Digest, b.Record.Digest)
+	})
+	return out, nil
+}
+
+// putEvictedRecord records metadata for an evicted reconstructible artifact during
+// portable bundle import without requiring the evicted payload blob in CAS.
+func (s *Store) putEvictedRecord(ctx context.Context, rec CatalogRecordV1) (RecordStatus, error) {
+	if err := s.enterOp(); err != nil {
+		return RecordStatus{}, err
+	}
+	defer s.exitOp()
+	if err := ctx.Err(); err != nil {
+		return RecordStatus{}, err
+	}
+	if s.readOnly {
+		return RecordStatus{}, errors.New("artifact: store opened read-only")
+	}
+	now := s.now()
+	if rec.SchemaVersion == "" {
+		rec.SchemaVersion = CatalogRecordSchemaV1
+	}
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = now
+	}
+	if rec.LastAccessedAt.IsZero() {
+		rec.LastAccessedAt = rec.CreatedAt
+	}
+	if err := rec.Validate(); err != nil {
+		return RecordStatus{}, err
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	present, err := s.casExists(ctx, rec.Digest)
+	if err != nil {
+		return RecordStatus{}, err
+	}
+	var out RecordStatus
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		var err error
+		out, err = putRecordTx(tx, rec, present)
+		if err != nil {
+			return err
+		}
+		if !present {
+			evAt := now
+			out.EvictedAt = &evAt
+			raw, err := json.Marshal(out)
+			if err != nil {
+				return err
+			}
+			return tx.Bucket(bucketRecords).Put([]byte(out.Record.Digest), raw)
+		}
+		return nil
+	}); err != nil {
+		return RecordStatus{}, err
+	}
+	return out, nil
+}
+
 // HasBlob reports whether dgst currently exists physically in ORAS CAS.
 func (s *Store) HasBlob(ctx context.Context, dgst string) (bool, error) {
 	if err := s.enterOp(); err != nil {
@@ -1200,11 +1296,30 @@ func (s *Store) PublishModule(ctx context.Context, pub PublicationRecord) (bool,
 			idempotent = idem
 			return nil
 		}
-		// Require .info, .mod, and .zip blobs to exist in CAS before first publication commit.
+		// Require .info and .mod in CAS, and either .zip in CAS or a valid reconstructible .zip record.
+		rb := tx.Bucket(bucketRecords)
 		for _, d := range []string{pub.InfoDigest, pub.ModDigest, pub.ZipDigest} {
 			ok, err := s.cas.Exists(ctx, ocispec.Descriptor{MediaType: defaultMediaType, Digest: digest.Digest(d)})
 			if err != nil {
 				return err
+			}
+			if !ok && d == pub.ZipDigest && rb != nil {
+				if rawRec := rb.Get([]byte(d)); rawRec != nil {
+					var st RecordStatus
+					if json.Unmarshal(rawRec, &st) == nil && st.Record.Retention == RetentionReconstructible && st.Record.Recipe != nil {
+						inputsOK := true
+						for _, inD := range st.Record.Recipe.InputDigests {
+							inPresent, inErr := s.cas.Exists(ctx, ocispec.Descriptor{MediaType: defaultMediaType, Digest: digest.Digest(inD)})
+							if inErr != nil || !inPresent {
+								inputsOK = false
+								break
+							}
+						}
+						if inputsOK {
+							ok = true
+						}
+					}
+				}
 			}
 			if !ok {
 				return fmt.Errorf("artifact: publication blob %s missing from CAS: %w", d, ErrNotFound)
@@ -1331,10 +1446,32 @@ func (s *Store) PutManifest(ctx context.Context, m ManifestV1) error {
 			}
 			return fmt.Errorf("artifact: manifest generation %d already exists with digest %s", m.Generation, existingDigest)
 		}
+		genRootTag := fmt.Sprintf("manifest:gen-%d", m.Generation)
+		rb := tx.Bucket(bucketRecords)
+		pinRecordRoot := func(dgst string) {
+			if rb == nil {
+				return
+			}
+			raw := rb.Get([]byte(dgst))
+			if raw == nil {
+				return
+			}
+			var st RecordStatus
+			if json.Unmarshal(raw, &st) != nil {
+				return
+			}
+			st.Record.Retention = RetentionProtectedRoot
+			st.Record.RetentionRoots = unionSortedStrings(st.Record.RetentionRoots, []string{genRootTag})
+			if b, err := json.Marshal(st); err == nil {
+				_ = rb.Put([]byte(dgst), b)
+			}
+		}
 		for _, r := range m.Roots {
 			_ = deleteJournalTx(tx, JournalOpPut, r.Digest)
+			pinRecordRoot(r.Digest)
 			for _, dep := range r.Deps {
 				_ = deleteJournalTx(tx, JournalOpPut, dep)
+				pinRecordRoot(dep)
 			}
 		}
 		return mb.Put(key, canonical)

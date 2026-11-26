@@ -388,6 +388,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/records", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 		ver := r.URL.Query().Get("version")
+		if name == "" && ver == "" {
+			recs, err := s.store.ListRecords(r.Context())
+			if err != nil {
+				writeAPIError(w, err)
+				return
+			}
+			if recs == nil {
+				recs = []RecordStatus{}
+			}
+			writeJSON(w, http.StatusOK, recs)
+			return
+		}
 		if name == "" || ver == "" {
 			writeJSON(w, http.StatusBadRequest, apiError{Code: "bad_request", Message: "name and version query params required"})
 			return
@@ -748,6 +760,12 @@ func (c *Client) LookupLogical(ctx context.Context, name, version string) (Recor
 	q := url.Values{"name": {name}, "version": {version}}
 	_, err := c.doJSON(ctx, http.MethodGet, "/v1/records?"+q.Encode(), nil, &st)
 	return st, err
+}
+
+func (c *Client) ListRecords(ctx context.Context) ([]RecordStatus, error) {
+	var recs []RecordStatus
+	_, err := c.doJSON(ctx, http.MethodGet, "/v1/records", nil, &recs)
+	return recs, err
 }
 
 func (c *Client) OpenBlob(ctx context.Context, dgst string) (io.ReadCloser, error) {

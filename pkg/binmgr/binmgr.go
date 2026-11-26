@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/qiangli/yoke/pkg/artifact"
 	"github.com/ulikunitz/xz"
 )
 
@@ -459,7 +460,7 @@ func ensure(ctx context.Context, t Tool) (string, error) {
 
 func download(ctx context.Context, url string, w io.Writer) (sha, sha512sum, md5sum string, err error) {
 	if Offline() {
-		return "", "", "", fmt.Errorf("binmgr: BASHY_OFFLINE=1 refuses download %s", url)
+		return "", "", "", fmt.Errorf("%w: binmgr: BASHY_OFFLINE=1 refuses download %s", artifact.ErrSealedNetworkDenied, url)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
