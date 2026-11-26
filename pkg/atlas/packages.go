@@ -431,8 +431,7 @@ var packages = map[string]Package{
 	"reduce": {Role: RoleUnwired, Note: "command-output reduction primitive and content-addressed spill store. " +
 		"NewOutCmd is not mounted and no execution seam imports the package yet; the Sprint 123 chat and shell " +
 		"seam stories own that wiring. Reclassify when the first front door lands."},
-	"artifact": {Role: RoleUnwired, Note: "Sprint 654 protected offline artifact contracts, ORAS CAS + bbolt catalog, " +
-		"lease/GC authority, and tier-floor placement; wired into mod proxy and self bootstrap/seal/verify/export/import in S1-S3."},
+	"artifact": supPkg("protected offline artifact store (ORAS CAS + bbolt catalog), single-writer loopback service, lease/GC authority, and artifact prune noun; surfaced through prune, mod proxy, and self"),
 }
 
 func init() {

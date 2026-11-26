@@ -37,6 +37,12 @@ var (
 	ErrImmutablePublicationConflict = errors.New("artifact: module version already published with different content")
 	ErrMissingRecoveryInputs        = errors.New("artifact: cannot reconstruct evicted payload from retained inputs")
 	ErrProtectedArtifact            = errors.New("artifact: protected artifact or active lease forbids eviction")
+	ErrNotFound                     = errors.New("artifact: not found")
+	ErrPayloadEvicted               = errors.New("artifact: payload evicted from CAS; regenerate from recipe")
+	ErrCorruptPayload               = errors.New("artifact: payload missing or sha256 mismatch")
+	ErrStoreBusy                    = errors.New("artifact: catalog database locked by another writer")
+	ErrNonLoopbackBind              = errors.New("artifact: non-loopback bind requires explicit mesh configuration")
+	ErrSharingViolation             = errors.New("artifact: blob has open reader or file sharing lock")
 )
 
 var sha256DigestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -779,7 +785,7 @@ type UpstreamComponent struct {
 // ApprovedReuseComponents returns the locked permissive reuse boundary table.
 func ApprovedReuseComponents() []UpstreamComponent {
 	return []UpstreamComponent{
-		{Concern: "cas-blobs", Module: "oras.land/oras-go/v2", License: "Apache-2.0", Mechanism: "import"},
+		{Concern: "cas-blobs", Module: "oras.land/oras-go/v2", License: "Apache-2.0", Mechanism: "import (v2.7.0)"},
 		{Concern: "catalog-db", Module: "go.etcd.io/bbolt", License: "MIT", Mechanism: "import (existing v1.5.0)"},
 		{Concern: "go-proxy", Module: "github.com/goproxy/goproxy", License: "MIT", Mechanism: "import"},
 		{Concern: "go-proxy-singleflight", Module: "github.com/gomods/athens", License: "MIT", Mechanism: "narrow attributed copy/import"},

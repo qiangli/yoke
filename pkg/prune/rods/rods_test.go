@@ -12,13 +12,14 @@ import (
 func TestOverviewListsEveryRegisteredNounInTempHome(t *testing.T) {
 	home := t.TempDir()
 	for key, val := range map[string]string{
-		"HOME":             home,
-		"BASHY_HOME":       filepath.Join(home, ".bashy"),
-		"BASHY_FLEET_DIR":  filepath.Join(home, "fleet"),
-		"BASHY_BIN_CACHE":  filepath.Join(home, "cache"),
-		"BASHY_COORD_DIR":  filepath.Join(home, "coord"),
-		"BASHY_SPRINT_DIR": filepath.Join(home, "sprint"),
-		"BASHY_ROOM_DIR":   filepath.Join(home, "room"),
+		"HOME":                home,
+		"BASHY_HOME":          filepath.Join(home, ".bashy"),
+		"BASHY_ARTIFACTS_DIR": filepath.Join(home, "artifacts"),
+		"BASHY_FLEET_DIR":     filepath.Join(home, "fleet"),
+		"BASHY_BIN_CACHE":     filepath.Join(home, "cache"),
+		"BASHY_COORD_DIR":     filepath.Join(home, "coord"),
+		"BASHY_SPRINT_DIR":    filepath.Join(home, "sprint"),
+		"BASHY_ROOM_DIR":      filepath.Join(home, "room"),
 	} {
 		t.Setenv(key, val)
 	}
@@ -32,7 +33,7 @@ func TestOverviewListsEveryRegisteredNounInTempHome(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(old) })
 	rows := Registry().Overview(context.Background())
-	want := []string{"agent", "claim", "host", "satellite", "self", "sprint", "src", "weave"}
+	want := []string{"agent", "artifact", "claim", "host", "satellite", "self", "sprint", "src", "weave"}
 	if len(rows) != len(want) {
 		t.Fatalf("overview rows = %+v", rows)
 	}
@@ -50,5 +51,8 @@ func TestOverviewListsEveryRegisteredNounInTempHome(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "room")); !os.IsNotExist(err) {
 		t.Fatal("dry-run created room state")
+	}
+	if _, err := os.Stat(filepath.Join(home, "artifacts")); !os.IsNotExist(err) {
+		t.Fatal("dry-run created artifacts state")
 	}
 }

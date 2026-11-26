@@ -3,6 +3,7 @@
 package rods
 
 import (
+	"github.com/qiangli/yoke/pkg/artifact"
 	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/policy/coord"
@@ -15,7 +16,7 @@ import (
 func Registry() *prune.Registry {
 	r := prune.NewRegistry()
 	for _, n := range []prune.Noun{
-		weave.AgentPruner{}, coord.ClaimPruner{}, binmgr.SelfPruner{},
+		artifact.Pruner{}, weave.AgentPruner{}, coord.ClaimPruner{}, binmgr.SelfPruner{},
 		src.Pruner{}, weave.SprintPruner{}, weave.WeavePruner{},
 		&fleet.HostPruner{}, &fleet.SatellitePruner{},
 	} {
@@ -27,6 +28,8 @@ func Registry() *prune.Registry {
 }
 
 func NewOverviewCommand() *cobra.Command { return prune.NewOverviewCommand(Registry()) }
+
+func NewArtifactPruneCommand() *cobra.Command { return prune.NewNounCommand(artifact.Pruner{}) }
 
 func NewAgentPruneCommand() *cobra.Command { return prune.NewNounCommand(weave.AgentPruner{}) }
 
