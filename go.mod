@@ -432,7 +432,7 @@ require (
 	github.com/pkg/sftp v1.13.10
 	github.com/qiangli/bash v0.0.0-20261122134408-5c52281f7136
 	github.com/qiangli/bonsai v0.0.0-20261123172747-32d78887eb27
-	github.com/qiangli/coreutils v0.0.0-20261124121700-f9833f726fac
+	github.com/qiangli/coreutils v0.0.0-20261126020849-bef90e271000
 	github.com/qiangli/gfy v0.0.0-20261121101804-aab4f6fad5be
 	github.com/qiangli/yoke/pkg/llmgw v0.0.0-00010101000000-000000000000
 	github.com/qiangli/yoke/pkg/oci v0.0.0-00010101000000-000000000000

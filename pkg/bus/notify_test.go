@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -390,5 +391,97 @@ func TestNotifyMailboxSinkRelayRefusalAndLimitsPostNothing(t *testing.T) {
 	}
 	if len(*sent) != 0 || timelineLen(t) != 0 {
 		t.Fatalf("refusals posted: relay %d, timeline %d", len(*sent), timelineLen(t))
+	}
+}
+
+func clearNotifyHintEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("POSIXLY_CORRECT", "")
+	t.Setenv("BASHY_HINTS", "")
+	t.Setenv("BASHY_TELEMETRY_QUIET", "")
+}
+
+func TestNotifyScheduledEmitsEngineOffHintAndStoresJob(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	clearNotifyHintEnv(t)
+	state := t.TempDir() + "/schedule.json"
+	t.Setenv("BASHY_SCHEDULE_STATE", state)
+
+	out, errOut, err := runNotifyCommand(t, "--as", "scheduler", "--in", "5m", "alice", "check the gate")
+	if err != nil {
+		t.Fatalf("notify --in failed: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want empty", out)
+	}
+	if !strings.Contains(errOut, "scheduled: alice at ") {
+		t.Fatalf("stderr = %q, want scheduled receipt", errOut)
+	}
+	if !strings.Contains(errOut, schedule.EngineOffHint) {
+		t.Fatalf("stderr = %q, want engine-off hint %q", errOut, schedule.EngineOffHint)
+	}
+	jobs, err := schedule.NewStore(state).LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("stored jobs = %+v, err=%v, want 1 job", jobs, err)
+	}
+}
+
+func TestNotifyScheduledHintSuppressedByBashyHintsOff(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	clearNotifyHintEnv(t)
+	t.Setenv("BASHY_HINTS", "off")
+	state := t.TempDir() + "/schedule.json"
+	t.Setenv("BASHY_SCHEDULE_STATE", state)
+
+	out, errOut, err := runNotifyCommand(t, "--as", "scheduler", "--in", "5m", "alice", "check the gate")
+	if err != nil {
+		t.Fatalf("notify --in failed: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want empty", out)
+	}
+	if !strings.Contains(errOut, "scheduled: alice at ") {
+		t.Fatalf("stderr = %q, want scheduled receipt", errOut)
+	}
+	if strings.Contains(errOut, schedule.EngineOffHint) || strings.Contains(errOut, "BASHY_HINTS=off") {
+		t.Fatalf("stderr = %q, want no hint under BASHY_HINTS=off", errOut)
+	}
+	jobs, err := schedule.NewStore(state).LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("stored jobs = %+v, err=%v, want 1 job", jobs, err)
+	}
+}
+
+func TestNotifyScheduledJSONStdoutIsExactReceiptAndHintOnStderr(t *testing.T) {
+	isolate(t)
+	withNotifyTargets(t, "alice")
+	clearNotifyHintEnv(t)
+	state := t.TempDir() + "/schedule.json"
+	t.Setenv("BASHY_SCHEDULE_STATE", state)
+
+	out, errOut, err := runNotifyCommand(t, "--as", "scheduler", "--json", "--in", "5m", "alice", "check the gate")
+	if err != nil {
+		t.Fatalf("notify --json --in failed: %v", err)
+	}
+	var got NotifyReceipt
+	dec := json.NewDecoder(strings.NewReader(out))
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("stdout not valid receipt JSON: %v\n%s", err, out)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		t.Fatalf("stdout contained trailing data after receipt JSON: %v (%q)", err, out)
+	}
+	if got.SchemaVersion != SchemaVersion || got.State != "scheduled" || got.Principal != "scheduler" || got.To != "alice" || got.Subject != "check the gate" || got.JobID == "" || got.When == "" {
+		t.Fatalf("receipt = %+v", got)
+	}
+	if !strings.Contains(errOut, schedule.EngineOffHint) {
+		t.Fatalf("stderr = %q, want engine-off hint %q", errOut, schedule.EngineOffHint)
+	}
+	jobs, err := schedule.NewStore(state).LoadJobs()
+	if err != nil || len(jobs) != 1 || jobs[0].ID != got.JobID {
+		t.Fatalf("stored jobs = %+v, err=%v, want 1 job with id %q", jobs, err, got.JobID)
 	}
 }

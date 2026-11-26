@@ -233,9 +233,13 @@ deliberately absent.`,
 				}
 				receipt := NotifyReceipt{SchemaVersion: SchemaVersion, State: "scheduled", Principal: principal, To: RoleLabelFor(addr), Subject: subject, JobID: jobID, When: when.Format(time.RFC3339)}
 				if jsonOut {
-					return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
+					if err := json.NewEncoder(cmd.OutOrStdout()).Encode(receipt); err != nil {
+						return err
+					}
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s at %s\n", receipt.State, receipt.To, receipt.When)
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s at %s\n", receipt.State, receipt.To, receipt.When)
+				schedule.HintIfEngineOff(cmd.ErrOrStderr(), "notify")
 				return nil
 			}
 
