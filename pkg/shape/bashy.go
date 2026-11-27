@@ -67,6 +67,9 @@ func (s Service) bashyStatus(ctx context.Context, c Caller) (Status, error) {
 // bashyRecord stores a request with its reproduction, expected behavior and
 // evidence as an ordinary candidate record, without a workspace or revision.
 func (s Service) bashyRecord(ctx context.Context, caller Caller, w Wish) (Candidate, error) {
+	if e := s.admitAuto(w.Source); e != nil {
+		return Candidate{}, e
+	}
 	l, e := s.lock(caller)
 	if e != nil {
 		return Candidate{}, e
@@ -95,5 +98,9 @@ func (s Service) bashyRecord(ctx context.Context, caller Caller, w Wish) (Candid
 	if e = os.MkdirAll(dir, 0700); e != nil {
 		return c, e
 	}
-	return c, SaveCandidate(dir, c)
+	if e = SaveCandidate(dir, c); e != nil {
+		return c, e
+	}
+	s.logAuto(c.Source, "trigger", "report", c.ID)
+	return c, nil
 }

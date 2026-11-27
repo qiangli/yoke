@@ -488,6 +488,9 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if s.isBashy() {
 		return s.bashyRecord(ctx, caller, w)
 	}
+	if e := s.admitAuto(w.Source); e != nil {
+		return Candidate{}, e
+	}
 	if s.Kind() == "web" && s.Owner() != "" {
 		if isStrangerCaller(caller) {
 			return Candidate{}, fmt.Errorf("%w: caller %s is not authorized to shape %s", ErrUnauthorized, caller.Principal, s.App.Name)
@@ -560,7 +563,11 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if e = os.MkdirAll(dir, 0700); e != nil {
 		return c, e
 	}
-	return c, SaveCandidate(dir, c)
+	if e = SaveCandidate(dir, c); e != nil {
+		return c, e
+	}
+	s.logAuto(c.Source, "trigger", "wish", c.ID)
+	return c, nil
 }
 
 // FileRequest records an out-of-scope or protected wish as a request on the
@@ -572,6 +579,9 @@ func (s Service) FileRequest(ctx context.Context, caller Caller, w Wish) (Candid
 	}
 	if s.Owner() != "" && isStrangerCaller(caller) {
 		return Candidate{}, fmt.Errorf("%w: caller %s is not authorized to file a request on %s", ErrUnauthorized, caller.Principal, s.App.Name)
+	}
+	if e := s.admitAuto(w.Source); e != nil {
+		return Candidate{}, e
 	}
 	l, e := s.lock(caller)
 	if e != nil {
@@ -623,7 +633,11 @@ func (s Service) FileRequest(ctx context.Context, caller Caller, w Wish) (Candid
 	if e = os.MkdirAll(dir, 0700); e != nil {
 		return c, e
 	}
-	return c, SaveCandidate(dir, c)
+	if e = SaveCandidate(dir, c); e != nil {
+		return c, e
+	}
+	s.logAuto(c.Source, "trigger", "request", c.ID)
+	return c, nil
 }
 func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runErr error) (Candidate, error) {
 	l, e := s.lock(caller)
@@ -661,6 +675,9 @@ func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runEr
 	}
 	if e = SaveCandidate(d, c); e != nil {
 		return c, e
+	}
+	if runErr != nil {
+		s.logAuto(c.Source, "verdict", "failed", joinDetail(c.ID, runErr.Error()))
 	}
 	return c, runErr
 }
@@ -747,6 +764,7 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
 	if e := TouchesProtected(filepath.Join(dir, "work"), c.BaseRev, c.Rev, s.App.Protected); e != nil {
 		c.Verdict = &Verdict{Pass: false, Detail: e.Error()}
 		c.Status = Ready
+		s.logAutoVerdict(*c)
 		if s.Options.Track != nil {
 			if te := s.Options.Track(ctx, c); te != nil {
 				return te
@@ -762,6 +780,7 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
 		return e
 	}
 	c.Verdict = &v
+	s.logAutoVerdict(*c)
 	if v.Artifact != "" {
 		c.Artifact = v.Artifact
 		c.ArtifactPath = v.ArtifactPath
@@ -801,6 +820,18 @@ func (s Service) Verify(ctx context.Context, caller Caller, id string) (Candidat
 	return c, nil
 }
 func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candidate, error) {
+	c, e := s.approve(ctx, caller, id)
+	// An unattended candidate's activation is on the decision log, so the
+	// owner can see what was switched and undo it.
+	switch {
+	case c.Status == Approved:
+		s.logAuto(c.Source, "activation", "activated", joinDetail(c.ID, c.Rev))
+	case e != nil:
+		s.logAuto(c.Source, "activation", "failed", joinDetail(c.ID, e.Error()))
+	}
+	return c, e
+}
+func (s Service) approve(ctx context.Context, caller Caller, id string) (Candidate, error) {
 	if s.isBashy() {
 		return Candidate{}, ErrBashyActivation
 	}
