@@ -160,6 +160,16 @@
     "description": "list element"
   },
   {
+    "path": "cli.launch.auth.login_session",
+    "type": "[]string",
+    "description": "GOOS values where the tool login needs the user login session (keychain)"
+  },
+  {
+    "path": "cli.launch.auth.login_session.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
     "path": "cli.launch.auth.ok_match",
     "type": "[]string",
     "description": "regexes that must all match the check output for a verified login"
