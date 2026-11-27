@@ -365,6 +365,15 @@ func Bound(l Ledger, max int) Ledger {
 					if a.Agent != "" {
 						p.Summary += " by " + a.Agent
 					}
+					// What is in effect keeps its reasons: the next agent
+					// most needs why the live change was made and what it
+					// was expected to do before it touches that code.
+					if a.Why != "" {
+						p.Summary += "; why: " + oneLine(a.Why)
+					}
+					if a.Expect != "" {
+						p.Summary += "; expect: " + oneLine(a.Expect)
+					}
 				}
 			}
 			p.Attempts = nil
@@ -392,6 +401,18 @@ func Bound(l Ledger, max int) Ledger {
 	}
 	return l
 }
+
+// oneLine joins a multi-line reason for a one-line summary, at most
+// summaryReason runes.
+func oneLine(s string) string {
+	r := []rune(strings.Join(strings.Fields(s), " "))
+	if len(r) > summaryReason {
+		return string(r[:summaryReason-1]) + "…"
+	}
+	return string(r)
+}
+
+const summaryReason = 160
 
 func shortRev(rev string) string {
 	if len(rev) > 12 {

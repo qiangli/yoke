@@ -246,7 +246,8 @@ func TestLedgerBound(t *testing.T) {
 		if got.Problems[0].Key != "cand:0059" || !got.Problems[0].Open || len(got.Problems[0].Attempts) != 1 {
 			t.Errorf("max %d: newest open problem is not shown in full: %+v", max, got.Problems[0])
 		}
-		if closed := got.Problems[1]; closed.Open || len(closed.Attempts) != 0 || closed.Summary != "1 attempt(s); active at rev0058 by stub" {
+		if closed := got.Problems[1]; closed.Open || len(closed.Attempts) != 0 || !strings.HasPrefix(closed.Summary, "1 attempt(s); active at rev0058 by stub; why: why why") ||
+			!strings.HasSuffix(closed.Summary, "…") || len([]rune(closed.Summary)) > 60+summaryReason {
 			t.Errorf("max %d: closed problem = %+v", max, closed)
 		}
 		if !strings.Contains(got.Text(), "truncated: ") {
