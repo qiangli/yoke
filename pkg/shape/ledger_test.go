@@ -341,3 +341,31 @@ func TestServiceLedgerReadsTheDecisionLog(t *testing.T) {
 		t.Errorf("per-person: %v %+v", err, own)
 	}
 }
+
+// Two attempts in flight on one problem whose lines carry no id in their
+// detail (console draft and repair lines): the candidate field keeps them
+// apart instead of folding the second's verdict onto the newest attempt.
+func TestLedgerFoldKeepsConcurrentAttemptsApartByCandidate(t *testing.T) {
+	line := func(d state.AutoDecision) state.AutoDecision {
+		d.App, d.Source, d.Problem, d.Line = "site", "human", "todo:T-7", ledgerOwner
+		return d
+	}
+	lines := []state.AutoDecision{
+		line(state.AutoDecision{Event: "trigger", Result: "wish", Candidate: "aaaa0000aaaa0000", Detail: "make it blue"}),
+		line(state.AutoDecision{Event: "trigger", Result: "wish", Candidate: "bbbb0000bbbb0000", Detail: "make it green"}),
+		line(state.AutoDecision{Event: "verdict", Result: "pass", Candidate: "aaaa0000aaaa0000", Rev: "reva", Detail: "checks passed"}),
+		line(state.AutoDecision{Event: "verdict", Result: "fail", Candidate: "bbbb0000bbbb0000", Rev: "revb", Detail: "build failed"}),
+		line(state.AutoDecision{Event: "activation", Result: "activated", Candidate: "aaaa0000aaaa0000", Rev: "reva", Detail: "reva"}),
+	}
+	p := ledgerProblemByKey(t, Fold(lines, "site", ""), "todo:T-7")
+	if len(p.Attempts) != 2 {
+		t.Fatalf("attempts = %+v", p.Attempts)
+	}
+	got := map[string]string{}
+	for _, a := range p.Attempts {
+		got[a.Candidate] = a.Standing + " " + a.Request
+	}
+	if got["aaaa0000aaaa0000"] != "active make it blue" || got["bbbb0000bbbb0000"] != "failed make it green" {
+		t.Fatalf("standings = %v", got)
+	}
+}

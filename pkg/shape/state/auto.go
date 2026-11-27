@@ -23,6 +23,7 @@ const (
 
 // AutoDecision is one line of the decision log.
 type AutoDecision struct {
+	Candidate string    `json:"candidate,omitempty"` // the attempt's candidate id, when it has one
 	Rev       string    `json:"rev,omitempty"`
 	Base      string    `json:"base,omitempty"`
 	Agent     string    `json:"agent,omitempty"`

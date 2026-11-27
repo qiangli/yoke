@@ -208,6 +208,10 @@ func Fold(lines []state.AutoDecision, app, base string) Ledger {
 		}
 		token, rest, _ := strings.Cut(d.Detail, " ")
 		cand, hasCand := strings.CutPrefix(key, "cand:")
+		if d.Candidate != "" {
+			// The line names its attempt: no guessing from detail or order.
+			cand, hasCand = d.Candidate, true
+		}
 		var a *ledgerAttempt
 		if d.Event != "trigger" {
 			for _, x := range p.attempts {
@@ -215,7 +219,7 @@ func Fold(lines []state.AutoDecision, app, base string) Ledger {
 					a = x
 				}
 			}
-			if a == nil && len(p.attempts) > 0 {
+			if a == nil && len(p.attempts) > 0 && d.Candidate == "" {
 				a = p.attempts[len(p.attempts)-1]
 			}
 			if a != nil && d.Event == "attempt" && a.tried {

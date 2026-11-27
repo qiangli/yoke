@@ -51,7 +51,7 @@ func (s Service) decision(c Candidate, event, result, detail string) state.AutoD
 	}
 	d := state.AutoDecision{
 		Event: event, Result: result, Detail: detail,
-		App: s.App.Name, Source: source, Ref: c.Source.Ref, Problem: c.problemKey(),
+		App: s.App.Name, Source: source, Ref: c.Source.Ref, Problem: c.problemKey(), Candidate: c.ID,
 		Base: c.BaseRev, Rev: c.Rev, Agent: c.Agent, Principal: c.Principal,
 		Why: c.Why, Expect: c.Expect,
 	}
