@@ -191,6 +191,10 @@ cli:
       ok_match: ['"loggedIn":\s*true', '"authMethod":\s*"oauth_token"', '"subscriptionType":\s*"[^"]+"']
       lane_args: [--setting-sources, "", --settings, '{"forceLoginMethod":"claudeai","apiKeyHelper":""}']
       token_ref: claude-code-oauth-token
+    auth_hint: >-
+      If signed out, run `claude` interactively and complete the `/login`
+      browser sign-in once (or store a `claude setup-token` OAuth token in
+      the vault); never an API key.
     config_dir_env: CLAUDE_CONFIG_DIR
     supports_say: true
     supports_graceful_quit: true

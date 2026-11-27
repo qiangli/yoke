@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 )
 
@@ -34,6 +35,18 @@ func wrapToolError(err error, stderr string) error {
 		return err
 	}
 	return &ToolError{err: err, Failure: failure}
+}
+
+// wrapWorkerError classifies one worker failure: a vendor-login failure
+// for a tool declaring a subscription auth check becomes a NeedsLoginError
+// (never the transient/auth fail-fast); anything else keeps the shared
+// upstream classification wrapToolError applies.
+func wrapWorkerError(err error, tool fleet.Tool, agent string, output string) error {
+	failure, classified := classifyToolStderr(output)
+	if nl, ok := classifyNeedsLogin(tool, agent, output, failure, classified); ok {
+		return &NeedsLoginError{NeedsLogin: nl, Err: err}
+	}
+	return wrapToolError(err, output)
 }
 
 // toolFailure extracts a carried tool classification from a worker error.

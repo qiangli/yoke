@@ -124,6 +124,16 @@ func TestCLIHelper(t *testing.T) {
 		// an api-kind agent with an invalid key (Sprint 455 F10).
 		fmt.Fprintln(os.Stderr, `ERROR provider request failed: {"error":{"message":"Incorrect API key provided: sk-fake. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}} (status 401)`)
 		os.Exit(1)
+	case "login-flip":
+		// Signed out until the flip file says "in" (the operator's
+		// one-time vendor sign-in, simulated).
+		if b, _ := os.ReadFile(os.Getenv("CLIGW_FLIP_FILE")); strings.TrimSpace(string(b)) == "in" {
+			fmt.Println(`{"type":"item.completed","item":{"type":"agent_message","text":"hello from cli"}}`)
+			fmt.Println(`{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":3}}`)
+			return
+		}
+		fmt.Fprintln(os.Stderr, "Not logged in · Please run /login")
+		os.Exit(1)
 	case "backend-cancel":
 		if path := os.Getenv("CLIGW_CANCEL_STARTED"); path != "" {
 			_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600)

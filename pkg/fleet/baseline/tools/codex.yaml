@@ -175,6 +175,9 @@ cli:
       check_exec: login status
       ok_match: ['\ALogged in using ChatGPT\s*\z']
       lane_args: [-c, 'forced_login_method="chatgpt"', -c, 'model_provider="openai"']
+    auth_hint: >-
+      Run `codex login --device-auth` once under the worker environment;
+      the sign-in is a ChatGPT subscription login, never an API key.
     config_dir_env: CODEX_HOME
     # MEASURED 2026-09-24 (codex-cli 0.156.1): a directory codex has not seen
     # opens a "Trust this folder? … 1. Trust and continue  2. Quit" dialog, and

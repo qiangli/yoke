@@ -398,7 +398,7 @@ func (s *StickySession) runError(waitErr, scanErr error) error {
 		err = errors.New("CLI reported an error outcome")
 	}
 	err = fmt.Errorf("cligw: %s: %w", s.agent, err)
-	return wrapToolError(err, s.stderrTail())
+	return wrapWorkerError(err, s.tool, s.agent, s.stderrTail())
 }
 
 func (s *StickySession) stderrTail() string {

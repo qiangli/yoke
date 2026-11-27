@@ -161,6 +161,12 @@ type ServerOptions struct {
 	// winning per key. Nil keeps the policy map.
 	MaxInFlightByPrincipal map[string]int
 
+	// OnNeedsLogin is called once per needs-login episode (the transition
+	// into the state, not per failed request) so the host can notify the
+	// owner — via the owner's inbox — of the one-time sign-in step. Nil
+	// only logs and records the state (see Server.NeedsLogin and Health).
+	OnNeedsLogin func(NeedsLogin)
+
 	// Logger receives routing refusal diagnostics. Nil uses slog.Default().
 	Logger *slog.Logger
 
@@ -226,6 +232,56 @@ type Server struct {
 	stickyMu    sync.Mutex
 	stickyCount map[string]int
 	stickySet   map[*StickySession]struct{}
+
+	// loginMu guards the needs-login states: bindings whose vendor login
+	// is missing or expired. A needs-login binding is never breaker-tripped
+	// and clears on its next success, without a restart.
+	loginMu      sync.Mutex
+	needsLogin   map[string]NeedsLogin
+	onNeedsLogin func(NeedsLogin)
+}
+
+// NeedsLogin reports agent's recorded needs-login state, if any.
+func (s *Server) NeedsLogin(agent string) (NeedsLogin, bool) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	nl, ok := s.needsLogin[agent]
+	return nl, ok
+}
+
+// markNeedsLogin records a needs-login episode. It returns true only on
+// the transition into the state — the caller notifies the owner then, and
+// only then, so repeated failures notify once.
+func (s *Server) markNeedsLogin(nl NeedsLogin) bool {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	if _, ok := s.needsLogin[nl.Agent]; ok {
+		return false
+	}
+	if nl.Since.IsZero() {
+		nl.Since = time.Now()
+	}
+	s.needsLogin[nl.Agent] = nl
+	return true
+}
+
+// noteNeedsLogin records the state and, on the transition only, notifies.
+func (s *Server) noteNeedsLogin(nl NeedsLogin) {
+	if !s.markNeedsLogin(nl) {
+		return
+	}
+	s.log.Warn("cligw: binding needs-login", "agent", nl.Agent, "tool", nl.Tool, "login_command", nl.LoginCommand)
+	if s.onNeedsLogin != nil {
+		s.onNeedsLogin(nl)
+	}
+}
+
+// clearNeedsLogin drops the state after a success: the binding serves
+// again after login, with no restart.
+func (s *Server) clearNeedsLogin(agent string) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	delete(s.needsLogin, agent)
 }
 
 // NewServer wires the fleet catalog, the router, the autoscaler and the llmgw
@@ -322,6 +378,8 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		backends:    map[string]*AgentBackend{},
 		stickyCount: map[string]int{},
 		stickySet:   map[*StickySession]struct{}{},
+		needsLogin:   map[string]NeedsLogin{},
+		onNeedsLogin: opts.OnNeedsLogin,
 	}
 	s.router = NewRouter(catalog, policy,
 		WithPoolState(s), WithQuotaSource(quota), WithBreaker(breaker), WithRecorder(recorder))
@@ -749,6 +807,12 @@ func (s *Server) route(next http.Handler) http.Handler {
 		// first. Trip the breaker instead and the next decision goes
 		// somewhere that works.
 		if err := s.checkSpawnable(decision.Agent); err != nil {
+			// A needs-login binding is a human sign-in step, not a dead
+			// pool: name the step and never trip the breaker for it.
+			if nl, ok := NeedsLoginFailure(err); ok {
+				writeNeedsLogin(w, nl)
+				return
+			}
 			s.breaker.Trip(decision.Agent, 0)
 			w.Header().Set("Retry-After", "5")
 			writeJSON(w, http.StatusServiceUnavailable, errorEnvelope(err.Error()))
@@ -780,8 +844,15 @@ func (s *Server) route(next http.Handler) http.Handler {
 		// its place in the NEXT routing decision, which is the only way
 		// re-selection happens here.
 		s.scaler.Observe(decision.Agent, started, time.Since(started))
+		if recorder.status > 0 && recorder.status < http.StatusBadRequest {
+			// Served again (e.g. after the operator signed in): the
+			// needs-login episode is over, with no restart.
+			s.clearNeedsLogin(decision.Agent)
+		}
 		if recorder.status >= http.StatusInternalServerError {
-			s.breaker.Trip(decision.Agent, 0)
+			if _, needsLogin := s.NeedsLogin(decision.Agent); !needsLogin {
+				s.breaker.Trip(decision.Agent, 0)
+			}
 		}
 		// Remember which band a classified prompt actually ran at, so a
 		// similar prompt skips the heuristic next time. Only on success:
@@ -982,6 +1053,7 @@ func (s *Server) Backend(agent string) (*AgentBackend, error) {
 	}
 	pool := NewPool(s.ctx, agent, s.poolConfigFor(row))
 	backend := NewAgentBackend(agent, row.Model, pool)
+	backend.onNeedsLogin = s.noteNeedsLogin
 	s.pools[agent] = pool
 	s.poolRows[agent] = row
 	s.backends[agent] = backend
@@ -1063,10 +1135,32 @@ func (s *Server) checkSpawnable(agent string) error {
 	}
 	stats := pool.Stats()
 	if stats.Spawned == 0 && stats.Failed > 0 {
+		// A pool that never spawned because the vendor login is missing
+		// answers needs-login, not a generic spawn failure — and the
+		// caller must not trip the breaker for it. A spawnable pool lets
+		// the request through so a completed sign-in serves again.
+		if nl, ok := s.NeedsLogin(agent); ok {
+			return &NeedsLoginError{NeedsLogin: nl}
+		}
 		return fmt.Errorf("cligw: agent %q has produced no worker in %d spawn attempts (see `bashy llm pools`)",
 			agent, stats.Failed)
 	}
 	return nil
+}
+
+// writeNeedsLogin answers a needs-login refusal in the gateway's classified
+// error shape: type needs_login, retryable false, the sign-in step named.
+func writeNeedsLogin(w http.ResponseWriter, nl NeedsLogin) {
+	failure := nl.Failure()
+	writeJSON(w, failure.Status, map[string]any{"error": map[string]any{
+		"type":      string(failure.Class),
+		"message":   failure.Hint,
+		"provider":  nl.Tool,
+		"model":     nl.Agent,
+		"retryable": false,
+		"hint":      failure.Hint,
+		"code":      failure.Status,
+	}})
 }
 
 // poolConfigFor applies the vendor's concurrent-session cap from the policy:
@@ -1445,6 +1539,10 @@ type AgentHealth struct {
 	Warm     string    `json:"warm,omitempty"`
 	Cooling  bool      `json:"cooling"`
 	Stats    PoolStats `json:"stats"`
+	// NeedsLogin marks a binding awaiting the vendor's one-time sign-in;
+	// LoginCommand names that step. It is not a breaker cooldown.
+	NeedsLogin   bool   `json:"needs_login,omitempty"`
+	LoginCommand string `json:"login_command,omitempty"`
 }
 
 // PolicyHealth is the routing posture in force, so /health answers "why did
@@ -1495,6 +1593,10 @@ func (s *Server) Health() HealthReport {
 	available := 0
 	for _, name := range order {
 		entry := AgentHealth{Agent: name, Cooling: s.breaker.InCooldown(name)}
+		if nl, ok := s.NeedsLogin(name); ok {
+			entry.NeedsLogin = true
+			entry.LoginCommand = nl.LoginCommand
+		}
 		if row, ok := s.agent(name); ok {
 			entry.Model, entry.Tool, entry.Provider = row.Model, row.Tool, row.Provider
 			entry.Band, entry.Warm = row.Band, row.Warm

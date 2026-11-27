@@ -387,7 +387,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 	}
 	if failed {
 		result.Outcome = OutcomeError
-		return result, w.runError(waitErr, scanErr)
+		return result, w.runError(waitErr, scanErr, result.Text)
 	}
 	return result, nil
 }
@@ -1107,7 +1107,7 @@ func (w *Worker) killAndWait(cmd *exec.Cmd, wait <-chan error) {
 	}
 }
 
-func (w *Worker) runError(waitErr, scanErr error) error {
+func (w *Worker) runError(waitErr, scanErr error, output ...string) error {
 	parts := []error{waitErr, scanErr}
 	// Provider stderr can echo prompts, replies, credentials, or tool input.
 	// Keep diagnostics structural: these errors reach HTTP headers and logs.
@@ -1116,10 +1116,15 @@ func (w *Worker) runError(waitErr, scanErr error) error {
 		err = errors.New("CLI reported an error outcome")
 	}
 	err = fmt.Errorf("cligw: %s: %w", w.agent, err)
-	// The provider's verdict (invalid key, dry balance) hides in stderr
-	// behind the bare exit status. Carry its classification so Serve can
-	// fail fast instead of retrying a dead key.
-	return wrapToolError(err, w.stderrTail())
+	// The provider's verdict (invalid key, dry balance, signed-out login)
+	// hides in stderr behind the bare exit status. Carry its
+	// classification so Serve can fail fast instead of retrying a dead
+	// key — or, for a subscription login, ask for the one-time sign-in.
+	text := w.stderrTail()
+	if len(output) > 0 && output[0] != "" {
+		text += "\n" + output[0]
+	}
+	return wrapWorkerError(err, w.tool, w.agent, text)
 }
 
 // stderrTail returns the tool's captured stderr for classification. It is

@@ -23,6 +23,10 @@ type AgentBackend struct {
 	Agent string
 	Model string
 	Pool  *Pool
+
+	// onNeedsLogin, when set by the owning Server, records a binding's
+	// needs-login state (and the owner notification) on a login failure.
+	onNeedsLogin func(NeedsLogin)
 }
 
 // NewAgentBackend returns a gateway backend for one agent and model.
@@ -116,6 +120,15 @@ func (b *AgentBackend) Serve(w http.ResponseWriter, r *http.Request, body []byte
 		// failure: auth and billing fail fast with their stable status
 		// and are never retried on another seat, while anything else
 		// keeps the historical retry-the-next-seat behavior.
+		// A missing/expired vendor login is a human one-time step, not a
+		// transient failure: needs_login, never retried, no breaker trip.
+		if nl, ok := NeedsLoginFailure(err); ok {
+			if b.onNeedsLogin != nil {
+				b.onNeedsLogin(nl)
+			}
+			failure := nl.Failure().WithEndpoint(b.Name(), "")
+			return gateway.Attempt{Status: failure.Status, CanRetry: false, Failure: &failure}
+		}
 		failure, ok := toolFailure(err)
 		if !ok {
 			failure = gateway.ClassifyUpstream(0, []byte(boundSignal(message)), nil)
