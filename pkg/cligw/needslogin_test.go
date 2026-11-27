@@ -1,8 +1,10 @@
 package cligw
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/qiangli/yoke/pkg/agentlaunch"
+	"github.com/qiangli/yoke/pkg/bus"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 	"github.com/qiangli/yoke/pkg/llmgw/sched"
@@ -34,11 +37,24 @@ func TestClassifyNeedsLogin(t *testing.T) {
 	for _, output := range []string{
 		"Not logged in · Please run /login",
 		`{"loggedIn": false}`,
-		"session expired, please re-authenticate",
+		"session expired, please log in again",
+		"token expired",
 		"Open this page to sign in\nWaiting for approval…",
 	} {
 		if _, ok := classifyNeedsLogin(tool, "agent-a", output, gateway.UpstreamFailure{}, false); !ok {
 			t.Errorf("output %q not recognised as needs-login", output)
+		}
+	}
+	// Bare API-key spellings are a bad key (the existing auth class), not a
+	// human sign-in step, even on a subscription tool's stderr.
+	for _, output := range []string{
+		"401 Unauthorized: invalid token provided",
+		"please reauthenticate with your API key",
+		"error: reauth required for this key",
+		"expired token",
+	} {
+		if _, ok := classifyNeedsLogin(tool, "agent-a", output, gateway.UpstreamFailure{}, false); ok {
+			t.Errorf("api-key output %q misclassified as needs-login", output)
 		}
 	}
 	// An explicit provider 401 for a subscription tool is a login failure.
@@ -128,10 +144,10 @@ func TestServerNeedsLoginNoBreakerTripAndRecovery(t *testing.T) {
 	breaker := sched.NewBreaker()
 	var notified atomic.Int32
 	server, err := NewServer(ServerOptions{
-		Catalog: NewFleetCatalog(cat),
-		Quota:   &fakeQuota{headroom: map[string]float64{"login-model": .9}, refused: map[string]string{}},
-		Breaker: breaker,
-		Pool:    PoolConfig{StartServers: 0, MinSpare: 0, MaxSpare: 1, MaxWorkers: 2, IdleTTL: time.Minute},
+		Catalog:      NewFleetCatalog(cat),
+		Quota:        &fakeQuota{headroom: map[string]float64{"login-model": .9}, refused: map[string]string{}},
+		Breaker:      breaker,
+		Pool:         PoolConfig{StartServers: 0, MinSpare: 0, MaxSpare: 1, MaxWorkers: 2, IdleTTL: time.Minute},
 		OnNeedsLogin: func(NeedsLogin) { notified.Add(1) },
 	})
 	if err != nil {
@@ -197,5 +213,97 @@ func TestServerNeedsLoginNoBreakerTripAndRecovery(t *testing.T) {
 	}
 	if got := notified.Load(); got != 1 {
 		t.Fatalf("owner notified %d times after recovery, want 1", got)
+	}
+
+	// The login expires again: a new episode, notified once more.
+	if err := os.WriteFile(flip, []byte("out"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, body = post()
+	if status != http.StatusUnauthorized || !strings.Contains(body, "needs_login") {
+		t.Fatalf("second episode = %d: %s", status, body)
+	}
+	if got := notified.Load(); got != 2 {
+		t.Fatalf("owner notified %d times after a new episode, want 2", got)
+	}
+	if breaker.InCooldown("login-agent") {
+		t.Fatal("needs-login tripped the breaker in the second episode")
+	}
+}
+
+// The production owner notice posts exactly once per episode to the
+// owner's board address, naming the login command; a second failure in
+// the same episode posts nothing, and after recovery a new episode posts
+// again.
+func TestOwnerNoticeOncePerEpisode(t *testing.T) {
+	var posts []bus.Post
+	oldPost, oldAddr := ownerInboxPost, ownerInboxAddress
+	ownerInboxPost = func(p bus.Post) error { posts = append(posts, p); return nil }
+	ownerInboxAddress = func() string { return "owner" }
+	t.Cleanup(func() { ownerInboxPost, ownerInboxAddress = oldPost, oldAddr })
+
+	server := &Server{needsLogin: map[string]NeedsLogin{}, onNeedsLogin: NotifyOwnerNeedsLogin, log: slog.Default()}
+	nl := NeedsLogin{Agent: "agent-a", Tool: "fakecli", LoginCommand: "fakecli login"}
+	server.noteNeedsLogin(nl)
+	server.noteNeedsLogin(nl)
+	if len(posts) != 1 {
+		t.Fatalf("posts in one episode = %d, want 1", len(posts))
+	}
+	if posts[0].To != "owner" || posts[0].Topic != "needs-login" ||
+		!strings.Contains(posts[0].Body, "`fakecli login`") || !strings.Contains(posts[0].Body, "needs-login") {
+		t.Fatalf("owner post does not name the sign-in step: %+v", posts[0])
+	}
+	server.clearNeedsLogin("agent-a")
+	server.noteNeedsLogin(nl)
+	if len(posts) != 2 {
+		t.Fatalf("posts after recovery + new episode = %d, want 2", len(posts))
+	}
+}
+
+// A worker failure is classified from stderr only: with a clean stderr
+// the run error is never a needs-login verdict, whatever the model's
+// answer text discussed.
+func TestWorkerRunErrorClassifiesStderrOnly(t *testing.T) {
+	w := &Worker{agent: "agent-a", tool: loginTool("Run `fakecli login` once.", "login")}
+	err := w.runError(errors.New("exit status 1"), nil)
+	if _, ok := NeedsLoginFailure(err); ok {
+		t.Fatalf("clean-stderr failure misclassified as needs-login: %v", err)
+	}
+}
+
+// The checkSpawnable branch: a pool that never spawned, marked
+// needs-login, refuses with the sign-in step (not a generic spawn
+// failure); once a spawn succeeds the same door lets requests through
+// and the state clears on success — no restart.
+func TestCheckSpawnableNeedsLoginRecovery(t *testing.T) {
+	pool := NewPool(t.Context(), "agent-a", PoolConfig{MaxWorkers: 1})
+	t.Cleanup(func() { _ = pool.Close() })
+	pool.mu.Lock()
+	pool.failed = 2
+	pool.mu.Unlock()
+
+	server := &Server{
+		pools:      map[string]*Pool{"agent-a": pool},
+		needsLogin: map[string]NeedsLogin{},
+		log:        slog.Default(),
+	}
+	nl := NeedsLogin{Agent: "agent-a", Tool: "fakecli", LoginCommand: "fakecli login", Since: time.Now()}
+	server.noteNeedsLogin(nl)
+
+	err := server.checkSpawnable("agent-a")
+	if _, ok := NeedsLoginFailure(err); !ok {
+		t.Fatalf("never-spawned needs-login pool: checkSpawnable = %v, want needs-login", err)
+	}
+
+	// The operator signs in; the next spawn succeeds.
+	pool.mu.Lock()
+	pool.spawned = 1
+	pool.mu.Unlock()
+	if err := server.checkSpawnable("agent-a"); err != nil {
+		t.Fatalf("after a successful spawn: checkSpawnable = %v, want nil", err)
+	}
+	server.clearNeedsLogin("agent-a")
+	if _, ok := server.NeedsLogin("agent-a"); ok {
+		t.Fatal("needs-login state not cleared after recovery")
 	}
 }

@@ -127,7 +127,7 @@ func runServe(cmd *cobra.Command, o *serveOptions) error {
 			return err
 		}
 	}
-	server, err := NewServer(ServerOptions{PolicyFile: o.policy, Prewarm: o.prewarm, MaxInFlight: maxInFlight})
+	server, err := NewServer(ServerOptions{PolicyFile: o.policy, Prewarm: o.prewarm, MaxInFlight: maxInFlight, OnNeedsLogin: NotifyOwnerNeedsLogin})
 	if err != nil {
 		return err
 	}

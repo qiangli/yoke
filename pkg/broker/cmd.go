@@ -223,7 +223,7 @@ func cliServerOptions(token string, o DoorOptions) (cligw.ServerOptions, error) 
 			return cligw.ServerOptions{}, err
 		}
 	}
-	return cligw.ServerOptions{Token: token, PolicyFile: o.Policy, Prewarm: o.Prewarm, MaxInFlight: maxInFlight}, nil
+	return cligw.ServerOptions{Token: token, PolicyFile: o.Policy, Prewarm: o.Prewarm, MaxInFlight: maxInFlight, OnNeedsLogin: cligw.NotifyOwnerNeedsLogin}, nil
 }
 
 // RunDoor serves the door in the foreground until ctx ends or SIGINT/SIGTERM.

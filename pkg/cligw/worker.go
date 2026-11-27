@@ -387,7 +387,7 @@ func (w *Worker) DoCompletion(ctx context.Context, input CompletionPrompt, onEve
 	}
 	if failed {
 		result.Outcome = OutcomeError
-		return result, w.runError(waitErr, scanErr, result.Text)
+		return result, w.runError(waitErr, scanErr)
 	}
 	return result, nil
 }
@@ -1107,7 +1107,7 @@ func (w *Worker) killAndWait(cmd *exec.Cmd, wait <-chan error) {
 	}
 }
 
-func (w *Worker) runError(waitErr, scanErr error, output ...string) error {
+func (w *Worker) runError(waitErr, scanErr error) error {
 	parts := []error{waitErr, scanErr}
 	// Provider stderr can echo prompts, replies, credentials, or tool input.
 	// Keep diagnostics structural: these errors reach HTTP headers and logs.
@@ -1120,11 +1120,9 @@ func (w *Worker) runError(waitErr, scanErr error, output ...string) error {
 	// hides in stderr behind the bare exit status. Carry its
 	// classification so Serve can fail fast instead of retrying a dead
 	// key — or, for a subscription login, ask for the one-time sign-in.
-	text := w.stderrTail()
-	if len(output) > 0 && output[0] != "" {
-		text += "\n" + output[0]
-	}
-	return wrapWorkerError(err, w.tool, w.agent, text)
+	// Only stderr is classified: the model's answer text may legitimately
+	// discuss signing in and must never read as the worker signing out.
+	return wrapWorkerError(err, w.tool, w.agent, w.stderrTail())
 }
 
 // stderrTail returns the tool's captured stderr for classification. It is

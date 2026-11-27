@@ -63,15 +63,18 @@ func (n NeedsLogin) Failure() gateway.UpstreamFailure {
 		Class:     gateway.UpstreamClass("needs_login"),
 		Retryable: false,
 		Status:    401,
-		Hint: (&NeedsLoginError{NeedsLogin: n}).Error(),
+		Hint:      (&NeedsLoginError{NeedsLogin: n}).Error(),
 	}
 }
 
-// needsLoginSignals are the exit/output patterns a signed-out vendor CLI
+// needsLoginSignals are the stderr patterns a signed-out vendor CLI
 // leaves behind (measured spellings live in the fleet probe vocabulary:
 // fleet's workerMissing/workerExpired). They only count for a tool that
 // declares a subscription auth check — an api-key tool's 401 keeps the
 // existing auth/billing fail-fast and is not a human sign-in step here.
+// Bare API-key spellings ("unauthorized", "invalid token", "reauth") are
+// deliberately absent: they mean a bad key, the existing auth class, and
+// matching them would misreport it as a human sign-in step.
 var needsLoginSignals = []string{
 	"not logged in", "logged out", "not signed in", "signed out",
 	"please log in", "please login", "log in required", "login required",
@@ -79,16 +82,15 @@ var needsLoginSignals = []string{
 	"waiting for approval", "not authenticated", "no subscription",
 	`"loggedin": false`, `"loggedin":false`,
 	"session expired", "token expired", "credentials expired",
-	"login expired", "expired token", "invalid token",
-	"reauthenticate", "re-authenticate", "reauth", "log in again",
-	"login again", "unauthorized",
+	"login expired", "log in again", "login again",
 }
 
 // classifyNeedsLogin recognises a vendor-login failure from a worker's
-// output. The gate is the tool's declared auth check (auth.check_exec in
+// stderr. The gate is the tool's declared auth check (auth.check_exec in
 // the tool asset): only subscription tools can be needs-login. Within the
 // gate, an explicit auth classification (401/403) or any measured
-// signed-out pattern on stdout/stderr decides.
+// signed-out pattern on stderr decides. The model's answer text is never
+// consulted: an answer that merely mentions signing in is not a sign-out.
 func classifyNeedsLogin(tool fleet.Tool, agent, output string, failure gateway.UpstreamFailure, classified bool) (NeedsLogin, bool) {
 	if strings.TrimSpace(tool.CLI.Launch.Auth.CheckExec) == "" {
 		return NeedsLogin{}, false
