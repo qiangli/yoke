@@ -33,7 +33,7 @@ type BashyDelegate struct {
 // to find its own tooling and its own provider login; it never receives the
 // console's environment wholesale, so no principal secret, session key or
 // app data location can ride along.
-var delegateEnvAllow = []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "BASHY_HOME"}
+var delegateEnvAllow = []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "BASHY_HOME", "BASHY_DELEGATE_DEPTH"}
 
 // delegateEnvAllowWindows is what a Windows process needs on top of that to
 // locate its profile, state and temp directories and to start at all — the

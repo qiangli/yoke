@@ -122,7 +122,7 @@ An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 			}
 			plain, _ := cmd.Flags().GetBool("plain")
 			opt.JSON = opt.JSON || (os.Getenv("BASHY_AGENTIC") != "" && !plain)
-			g := &delegateGuard{allow: allow, genie: os.Getenv("BASHY_DELEGATE_CALLER") == "genie", idle: idle,
+			g := &delegateGuard{allow: allow, genie: os.Getenv("BASHY_DELEGATE_CALLER") == "genie", depth: delegateDepth(), idle: idle,
 				capRequired: cmd.Flags().Changed("budget-usd") || cmd.Flags().Changed("max-tokens")}
 			if !cmd.Flags().Changed("allow") {
 				g.allow = os.Getenv("BASHY_DELEGATE_ALLOW")
@@ -138,6 +138,9 @@ An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 			if idle < 0 || opt.Timeout < 0 {
 				raw = Result{SchemaVersion: schemaVersion, Agent: opt.Agent}
 				invokeErr = delegateFailure("denied", "delegate: timeouts must not be negative")
+			} else if err := guardDelegateDepth(); err != nil {
+				raw = Result{SchemaVersion: schemaVersion, Agent: opt.Agent}
+				invokeErr = err
 			} else {
 				raw, invokeErr = Invoke(ctx, opt, execRunner{})
 			}

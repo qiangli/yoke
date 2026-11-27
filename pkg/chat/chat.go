@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -701,12 +702,13 @@ func agentCommand(ctx context.Context, agent string, args []string, cwd string) 
 	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
 	// against the real PATH, so prepending the shim dir never shadows the agent.
 	cmd.Env = agentChildEnv(ctx)
-	if delegation(ctx) != nil {
+	if g := delegation(ctx); g != nil {
 		cmd.Env = scrubDelegateEnv(cmd.Env)
 		// The subscription-worker projection runs after the scrubs, from
 		// the launcher's raw environment: the per-worker config dir plus
 		// the vault subscription token a token-declaring tool needs.
 		cmd.Env = delegateWorkerEnv(ctx, cmd.Env)
+		cmd.Env = withChildEnvKV(cmd.Env, delegateDepthEnv, strconv.Itoa(g.depth+1))
 	}
 	return cmd
 }

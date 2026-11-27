@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -80,5 +81,16 @@ func TestRegisteredBashyAppIsNotRecordOnly(t *testing.T) {
 	}
 	if !(Service{App: BashyApp()}).isBashy() {
 		t.Fatal("built-in bashy target not record-only")
+	}
+}
+
+func TestDelegateEnvPreservesDepth(t *testing.T) {
+	t.Setenv("BASHY_DELEGATE_DEPTH", "1")
+	if env := delegateEnv("codex:m"); !slices.Contains(env, "BASHY_DELEGATE_DEPTH=1") {
+		t.Fatalf("delegateEnv omitted BASHY_DELEGATE_DEPTH: %v", env)
+	}
+	_ = os.Unsetenv("BASHY_DELEGATE_DEPTH")
+	if env := delegateEnv("codex:m"); slices.Contains(env, "BASHY_DELEGATE_DEPTH=") {
+		t.Fatalf("delegateEnv fabricated BASHY_DELEGATE_DEPTH: %v", env)
 	}
 }

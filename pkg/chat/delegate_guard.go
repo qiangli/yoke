@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,23 @@ import (
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/ladder"
 )
+
+// delegateDepthEnv bounds nested delegation (mirroring BASHY_MEET_DEPTH in
+// pkg/meet). Every child spawned by `bashy delegate` receives depth+1; any
+// nested call when depth >= 1 is refused before Invoke.
+const delegateDepthEnv = "BASHY_DELEGATE_DEPTH"
+
+func delegateDepth() int {
+	n, _ := strconv.Atoi(strings.TrimSpace(os.Getenv(delegateDepthEnv)))
+	return n
+}
+
+func guardDelegateDepth() error {
+	if d := delegateDepth(); d >= 1 {
+		return delegateFailure("denied", fmt.Sprintf("delegate: refusing nested delegation (%s=%d)", delegateDepthEnv, d))
+	}
+	return nil
+}
 
 // DelegateError is a machine-readable failure of a bounded delegation.
 type DelegateError struct {
@@ -28,6 +46,7 @@ type delegateKey struct{}
 type delegateGuard struct {
 	allow       string
 	genie       bool
+	depth       int
 	idle        time.Duration
 	capRequired bool
 	identity    string

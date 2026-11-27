@@ -385,3 +385,69 @@ func aliasesFor(vendor string) []string {
 	}
 	return nil
 }
+
+func TestDelegateDepthGuard(t *testing.T) {
+	marker := fakeDelegateVendor(t, "ycode")
+	bin, err := exec.LookPath("ycode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	depthFile := filepath.Join(t.TempDir(), "child-depth")
+	fake := "#!/bin/sh\nprintf '%s' \"$BASHY_DELEGATE_DEPTH\" > " + "'" + depthFile + "'" + "\nprintf task > \"$DELEGATE_TEST_MARKER\"\necho delegated\n"
+	if err := os.WriteFile(bin, []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_DELEGATE_ALLOW", "genie:test-model")
+
+	// Depth 0 (unset): allowed, and child receives BASHY_DELEGATE_DEPTH=1.
+	t.Setenv(delegateDepthEnv, "")
+	_ = os.Remove(marker)
+	cmd := NewDelegateCmd()
+	cmd.SetArgs([]string{"--json", "--agent", "genie:test-model", "do work"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("depth 0 delegate failed: %v (%s)", err, stdout.String())
+	}
+	gotDepth, err := os.ReadFile(depthFile)
+	if err != nil || string(gotDepth) != "1" {
+		t.Fatalf("child %s = %q (%v), want \"1\"", delegateDepthEnv, string(gotDepth), err)
+	}
+
+	// Depth >= 1: refused before Invoke, for both genie and non-genie callers.
+	for _, tc := range []struct {
+		name, depth, caller string
+	}{
+		{"genie depth 1", "1", "genie"},
+		{"genie depth 2", "2", "genie"},
+		{"ordinary depth 1", "1", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(marker)
+			t.Setenv(delegateDepthEnv, tc.depth)
+			t.Setenv("BASHY_DELEGATE_CALLER", tc.caller)
+			t.Setenv("BASHY_LADDER_STORE", filepath.Join(t.TempDir(), "events.jsonl"))
+			cmd := NewDelegateCmd()
+			cmd.SetArgs([]string{"--json", "--agent", "genie:test-model", "do work"})
+			var out, errBuf bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&errBuf)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected nested delegation to be refused")
+			}
+			var res delegateResult
+			if e := json.Unmarshal(out.Bytes(), &res); e != nil {
+				t.Fatalf("envelope: %v: %s", e, out.String())
+			}
+			if res.Exit == 0 || res.Error == nil || res.Error.Kind != "denied" || !strings.Contains(res.Error.Message, delegateDepthEnv) {
+				t.Fatalf("unexpected refusal envelope: %+v", res)
+			}
+			if _, e := os.Stat(marker); !os.IsNotExist(e) {
+				t.Fatalf("nested child must not launch: %v", e)
+			}
+			assertDelegateEvents(t, 0, "", 0)
+		})
+	}
+}
