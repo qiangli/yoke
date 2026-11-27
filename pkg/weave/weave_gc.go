@@ -12,11 +12,13 @@ package weave
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -27,6 +29,7 @@ type weaveGCRoot struct {
 	Queue    string              `json:"queue"`
 	Repo     string              `json:"repo,omitempty"`
 	RepoGone bool                `json:"repo_gone"`
+	NoQueue  bool                `json:"no_queue,omitempty"`
 	Removed  []sprintPruneAction `json:"removed,omitempty"`
 	Retained []string            `json:"retained,omitempty"`
 	Refused  []string            `json:"refused,omitempty"`
@@ -50,7 +53,13 @@ is upstream. For a queue whose repository is GONE (deleted or renamed) it remove
 the whole state root — but only when no wrapper is alive, no lifecycle lock is
 held, and no workspace carries uncommitted files or an agent branch that exists
 only there. Such a workspace is REFUSED by path: with the repository gone there
-is nowhere to preserve the work, so gc keeps it and tells you.`,
+is nowhere to preserve the work, so gc keeps it and tells you.
+
+A state root with NO queue.json (left by a deleted temp repository, a gate or a
+clone run) is removed too, but only when every entry is weave's own bookkeeping
+(memory.jsonl, locks, session.json, feed cursors, probe caches) or a directory
+holding no files, and nothing in it changed for 24 hours. Anything else in such
+a root (logs with content, a workspace, a file gc does not know) keeps it.`,
 		Example: "  bashy weave gc\n  bashy weave gc --apply\n  bashy weave gc --json",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,7 +72,14 @@ is nowhere to preserve the work, so gc keeps it and tells you.`,
 }
 
 func weaveGCQueueDirs(home string) []string {
-	var out []string
+	queues, _ := weaveGCStateDirs(home)
+	return queues
+}
+
+// weaveGCStateDirs splits the direct children of every state root into queue
+// roots (with queue.json) and stateless roots (without). Hidden directories
+// (the shared .go-build-cache, fork checkouts) are never state roots.
+func weaveGCStateDirs(home string) (queues, stateless []string) {
 	for _, root := range append([]string{weaveStateRoot(home)}, weaveLegacyStateRoots(home)...) {
 		entries, err := os.ReadDir(root)
 		if err != nil {
@@ -75,12 +91,15 @@ func weaveGCQueueDirs(home string) []string {
 			}
 			dir := filepath.Join(root, e.Name())
 			if _, err := os.Stat(filepath.Join(dir, "queue.json")); err == nil {
-				out = append(out, dir)
+				queues = append(queues, dir)
+			} else if !strings.HasPrefix(e.Name(), ".") {
+				stateless = append(stateless, dir)
 			}
 		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(queues)
+	sort.Strings(stateless)
+	return queues, stateless
 }
 
 func runWeaveGC(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) error {
@@ -90,8 +109,14 @@ func runWeaveGC(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) error {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave gc", weavecli.ExitGenericFail, err))
 	}
 	var roots []weaveGCRoot
-	for _, dir := range weaveGCQueueDirs(home) {
+	queues, stateless := weaveGCStateDirs(home)
+	for _, dir := range queues {
 		roots = append(roots, weaveGCQueue(dir, apply))
+	}
+	for _, dir := range stateless {
+		if r, ok := weaveGCStateless(dir, apply, time.Now()); ok {
+			roots = append(roots, r)
+		}
 	}
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave gc", map[string]any{"applied": apply, "roots": roots}))
@@ -105,6 +130,9 @@ func runWeaveGC(cmd *cobra.Command, apply bool, flags *weaveOutputFlags) error {
 		state := r.Repo
 		if r.RepoGone {
 			state = "repository gone"
+		}
+		if r.NoQueue {
+			state = "no queue"
 		}
 		fmt.Fprintf(out, "%s (%s)\n", r.Queue, state)
 		for _, a := range r.Removed {
@@ -336,4 +364,82 @@ func weaveGCContainedRoot(dir string) error {
 		}
 	}
 	return errors.New("state root is not a direct child of a weave state root; left alone")
+}
+
+// weaveGCStatelessQuiet is how long a state root without queue.json must sit
+// unchanged before gc treats it as left behind rather than being created.
+const weaveGCStatelessQuiet = 24 * time.Hour
+
+// weaveGCStatelessFile reports whether name is weave's own bookkeeping, which
+// carries no work: agent memory, locks, the cloudbox task binding, feed
+// cursors and probe caches.
+func weaveGCStatelessFile(name string) bool {
+	switch name {
+	case "memory.jsonl", "queue.lock", "pull.lock", "cooldown.lock", "session.json",
+		"fleet-probe-cache.json", "tool_cooldowns.json":
+		return true
+	}
+	return strings.HasPrefix(name, "feed-cursor-")
+}
+
+// weaveGCStateless decides one state root that has no queue.json. ok is false
+// when the root holds something gc does not recognise: such a root is not a
+// weave leftover, so gc neither reports nor touches it.
+func weaveGCStateless(dir string, apply bool, now time.Time) (weaveGCRoot, bool) {
+	r := weaveGCRoot{Queue: dir, NoQueue: true}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return r, false
+	}
+	var hold []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			if !weaveGCStatelessFile(e.Name()) {
+				return r, false
+			}
+			continue
+		}
+		files := 0
+		_ = filepath.WalkDir(filepath.Join(dir, e.Name()), func(_ string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				files++
+			}
+			return nil
+		})
+		if files > 0 {
+			hold = append(hold, fmt.Sprintf("%s/ holds %d file(s)", e.Name(), files))
+		}
+	}
+	var newest time.Time
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+		return nil
+	})
+	if now.Sub(newest) < weaveGCStatelessQuiet {
+		hold = append(hold, "changed within the last 24 hours")
+	}
+	if len(hold) > 0 {
+		r.Retained = append(r.Retained, "state root without queue.json: "+strings.Join(hold, "; "))
+		return r, true
+	}
+	if err := weaveGCContainedRoot(dir); err != nil {
+		r.Refused = append(r.Refused, err.Error())
+		return r, true
+	}
+	a := sprintPruneAction{Kind: "state-root", Target: dir, ByteKind: "apparent_regular_file_bytes"}
+	a.ExpectedBytes, _ = weaveArtifactBytes(dir)
+	if apply {
+		if err := os.RemoveAll(dir); err != nil {
+			a.Err = err.Error()
+		} else {
+			a.Done, a.ActualBytes, a.BytesComplete = true, a.ExpectedBytes, true
+		}
+	}
+	r.Removed = append(r.Removed, a)
+	return r, true
 }
