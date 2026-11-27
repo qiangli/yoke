@@ -276,6 +276,9 @@ func RunProgram(ctx context.Context, o ProgramOptions) (ProgramReport, error) {
 		return ProgramReport{}, e
 	}
 	defer os.RemoveAll(clone)
+	if e = copyWorkLedger(o.RepoDir, clone); e != nil {
+		return ProgramReport{}, e
+	}
 	dependency, e := DependencyDigest(clone)
 	if e != nil {
 		return ProgramReport{}, e

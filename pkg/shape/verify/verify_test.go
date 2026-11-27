@@ -437,3 +437,30 @@ func TestTrustedRunnerChecksSeeTheModuleProxy(t *testing.T) {
 		t.Fatalf("check env = %q, want %q", out.Detail, want)
 	}
 }
+
+// The ledger a candidate's work clone carries reaches the verifier's isolated
+// clone, where frozen checks run; a repository without one is unchanged.
+func TestCopyWorkLedgerIntoIsolatedClone(t *testing.T) {
+	repo, clone := t.TempDir(), t.TempDir()
+	for _, d := range []string{repo, clone} {
+		if err := os.MkdirAll(filepath.Join(d, ".git"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := copyWorkLedger(repo, clone); err != nil {
+		t.Fatalf("no ledger: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(clone, ".git", "shape-ledger.json")); !os.IsNotExist(err) {
+		t.Fatalf("ledger appeared from nowhere: %v", err)
+	}
+	want := []byte(`{"app":"site","problems":[]}` + "\n")
+	if err := os.WriteFile(filepath.Join(repo, ".git", "shape-ledger.json"), want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyWorkLedger(repo, clone); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(clone, ".git", "shape-ledger.json")); err != nil || string(got) != string(want) {
+		t.Fatalf("clone ledger = %q, %v", got, err)
+	}
+}

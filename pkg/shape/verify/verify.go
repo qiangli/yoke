@@ -218,6 +218,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err := detach(clone, o.CandidateSHA); err != nil {
 		return Report{}, err
 	}
+	if err := copyWorkLedger(o.RepoDir, clone); err != nil {
+		return Report{}, err
+	}
 	candidate, err := reader.ReadContract(clone)
 	if err != nil {
 		return Report{}, err
@@ -433,6 +436,25 @@ func capText(effects []string) string {
 		return "(none)"
 	}
 	return strings.Join(effects, ",")
+}
+
+// workLedger is the shaping ledger a candidate's work clone carries inside
+// its .git (shape.WorkLedgerPath). It is never committed, so a clone does not
+// copy it.
+const workLedger = ".git/shape-ledger.json"
+
+// copyWorkLedger hands the ledger from the repository being verified to the
+// isolated clone, so a frozen check (a build or test step) reads the same
+// file the agent saw. A repository without one is not an error.
+func copyWorkLedger(repo, clone string) error {
+	b, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(workLedger)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(clone, filepath.FromSlash(workLedger)), b, 0o600)
 }
 
 // IsolatedClone clones repo into a fresh temporary directory, detaches it

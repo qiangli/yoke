@@ -368,17 +368,26 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 	if err != nil {
 		return c, dir, err.Error(), false, ""
 	}
-	releases, err := src.Releases(home, a.name, principal)
+	// The repair activates on the version line the incident was observed
+	// on: on an owner-hosted app a scoped member's repair lands on the
+	// owner's line with the member as author, as an approved wish does, and
+	// matches the line its evidence was sealed for.
+	svc := a.candidateService()
+	line, author := svc.QueuePrincipal(svc.ActivationPrincipal(principal)), ""
+	if !strings.EqualFold(line, principal) {
+		author = principal
+	}
+	releases, err := src.Releases(home, a.name, line)
 	if err != nil {
 		return c, dir, err.Error(), false, ""
 	}
 	if len(releases) == 0 {
 		return c, dir, "patch release needs an existing base release", false, ""
 	}
-	if err = a.opts.Activator.Activate(ctx, ActivateRequest{App: a.name, Principal: principal, SourceDir: a.repo, CandidateDir: work, BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: request, Agent: c.Agent, Evidence: c.Verdict.Evidence, Trigger: in.ID}); err != nil {
+	if err = a.opts.Activator.Activate(ctx, ActivateRequest{App: a.name, Principal: line, Author: author, SourceDir: a.repo, CandidateDir: work, BaseRev: c.BaseRev, CandidateRev: c.Rev, Request: request, Agent: c.Agent, Evidence: c.Verdict.Evidence, Trigger: in.ID}); err != nil {
 		return c, dir, err.Error(), false, ""
 	}
-	release, err := src.Release(home, a.name, c.Rev, principal, src.ReleaseOptions{Repair: true})
+	release, err := src.Release(home, a.name, c.Rev, line, src.ReleaseOptions{Repair: true})
 	if err != nil {
 		// A repair is not complete without its patch version. Undo through
 		// the same sealed restore gate so the previous active revision wins.
@@ -388,7 +397,7 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 		if v, ok := a.opts.Verifier.(interface{ VerifyRunner() verify.Runner }); ok {
 			options.Runner = v.VerifyRunner()
 		}
-		if _, undoErr := src.UndoSealed(rollbackCtx, home, a.name, principal, options); undoErr != nil {
+		if _, undoErr := src.UndoSealed(rollbackCtx, home, a.name, line, options); undoErr != nil {
 			return c, dir, fmt.Sprintf("patch release failed: %v; rollback failed: %v", err, undoErr), false, ""
 		}
 		return c, dir, "patch release failed: " + err.Error(), false, ""

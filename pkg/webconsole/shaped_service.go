@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	core "github.com/qiangli/yoke/pkg/shape"
+	"strings"
 )
 
 func (a *shapedApp) candidateService() core.Service {
