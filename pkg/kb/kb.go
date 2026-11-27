@@ -80,7 +80,34 @@ func openRing(dir, ring string) *Store {
 	if ring == string(scope.KindRepo) {
 		return OpenRepo(dir)
 	}
+	if ring == "dir" {
+		return openDirStore(dir)
+	}
 	return Open(dir)
+}
+
+// openDirStore opens a store named by --dir. When that directory lies inside
+// a git work tree whose root is above it (a checked-in store such as
+// docs/kb/ or bashy's kb/defaults/), its pages and journal are committed,
+// so it records no host, exactly like the repo ring. A store that is the
+// root of its own history (the host store keeps a .git for blame) stays a
+// host-recording store.
+func openDirStore(dir string) *Store {
+	if committedStoreDir(dir) {
+		return OpenRepo(dir)
+	}
+	return Open(dir)
+}
+
+// committedStoreDir reports whether dir sits inside a git work tree rooted
+// strictly above it.
+func committedStoreDir(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	root := repoRootOf(abs)
+	return root != "" && filepath.Clean(root) != filepath.Clean(abs)
 }
 
 func NewKBCmd() *cobra.Command {

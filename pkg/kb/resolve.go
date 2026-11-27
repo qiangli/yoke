@@ -97,7 +97,7 @@ func resolveKB(rings []kbRing, local string) (ref.Node, error) {
 // then the host store.
 func kbRings(dir string) []kbRing {
 	if dir != "" {
-		return []kbRing{{name: "dir", store: Open(dir)}}
+		return []kbRing{{name: "dir", store: openDirStore(dir)}}
 	}
 	var rings []kbRing
 	if cwd, err := os.Getwd(); err == nil {

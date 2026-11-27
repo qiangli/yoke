@@ -131,3 +131,55 @@ func TestHostRingWriteRecordsHost(t *testing.T) {
 		t.Fatalf("host-ring journal line missing host %q: %s", host, line)
 	}
 }
+
+// A store named by --dir that lies inside a git work tree (docs/kb/, or
+// bashy's kb/defaults/) is committed too, so it records no host. A store
+// that is the root of its own history (the host store keeps a .git) keeps
+// recording it. Found 2026-11-27: kb supersede --dir wrote the machine name
+// into a public repository.
+func TestDirStoreInsideRepoRecordsNoHost(t *testing.T) {
+	t.Setenv("WEAVE_AGENT", "test-tool")
+
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(root, "kb", "defaults")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	own := t.TempDir()
+	if err := os.Mkdir(filepath.Join(own, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		dir      string
+		wantHost bool
+	}{
+		{"inside a work tree", inside, false},
+		{"root of its own history", own, true},
+	} {
+		for _, store := range []*Store{openRing(tc.dir, "dir"), kbRings(tc.dir)[0].store} {
+			slug := "dir-gate-" + strings.ReplaceAll(tc.name, " ", "-")
+			if err := store.Write(testPageWithHost(slug), "add"); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(store.PagePath(slug))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(raw), "host:"); got != tc.wantHost {
+				t.Fatalf("%s: page host recorded = %v, want %v:\n%s", tc.name, got, tc.wantHost, raw)
+			}
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(lastJournalLine(t, tc.dir)), &rec); err != nil {
+				t.Fatal(err)
+			}
+			if _, got := rec["host"]; got != tc.wantHost {
+				t.Fatalf("%s: journal host recorded = %v, want %v: %v", tc.name, got, tc.wantHost, rec)
+			}
+		}
+	}
+}
