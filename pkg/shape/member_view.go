@@ -1,10 +1,6 @@
 package shape
 
-import (
-	"os"
-	"path/filepath"
-	"strings"
-)
+import "path/filepath"
 
 // MemberView is the candidate as a caller other than the owner may see it:
 // the same record without the host's paths and identities. The workspace,
@@ -19,16 +15,7 @@ func MemberView(c Candidate) Candidate {
 	if c.Verdict != nil && c.Verdict.Evidence != "" {
 		roots = append(roots, filepath.Dir(c.Verdict.Evidence))
 	}
-	home, _ := os.UserHomeDir()
-	scrub := func(text string) string {
-		for _, root := range roots {
-			text = RelativizeWorkspace(text, root)
-		}
-		for _, h := range workspaceSpellings(home) {
-			text = strings.ReplaceAll(text, h, "~")
-		}
-		return text
-	}
+	scrub := func(text string) string { return scrubHostText(text, roots...) }
 	c.Error = scrub(c.Error)
 	if c.Verdict != nil {
 		v := *c.Verdict

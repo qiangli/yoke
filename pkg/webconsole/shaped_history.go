@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -469,10 +470,30 @@ func (s *server) handleShapeHistoryPreview(w http.ResponseWriter, r *http.Reques
 	a.serveTree(w, r2, commit, mountRel(r2), principal, data)
 }
 
+// handleShapeLedger answers why the app was shaped the way it was: its
+// attempts grouped by problem, derived from the decision log. ?base=REV asks
+// for the view at a revision and ?max=N bounds the reply (0 is the default,
+// negative is unbounded). Only an operator session or the app's owner gets
+// the unfiltered ledger.
+func (s *server) handleShapeLedger(w http.ResponseWriter, r *http.Request) {
+	a, principal, ok := s.shapeReadCaller(w, r)
+	if !ok {
+		return
+	}
+	max, _ := strconv.Atoi(r.URL.Query().Get("max"))
+	l, err := a.candidateService().Ledger(s.requestShapeCaller(a, r, principal), s.operatorSession(r), r.URL.Query().Get("base"), max)
+	if err != nil {
+		http.Error(w, "ledger unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
 // historyRoutes registers the version-history view and its actions.
 func (s *server) historyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/shape/{app}/history", s.handleShapeHistory)
 	mux.HandleFunc("GET /api/shape/{app}/history/diff", s.handleShapeHistoryDiff)
+	mux.HandleFunc("GET /api/shape/{app}/ledger", s.handleShapeLedger)
 	mux.HandleFunc("POST /api/shape/{app}/history/name", s.handleShapeHistoryName)
 	mux.HandleFunc("POST /api/shape/{app}/history/restore", s.handleShapeHistoryRestore)
 	mux.HandleFunc("POST /api/shape/{app}/history/undo", s.handleShapeHistoryUndo)

@@ -321,6 +321,7 @@ func TestWebconsoleOutOfScopeWishQueuesOnOwnerAndOwnerApprovesMemberCandidate(t 
 				"/api/shape/site/history",
 				"/api/shape/site/history/diff?from=base&to=" + rev,
 				"/api/shape/site/incidents/" + created.ID,
+				"/api/shape/site/ledger",
 			} {
 				resp := send(h, http.MethodGet, path, "127.0.0.1:4100", tc.headers, "")
 				if resp.Code != tc.want {
@@ -329,6 +330,26 @@ func TestWebconsoleOutOfScopeWishQueuesOnOwnerAndOwnerApprovesMemberCandidate(t 
 			}
 		})
 	}
+	// The ledger: the owner reads all of it; a scoped member reads the same
+	// attempts with their own address only and an alias for each problem.
+	ownerLedger := send(h, http.MethodGet, "/api/shape/site/ledger?max=-1", "127.0.0.1:4100", hdrO, "").Body.String()
+	memberLedger := send(h, http.MethodGet, "/api/shape/site/ledger?max=-1", "127.0.0.1:4100", hdrC, "").Body.String()
+	for _, want := range []string{`"key":"cand:` + candC.ID, "cloud:o@example.test", "cloud:c@example.test", "member code change", `"standing":"active"`, `"rev":"` + rev} {
+		if !strings.Contains(ownerLedger, want) {
+			t.Errorf("owner ledger lacks %q: %s", want, ownerLedger)
+		}
+	}
+	for _, want := range []string{`"key":"p-`, "cloud:c@example.test", "member code change", `"standing":"active"`, `"rev":"` + rev} {
+		if !strings.Contains(memberLedger, want) {
+			t.Errorf("member ledger lacks %q: %s", want, memberLedger)
+		}
+	}
+	for _, leak := range []string{"cloud:o@example.test", "cloud:a@example.test", `"key":"cand:`} {
+		if strings.Contains(memberLedger, leak) {
+			t.Errorf("member ledger leaks %q: %s", leak, memberLedger)
+		}
+	}
+
 	for _, action := range []string{"restore", "undo", "name"} {
 		resp := postJSON(hdrC, "/api/shape/site/history/"+action, `{}`)
 		if resp.StatusCode != http.StatusForbidden {
