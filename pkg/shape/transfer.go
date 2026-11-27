@@ -29,6 +29,7 @@ type SourceFile struct {
 type SourceSnapshot struct {
 	Revision string       `json:"revision"`
 	Files    []SourceFile `json:"files"`
+	Ledger   *Ledger      `json:"ledger,omitempty"`
 }
 
 func (s Service) allowSourceTransfer(c Caller) error {
@@ -76,7 +77,11 @@ func (s Service) PullSource(ctx context.Context, caller Caller) (SourceSnapshot,
 	if err != nil {
 		return SourceSnapshot{}, err
 	}
-	out := SourceSnapshot{Revision: rev, Files: []SourceFile{}}
+	ledger, err := s.Ledger(caller, false, rev, 0)
+	if err != nil {
+		return SourceSnapshot{}, err
+	}
+	out := SourceSnapshot{Revision: rev, Files: []SourceFile{}, Ledger: &ledger}
 	remaining := int64(maxTransferBytes)
 	walk := object.NewTreeWalker(tree, true, nil)
 	defer walk.Close()
@@ -123,16 +128,33 @@ func (s Service) PullSource(ctx context.Context, caller Caller) (SourceSnapshot,
 	}
 }
 
+// PatchMetadata describes a patch as reported by its author.
+type PatchMetadata struct {
+	Why, Expect, Agent string
+}
+
 // PushPatch imports a unified diff against an explicit owner revision, then runs the
 // same verifier as shape verify. Approve performs its own locked base check.
-func (s Service) PushPatch(ctx context.Context, caller Caller, base, diff string) (Candidate, error) {
+func (s Service) PushPatch(ctx context.Context, caller Caller, base, diff string, metadata ...PatchMetadata) (Candidate, error) {
 	if err := s.allowSourceTransfer(caller); err != nil {
 		return Candidate{}, err
 	}
 	if base == "" || diff == "" || len(diff) > maxTransferBytes {
 		return Candidate{}, errors.New("shape: base_revision and a non-empty unified diff up to 8 MiB are required")
 	}
-	c, err := s.importChanges(ctx, caller, Wish{Request: "Import member patch"}, base, func(dir string) error {
+	wish := Wish{Request: "Import member patch"}
+	switch len(metadata) {
+	case 0:
+	case 1:
+		wish.patch = metadata[0]
+		if why := strings.TrimSpace(wish.patch.Why); why != "" {
+			first, _, _ := strings.Cut(why, "\n")
+			wish.Request = strings.TrimSpace(first)
+		}
+	default:
+		return Candidate{}, errors.New("shape: expected at most one patch metadata record")
+	}
+	c, err := s.importChanges(ctx, caller, wish, base, func(dir string) error {
 		return applySourcePatch(dir, diff)
 	})
 	if err != nil {

@@ -95,6 +95,7 @@ func (s Source) Validate() error {
 }
 
 type Wish struct {
+	patch        PatchMetadata
 	Source       Source `json:"source,omitempty,omitzero"`
 	Request      string `json:"request"`
 	Page         string `json:"page,omitempty"`
@@ -546,6 +547,7 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 		return Candidate{}, e
 	}
 	c := Candidate{ID: hex.EncodeToString(id[:]), App: s.App.Name, Principal: caller.Principal, Actor: caller.Actor, RepresentedUser: caller.RepresentedUser, Source: w.Source, Request: strings.TrimSpace(w.Request), Page: w.Page, Element: w.Element, Story: w.Story, Todo: w.Todo, TrackingRoot: w.TrackingRoot, BaseRev: base, Status: Running, AppKind: s.Kind(), Scope: s.Scope(), ActivationPrincipal: actPrincipal, Created: time.Now().UTC()}
+	c.Why, c.Expect, c.Agent = w.patch.Why, w.patch.Expect, w.patch.Agent
 	if c.Actor == "" {
 		c.Actor = c.Principal
 	}

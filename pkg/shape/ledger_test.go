@@ -258,6 +258,7 @@ func TestLedgerForViewer(t *testing.T) {
 	lines := ledgerStory()
 	lines[2].Detail = ledgerCand + " checks passed; see " + filepath.Join(home, "notes.txt") + " for T-42"
 	lines[3].Why = "asked by " + ledgerOwner
+	lines[3].Agent = "stub for T-42"
 	full := Fold(lines, "site", "")
 
 	if got := ForViewer(full, true, ledgerOwner); fmt.Sprint(got) != fmt.Sprint(full) {
@@ -297,7 +298,7 @@ func TestLedgerForViewer(t *testing.T) {
 	}
 	a := wish.Attempts[0]
 	if a.Request != "add a footer" || a.Standing != StandingSuperseded || a.Rev != "rev1" || a.Evidence != "shape-evidence:rev1" ||
-		a.Agent != "stub" || !strings.Contains(a.Observed, "checks passed; see ~/notes.txt for "+wish.Key) {
+		a.Agent != "stub for "+wish.Key || !strings.Contains(a.Observed, "checks passed; see ~/notes.txt for "+wish.Key) {
 		t.Errorf("member's wish attempt = %+v", a)
 	}
 	if f := got.Problems[0].Attempts[0]; !strings.HasSuffix(f.Observed, "build failed in index.md") {
@@ -324,6 +325,7 @@ func TestServiceLedgerReadsTheDecisionLog(t *testing.T) {
 	}{
 		{"operator", Caller{}, true, "todo:T-42"},
 		{"owner", Caller{Principal: ledgerOwner}, false, "todo:T-42"},
+		{"owner tier", Caller{Principal: ledgerOwner, Tier: "owner"}, false, "todo:T-42"},
 	} {
 		l, err := owned.Ledger(tc.caller, tc.full, "", -1)
 		if err != nil || len(l.Problems) != 3 || l.Problems[2].Key != tc.key {
@@ -332,7 +334,13 @@ func TestServiceLedgerReadsTheDecisionLog(t *testing.T) {
 	}
 	member, err := owned.Ledger(Caller{Principal: ledgerMember, Tier: "member"}, false, "", 0)
 	if err != nil || len(member.Problems) != 3 || !strings.HasPrefix(member.Problems[2].Key, "p-") {
-		t.Errorf("member: %v %+v", err, member)
+		t.Fatalf("member: %v %+v", err, member)
+	}
+	// A member-tier transfer must still hide board keys when the signed
+	// principal happens to match the configured owner's identity.
+	memberTier, err := owned.Ledger(Caller{Principal: ledgerOwner, Tier: "member"}, false, "", 0)
+	if err != nil || len(memberTier.Problems) != 3 || memberTier.Problems[2].Key != member.Problems[2].Key {
+		t.Errorf("member tier: %v %+v", err, memberTier)
 	}
 	// With no owner each person shapes their own line and reads only it.
 	perPerson := Service{App: App{Name: "site"}, Options: Options{Home: home}}

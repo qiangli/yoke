@@ -537,6 +537,7 @@ func ForViewer(l Ledger, owner bool, self string) Ledger {
 			if !mine(a.Line) {
 				a.Line = ""
 			}
+			a.Agent = scrub(a.Agent)
 			a.Request, a.Why, a.Expect = scrub(a.Request), scrub(a.Why), scrub(a.Expect)
 			a.Observed, a.Reason = scrub(a.Observed), scrub(a.Reason)
 			attempts[j] = a
@@ -565,7 +566,7 @@ func (s Service) Ledger(caller Caller, full bool, base string, max int) (Ledger,
 	if err != nil {
 		return Ledger{}, err
 	}
-	owner := full || s.isOwner(caller)
+	owner := full || (s.isOwner(caller) && (caller.Tier == "" || caller.Tier == "owner"))
 	if !owner && s.Owner() == "" {
 		self := strings.TrimSpace(caller.Principal)
 		own := lines[:0:0]
