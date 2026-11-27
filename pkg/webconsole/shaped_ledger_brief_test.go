@@ -292,4 +292,18 @@ func TestRepairBriefIncludesLedgerAndWorkCloneFile(t *testing.T) {
 		}
 	}
 	assertNotInCommit(t, shaper.dirs[1], c.Rev)
+	// The repair activates on the line its evidence was sealed for, with the
+	// member as author when that line is someone else's.
+	svc := app.candidateService()
+	line := svc.QueuePrincipal(svc.ActivationPrincipal(memberPrincipal))
+	if calls := app.opts.Activator.(*fakeActivator).calls; len(calls) > 0 {
+		got := calls[len(calls)-1]
+		wantAuthor := ""
+		if line != memberPrincipal {
+			wantAuthor = memberPrincipal
+		}
+		if got.Principal != line || got.Author != wantAuthor {
+			t.Fatalf("member repair activated principal=%q author=%q, want line %q author %q", got.Principal, got.Author, line, wantAuthor)
+		}
+	}
 }
