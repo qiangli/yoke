@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -253,7 +254,7 @@ func (r *Router) Route(ctx context.Context, sel Selector, filter Filter, policyN
 
 	firstBand := sel.Band
 	decision, err := r.routeOnce(ctx, sel, filter, policyName, sessionID)
-	if err != nil && policy.Escalate == EscalateUp && sel.Kind == SelectorBand && !sel.MinBand {
+	if err != nil && runSessionFrom(ctx) == nil && policy.Escalate == EscalateUp && sel.Kind == SelectorBand && !sel.MinBand {
 		for band := sel.Band + 1; band <= fleet.MaxBand; band++ {
 			next := sel
 			next.Raw, next.Band = fleet.BandLabel(band), band
@@ -284,7 +285,11 @@ func (r *Router) Route(ctx context.Context, sel Selector, filter Filter, policyN
 }
 
 func (r *Router) routeOnce(ctx context.Context, sel Selector, filter Filter, policyName, sessionID string) (Decision, error) {
-	return r.decide(ctx, r.catalog.Candidates(ctx, sel, filter), sel, policyName, sessionID)
+	agents := r.catalog.Candidates(ctx, sel, filter)
+	if run := runSessionFrom(ctx); run != nil {
+		agents = slices.DeleteFunc(agents, func(agent Agent) bool { return !run.scope.allows(agent) })
+	}
+	return r.decide(ctx, agents, sel, policyName, sessionID)
 }
 
 // decide cheaply ranks an already-selected candidate set, then previews quota

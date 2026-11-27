@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,9 +80,7 @@ const (
 	// PolicyHeader selects a named routing policy for one request.
 	PolicyHeader = "X-Bashy-Policy"
 
-	// Principal is the single accounting identity. cligw serves the owner's
-	// own seats with the owner's own tools; there is no multi-tenancy here
-	// and a second principal would be a different security model.
+	// Principal is the accounting identity of the host credential.
 	Principal = "owner"
 
 	// Schema versions of the JSON envelopes this package serves or writes.
@@ -201,8 +200,9 @@ type Server struct {
 	// gateway's: the gateway records a resolution with tier 0 (it resolves
 	// by model name, not by band), and a tier-0 hit would classify the next
 	// identical `auto` prompt down to L1.
-	history *sched.HistoryBuffer
-	handler http.Handler
+	history     *sched.HistoryBuffer
+	handler     http.Handler
+	runSessions runSessions
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -451,6 +451,7 @@ func (s *Server) Close() error {
 	}
 	pools = append(pools, s.retired...)
 	s.mu.Unlock()
+	s.runSessions.closeAll()
 	s.cancel()
 	if s.pollDone != nil {
 		<-s.pollDone
@@ -500,6 +501,9 @@ func (s *Server) buildHandler() http.Handler {
 	}
 	mux.Handle("POST "+gateway.MessagesPath, routed)
 	mux.Handle("POST "+gateway.AnthropicMessagesPath, routed)
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		mux.HandleFunc(method+" "+sessionPath, s.serveRunSessions)
+	}
 	mux.Handle("/", gw)
 	return mux
 }
@@ -568,14 +572,13 @@ func (s *Server) responsesHandler(chat http.Handler) http.Handler {
 	})
 }
 
-// Authorize implements the gateway's one required hook: the bearer token from
-// the token file, compared in constant time. The Anthropic surface's x-api-key
-// spelling is accepted too, because that is the header its clients send.
+// Authorize identifies the principal established on the session listener or
+// compares the host credential in constant time.
 func (s *Server) Authorize(r *http.Request) (string, int, error) {
-	presented := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if presented == "" {
-		presented = strings.TrimSpace(r.Header.Get("x-api-key"))
+	if run := runSessionFrom(r.Context()); run != nil {
+		return run.principal, 0, nil
 	}
+	presented := requestToken(r)
 	if presented == "" {
 		return "", 0, errors.New("missing bearer token (see `bashy llm env`)")
 	}
@@ -583,6 +586,14 @@ func (s *Server) Authorize(r *http.Request) (string, int, error) {
 		return "", 0, errors.New("invalid bearer token (see `bashy llm env`)")
 	}
 	return Principal, 0, nil
+}
+
+func requestToken(r *http.Request) string {
+	presented := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if presented == "" {
+		presented = strings.TrimSpace(r.Header.Get("x-api-key"))
+	}
+	return presented
 }
 
 // routeState is the middleware's per-request decision, handed to the catalog
@@ -604,8 +615,9 @@ func routeStateFrom(ctx context.Context) *routeState {
 // before the gateway resolves anything.
 func (s *Server) route(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, _, err := s.Authorize(r); err != nil {
-			writeJSON(w, http.StatusUnauthorized, errorEnvelope(err.Error()))
+		principal, _, authErr := s.Authorize(r)
+		if authErr != nil {
+			writeJSON(w, http.StatusUnauthorized, errorEnvelope(authErr.Error()))
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody))
@@ -621,7 +633,12 @@ func (s *Server) route(next http.Handler) http.Handler {
 		// so the row name the catalog adapter returns must be stripped
 		// too or the two would never meet.
 		model := strings.TrimSuffix(peekModel(body), resolve.AutoSuffix)
+		run := runSessionFrom(r.Context())
 		if model == "" {
+			if run != nil {
+				writeRunError(w, r, http.StatusBadRequest, "model is required")
+				return
+			}
 			// No model to route. The gateway owns that error message.
 			next.ServeHTTP(w, r)
 			return
@@ -631,6 +648,10 @@ func (s *Server) route(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusBadRequest, errorEnvelope(err.Error()))
 			return
 		}
+		if run != nil && (filter.Slash != "" || strings.TrimSpace(r.Header.Get(CapabilityHeader)) != "") {
+			writeRunError(w, r, http.StatusForbidden, "host tool commands are outside the session scope")
+			return
+		}
 		anthropicSurface := isAnthropicPath(r.URL.Path)
 		capSel, failed := s.capabilitySelection(r, &filter, &model)
 		if failed != nil {
@@ -638,6 +659,10 @@ func (s *Server) route(next http.Handler) http.Handler {
 			return
 		}
 		sel, err := s.catalog.ParseModelSelector(model)
+		if run != nil && (err != nil || !s.sessionAllowsSelector(r.Context(), run, sel)) {
+			writeRunError(w, r, http.StatusForbidden, fmt.Sprintf("model %q is outside the session scope", model))
+			return
+		}
 		if err != nil {
 			var unknown *UnknownSelectorError
 			status := http.StatusBadRequest
@@ -693,7 +718,7 @@ func (s *Server) route(next http.Handler) http.Handler {
 				if routeErr.Status == http.StatusTooManyRequests {
 					// A quota 429 is throttling all the same: it lands in
 					// usage.jsonl next to the admission 429s.
-					s.recordRefusal(Principal, model, routeErr.Reason, routeErr.Status)
+					s.recordRefusal(principal, model, routeErr.Reason, routeErr.Status)
 				}
 				writeJSON(w, routeErr.Status, errorEnvelope(routeErr.Reason))
 				return
@@ -784,7 +809,7 @@ func (s *Server) meteredFallback(routed *http.Handler) gateway.MeteredFallbackFu
 		return nil
 	}
 	return func(w http.ResponseWriter, r *http.Request, principal, model string, body []byte, failure gateway.UpstreamFailure) (string, bool) {
-		if r.Header.Get(fallbackAttemptHeader) != "" {
+		if runSessionFrom(r.Context()) != nil || r.Header.Get(fallbackAttemptHeader) != "" {
 			return "", false
 		}
 		patched, err := resolve.PatchModelField(body, band)
@@ -1307,6 +1332,12 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries := s.filterServable(s.catalog.ModelList(r.Context(), filter))
+	if run := runSessionFrom(r.Context()); run != nil {
+		entries = slices.DeleteFunc(entries, func(entry ModelEntry) bool {
+			sel, err := s.catalog.ParseModelSelector(entry.ID)
+			return err != nil || !s.sessionAllowsSelector(r.Context(), run, sel)
+		})
+	}
 	labels := s.quotaLabels(r.Context())
 	for i := range entries {
 		entries[i].XQuota = labels(entries[i])
@@ -1512,6 +1543,7 @@ func (s *Server) ServeListener(ctx context.Context, listener net.Listener, endpo
 		return err
 	}
 	defer func() {
+		s.runSessions.closeAll()
 		_ = RemoveEndpoint()
 		if endpoint.Socket != "" {
 			_ = os.Remove(endpoint.Socket)
@@ -1717,11 +1749,10 @@ func LoadOrCreateToken() (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("cligw: read token: %w", err)
 	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("cligw: generate token: %w", err)
+	token, err := generateToken()
+	if err != nil {
+		return "", err
 	}
-	token := hex.EncodeToString(raw)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("cligw: create state directory: %w", err)
 	}
@@ -1729,6 +1760,14 @@ func LoadOrCreateToken() (string, error) {
 		return "", fmt.Errorf("cligw: write token: %w", err)
 	}
 	return token, nil
+}
+
+func generateToken() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("cligw: generate token: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // WriteEndpoint records a running server, 0600.
@@ -1797,15 +1836,16 @@ func (e Endpoint) Client() *http.Client {
 	if e.Socket == "" {
 		return &http.Client{Timeout: 10 * time.Second}
 	}
-	socket := e.Socket
 	return &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-			},
-		},
+		Timeout:   10 * time.Second,
+		Transport: unixTransport(e.Socket),
 	}
+}
+
+func unixTransport(socket string) *http.Transport {
+	return &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}
 }
 
 // FetchHealth reads /health from a running server.

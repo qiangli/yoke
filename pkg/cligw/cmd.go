@@ -16,9 +16,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The `llm` front door. Three verbs and no more: serve the gateway, look at
-// the pools it is holding, and print the environment an OpenAI client needs.
-//
 // `pools` and `env` deliberately talk to a RUNNING server through the
 // endpoint record rather than constructing a second Server: a second one
 // would have its own pools and its own view of quota, and the operator would
@@ -66,7 +63,7 @@ local engine model honors all four.`,
 		SilenceErrors: true,
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newServeCmd(), newPoolsCmd(), newEnvCmd())
+	cmd.AddCommand(newServeCmd(), newPoolsCmd(), newEnvCmd(), newSessionCmd())
 	return cmd
 }
 
