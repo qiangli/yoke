@@ -299,10 +299,12 @@ func (s *server) startDraft(ctx context.Context, a *shapedApp, principal string)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Draft{}, false, err
 	}
-	if _, err := cloneAt(ctx, a.repo, filepath.Join(dir, "work"), from.Hash.String()); err != nil {
+	work := filepath.Join(dir, "work")
+	if _, err := cloneAt(ctx, a.repo, work, from.Hash.String()); err != nil {
 		_ = os.RemoveAll(dir)
 		return Draft{}, false, fmt.Errorf("prepare draft: %w", err)
 	}
+	a.writeWorkLedger(work, from.Hash.String(), principal)
 	now := time.Now().UTC()
 	d := Draft{App: a.name, Principal: principal, BaseRev: from.Hash.String(), Steps: []draftStep{}, Created: now, Updated: now}
 	if err := saveDraft(dir, d); err != nil {
@@ -390,8 +392,13 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, op
 		fail(fmt.Errorf("clean workspace: %w", err))
 		return
 	}
+	baseRev := step.Parent
+	if d, _, derr := a.loadDraft(principal); derr == nil && d.BaseRev != "" {
+		baseRev = d.BaseRev
+	}
+	ledger := a.workLedger(work, baseRev, principal, step.ID)
 	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work,
-		Task: shapingTaskFor(a.name, wish{Request: step.Request, Page: step.Page, Element: step.Element, first: step.First})})
+		Task: shapingTaskWithLedger(a.name, wish{Request: step.Request, Page: step.Page, Element: step.Element, first: step.First}, ledger)})
 	step.Agent = res.Agent
 	step.Why, step.Expect = shapecore.ParseReasons(res.Output)
 	if err != nil {

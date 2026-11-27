@@ -712,7 +712,9 @@ func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, er
 	if e != nil {
 		return s.complete(ctx, caller, c, e)
 	}
-	res, e := s.Options.Delegate.Delegate(ctx, DelegateRequest{Dir: c.Workspace, Task: s.GenerationBrief(w)})
+	home, _ := s.home()
+	ledger := PrepareWorkLedger(c.Workspace, home, s.App.Name, c.BaseRev, s.isOwner(caller), caller.Principal, c.ID)
+	res, e := s.Options.Delegate.Delegate(ctx, DelegateRequest{Dir: c.Workspace, Task: s.generationBriefWithLedger(w, ledger)})
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	c.Coverage = ParseCoverage(res.Output)
 	c.Why, c.Expect = ParseReasons(res.Output)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	core "github.com/qiangli/yoke/pkg/shape"
 )
 
@@ -69,4 +70,23 @@ func (a *shapedApp) caller(p string) core.Caller {
 	}
 	c.Email = a.opts.Email
 	return c
+}
+
+func (a *shapedApp) isOwner(principal string) bool {
+	owner := strings.TrimSpace(a.owner)
+	return owner != "" && strings.EqualFold(strings.TrimSpace(principal), owner)
+}
+
+func (a *shapedApp) writeWorkLedger(work, base, principal string) {
+	if home, err := a.opts.home(); err == nil {
+		_ = core.WriteWorkLedger(work, home, a.name, base, a.isOwner(principal), principal)
+	}
+}
+
+func (a *shapedApp) workLedger(work, base, principal, excludeCand string) string {
+	home, err := a.opts.home()
+	if err != nil {
+		return ""
+	}
+	return core.PrepareWorkLedger(work, home, a.name, base, a.isOwner(principal), principal, excludeCand)
 }

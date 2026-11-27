@@ -343,7 +343,11 @@ func shapingTask(app, request string) string {
 
 // shapingTaskFor is shapingTask with the wish's context.
 func shapingTaskFor(app string, w wish) string {
-	return shapecore.BriefWithExtra(app, shapecore.Wish{Request: w.Request, Page: w.Page, Element: w.Element}, newAppBrief(w.first))
+	return shapingTaskWithLedger(app, w, "")
+}
+
+func shapingTaskWithLedger(app string, w wish, ledger string) string {
+	return shapecore.BriefWithExtra(app, shapecore.Wish{Request: w.Request, Page: w.Page, Element: w.Element}, newAppBrief(w.first)+ledger)
 }
 
 // ShapingBrief returns the instruction brief built for the shaping agent.
@@ -521,7 +525,8 @@ func (s *server) runCandidate(a *shapedApp, dir string, c Candidate, operator bo
 		fail(fmt.Errorf("prepare workspace: %w", err))
 		return
 	}
-	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work, Task: shapingTaskFor(a.name, wish{Request: c.Request, Page: c.Page, Element: c.Element})})
+	ledger := a.workLedger(work, c.BaseRev, c.Principal, c.ID)
+	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work, Task: shapingTaskWithLedger(a.name, wish{Request: c.Request, Page: c.Page, Element: c.Element}, ledger)})
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	if err != nil {
 		fail(fmt.Errorf("shaping agent: %w", err))

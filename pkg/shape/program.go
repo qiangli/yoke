@@ -411,10 +411,14 @@ func programCriterion(path string) bool {
 }
 
 func (s Service) GenerationBrief(w Wish) string {
+	return s.generationBriefWithLedger(w, "")
+}
+
+func (s Service) generationBriefWithLedger(w Wish, extra string) string {
 	if s.Kind() == "web" {
-		return Brief(s.App.Name, w)
+		return BriefWithExtra(s.App.Name, w, extra)
 	}
-	text := Brief(s.App.Name, w)
+	text := BriefWithExtra(s.App.Name, w, extra)
 	text = strings.Replace(text, "You are changing the web app", "You are changing the "+s.Kind()+" app", 1)
 	start := strings.Index(text, "Layout:")
 	end := strings.Index(text, "Everything in this directory")
