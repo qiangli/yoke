@@ -614,6 +614,23 @@ type ToolAuth struct {
 	// credential lives in the worker config dir instead (codex device-code
 	// cache, agy persisted sign-in, muse subscription credential).
 	TokenRef string `yaml:"token_ref,omitempty" json:"token_ref,omitempty" doc:"vault credential ref projected as the worker subscription token"`
+	// LoginSession lists the operating systems (GOOS values) on which the
+	// tool's subscription login lives in the user's login session (the
+	// macOS keychain), so a process outside that session, such as a boot
+	// service, cannot use it. The model door forwards such a tool to the
+	// user's session door (`bashy llm up --session`). Measured per OS.
+	LoginSession []string `yaml:"login_session,omitempty" json:"login_session,omitempty" doc:"GOOS values where the tool login needs the user login session (keychain)"`
+}
+
+// NeedsLoginSession reports whether the tool's login needs the user's login
+// session on goos.
+func (a ToolAuth) NeedsLoginSession(goos string) bool {
+	for _, g := range a.LoginSession {
+		if g == goos {
+			return true
+		}
+	}
+	return false
 }
 
 // ToolDecoder selects answer text from a structured stdout event.

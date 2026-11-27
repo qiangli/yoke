@@ -33,6 +33,33 @@ func Port() int {
 // BaseURL is the door's loopback base URL.
 func BaseURL() string { return fmt.Sprintf("http://127.0.0.1:%d", Port()) }
 
+// The session door (`bashy llm up --session`) runs in the user's login
+// session for CLIs whose login lives there. It has its own bashy home (so its
+// own token and state) and its own port.
+const (
+	SessionPortEnv     = "BASHY_LLM_SESSION_PORT"
+	DefaultSessionPort = 24566
+)
+
+// SessionPort is the session door's port.
+func SessionPort() int {
+	if v := strings.TrimSpace(os.Getenv(SessionPortEnv)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
+			return n
+		}
+	}
+	return DefaultSessionPort
+}
+
+// SessionHome is the session door's bashy home: <home>/session.
+func SessionHome() (string, error) {
+	h, err := home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(h, "session"), nil
+}
+
 // home is the bashy home: $BASHY_HOME or ~/.bashy (never os.UserConfigDir).
 func home() (string, error) {
 	if h := strings.TrimSpace(os.Getenv("BASHY_HOME")); h != "" {

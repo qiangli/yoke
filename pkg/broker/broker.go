@@ -103,6 +103,9 @@ type Options struct {
 	// door forwards to unchanged (tool calls, streaming and all). Nil = none;
 	// unresolved models fall through to the fleet agents.
 	API APIResolver
+	// Session forwards CLIs whose login lives in the user's login session to
+	// the session door. Nil = serve every CLI in-process.
+	Session SessionDoor
 	// Token is the owner's bearer token (required).
 	Token string
 	// Principal names the owner (default "owner").
@@ -543,6 +546,19 @@ func (b *Broker) dispatch(w http.ResponseWriter, r *http.Request, ri *reqInfo, b
 			}
 			if found {
 				backend, api = BackendAPI, &up
+			}
+		}
+		// A CLI whose login lives in the user's login session goes to the
+		// session door; everything else stays in-process (local models were
+		// settled above, so the engine path is untouched).
+		if api == nil && slash == "" && !native && b.opts.Session != nil && b.opts.CLI != nil && apiPassthroughPath(r.URL.Path) {
+			up, found, err := b.sessionUpstream(ctx, model)
+			if err != nil {
+				writeErr(w, r.URL.Path, http.StatusServiceUnavailable, err.Error())
+				return
+			}
+			if found {
+				backend, api = BackendSession, &up
 			}
 		}
 	}

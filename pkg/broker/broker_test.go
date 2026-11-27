@@ -750,3 +750,56 @@ func TestStickyUnavailableIdentityIsRefusedNotRerouted(t *testing.T) {
 		t.Fatalf("the engine served something: %v", after)
 	}
 }
+
+// fakeSessionDoor stands in for LocalSessionDoor: which tools need the login
+// session, and whether the session door answers.
+type fakeSessionDoor struct {
+	needs map[string]bool
+	base  string
+	up    bool
+}
+
+func (f *fakeSessionDoor) NeedsSession(tool string) bool { return f.needs[tool] }
+func (f *fakeSessionDoor) Upstream(context.Context) (string, string, bool) {
+	return f.base, "session-token", f.up
+}
+
+// TestSessionBoundCLIForwardsToTheSessionDoor pins Sprint 738 G1: a CLI whose
+// login lives in the user's login session is forwarded to the session door
+// with its own token and the resolved agent as the model; with no session
+// door it is refused with the command to start one; any other CLI, and every
+// local model, stays on its own backend.
+func TestSessionBoundCLIForwardsToTheSessionDoor(t *testing.T) {
+	var gotAuth, gotModel string
+	session := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotModel, _ = body["model"].(string)
+		io.WriteString(w, `{"choices":[{"message":{"content":"session"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer session.Close()
+	sd := &fakeSessionDoor{needs: map[string]bool{"claude": true}, base: session.URL + "/v1", up: true}
+	h := newHarness(t, func(o *Options) { o.Session = sd })
+
+	resp, out := h.do("POST", "/v1/chat/completions", chat("claude-opus5"), nil)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(BackendHeader) != BackendSession {
+		t.Fatalf("session-bound CLI: status %d backend %q body %v", resp.StatusCode, resp.Header.Get(BackendHeader), out)
+	}
+	if gotAuth != "Bearer session-token" || gotModel != "claude-opus5" {
+		t.Fatalf("forwarded with auth %q model %q", gotAuth, gotModel)
+	}
+
+	sd.up = false
+	resp, out = h.do("POST", "/v1/chat/completions", chat("claude-opus5"), nil)
+	raw, _ := json.Marshal(out)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(raw), "bashy llm up --session") {
+		t.Fatalf("no session door: status %d body %v", resp.StatusCode, out)
+	}
+
+	sd.needs = map[string]bool{}
+	resp, _ = h.do("POST", "/v1/chat/completions", chat("claude-opus5"), nil)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get(BackendHeader) != BackendCLI {
+		t.Fatalf("other CLI: status %d backend %q", resp.StatusCode, resp.Header.Get(BackendHeader))
+	}
+}

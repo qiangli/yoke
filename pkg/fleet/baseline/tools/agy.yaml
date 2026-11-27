@@ -128,6 +128,10 @@ cli:
     # keychain even with an isolated HOME. Probe from the worker environment:
     # `agy models` prints tab-separated ID and name rows when signed in.
     auth:
+      # The login lives in the user's login session on macOS (keychain): a boot
+      # service cannot use it, so the door forwards to the session door
+      # (`bashy llm up --session`). Measured 2026-11-27, Sprint 738 G1.
+      login_session: [darwin]
       check_exec: models
       ok_match: ['(?m)^[A-Za-z0-9][\w.+~-]*\t+\S']
     # UNVERIFIED name (same as the booth's derived fallback); E1 live check.

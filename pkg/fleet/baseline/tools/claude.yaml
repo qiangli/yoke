@@ -183,6 +183,10 @@ cli:
     # no user/project/local settings load, forceLoginMethod claudeai, and an
     # empty key helper so no provider key helper can inject a metered key.
     auth:
+      # The login lives in the user's login session on macOS (keychain): a boot
+      # service cannot use it, so the door forwards to the session door
+      # (`bashy llm up --session`). Measured 2026-11-27, Sprint 738 G1.
+      login_session: [darwin]
       check_exec: auth status --json
       ok_match: ['"loggedIn":\s*true', '"authMethod":\s*"oauth_token"', '"subscriptionType":\s*"[^"]+"']
       lane_args: [--setting-sources, "", --settings, '{"forceLoginMethod":"claudeai","apiKeyHelper":""}']

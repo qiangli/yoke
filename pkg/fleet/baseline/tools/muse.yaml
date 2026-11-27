@@ -127,6 +127,10 @@ cli:
     # check (the --contributor-mode flag is not accepted
     # by every pinned build, and env can never be refused as unknown).
     auth:
+      # The login lives in the user's login session on macOS (keychain): a boot
+      # service cannot use it, so the door forwards to the session door
+      # (`bashy llm up --session`). Measured 2026-11-27, Sprint 738 G1.
+      login_session: [darwin]
       check_exec: login
     # UNVERIFIED name (same as the booth's derived fallback); E1 live check.
     config_dir_env: MUSE_CONFIG_DIR

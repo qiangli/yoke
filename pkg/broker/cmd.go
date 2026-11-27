@@ -268,6 +268,11 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 	// Fleet API models (kind api: base_url + api_key_ref) are served by plain
 	// passthrough, so tool-calling clients reach them unchanged.
 	opts.API = &FleetAPI{}
+	// The system door forwards session-bound CLIs; the session door itself
+	// serves them and never forwards.
+	if os.Getenv(SessionDoorEnv) != "1" {
+		opts.Session = &LocalSessionDoor{}
+	}
 	var cli *cligw.Server
 	if !o.NoCLI {
 		cliOpts, err := cliServerOptions(token, o)
@@ -283,6 +288,11 @@ func RunDoor(ctx context.Context, o DoorOptions) error {
 		versions := &toolVersions{probe: cli.VersionProbeArgv}
 		opts.CLI = cliAdapter{s: cli, versions: versions}
 		opts.ToolVersion = versions.get
+	}
+	// A session door serves CLIs only: never a second local engine, which
+	// would compete with the system door's engine and its sharding.
+	if os.Getenv(SessionDoorEnv) == "1" {
+		o.NoEngine = true
 	}
 	if !o.NoEngine && EngineArgv != nil {
 		engineCtx := DefaultEngineContext
@@ -501,7 +511,7 @@ func waitDoorHealthy(ctx context.Context) error {
 }
 
 func newUpCmd() *cobra.Command {
-	var asService bool
+	var asService, asSession bool
 	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "make sure the model door is running (start it in the background if not)",
@@ -517,6 +527,12 @@ unit's port.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if asSession {
+				if asService {
+					return errors.New("--session and --service do not combine: the session door runs in your login session, not under a service")
+				}
+				return ensureSessionUp(c)
+			}
 			if !asService {
 				if err := EnsureUp(c.Context()); err != nil {
 					return err
@@ -541,7 +557,31 @@ unit's port.`,
 		},
 	}
 	cmd.Flags().BoolVar(&asService, "service", false, "enable the llm unit (bashy supervisord autostarts and restarts it) in addition to starting it now")
+	cmd.Flags().BoolVar(&asSession, "session", false, "start the session door in this login session, for CLIs whose login lives there (the system door forwards them to it)")
 	return cmd
+}
+
+// ensureSessionUp starts the session door: the same detached `llm serve`,
+// with its own bashy home and port, marked so it never forwards and never
+// starts a local engine.
+func ensureSessionUp(c *cobra.Command) error {
+	home, err := door.SessionHome()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	for k, v := range map[string]string{"BASHY_HOME": home, door.PortEnv: strconv.Itoa(door.SessionPort()), SessionDoorEnv: "1"} {
+		if err := os.Setenv(k, v); err != nil {
+			return err
+		}
+	}
+	if err := EnsureUp(c.Context()); err != nil {
+		return err
+	}
+	fmt.Fprintf(c.OutOrStdout(), "session door up on %s (the system door forwards session-bound CLIs to it)\n", door.BaseURL())
+	return nil
 }
 
 // doorStopper stops the door process; stopDoorProcess by default. A package
