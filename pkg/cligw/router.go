@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/chat"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,7 +196,7 @@ func NewRouter(catalog *FleetCatalog, policy Policy, options ...RouterOption) *R
 	if catalog == nil {
 		catalog = LoadFleetCatalog()
 	}
-	opt := routerOptions{historyLimit: 256, lookPath: exec.LookPath}
+	opt := routerOptions{historyLimit: 256, lookPath: resolveToolPath}
 	for _, option := range options {
 		option(&opt)
 	}
@@ -501,8 +502,37 @@ func (r *Router) toolInstalled(agent Agent) bool {
 	if err != nil {
 		return false
 	}
+	// A managed tool is launched from its pin, installed on first use
+	// (agentlaunch.EnsureManaged), never looked up on PATH: it is installable
+	// when the pin carries this platform, or when an operator override names a
+	// binary that exists. Judging it by its bare name on the door's service
+	// PATH hid claude and muse on every host whose CLIs live in ~/.local/bin.
+	if tool.IsManaged() {
+		if p, ok := tool.ManagedOverride(os.Getenv); ok {
+			_, err := r.lookPath(p)
+			return err == nil
+		}
+		_, err := tool.ManagedBinaryPath()
+		return err == nil
+	}
 	_, err = r.lookPath(tool.Binary())
 	return err == nil
+}
+
+// resolveToolPath finds a tool's binary the way the fleet launches it: PATH,
+// then the per-user binary homes (chat.ResolveToolBinary). The door is often
+// started by a service manager whose PATH leaves out ~/.local/bin, where
+// vendor CLIs install themselves.
+func resolveToolPath(name string) (string, error) {
+	p := chat.ResolveToolBinary(name)
+	if p == "" {
+		return "", exec.ErrNotFound
+	}
+	// A name that already carries a path comes back untouched; it must exist.
+	if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+		return "", exec.ErrNotFound
+	}
+	return p, nil
 }
 
 // MarkIneligible permanently excludes an agent for this router lifetime and

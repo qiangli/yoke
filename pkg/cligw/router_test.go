@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/binmgr"
 	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/sched"
 )
@@ -484,5 +485,75 @@ func TestRouterRefusalEvictsStaleHeadroom(t *testing.T) {
 	}
 	if calls := quota.headrooms("strong") + quota.headrooms("small"); calls <= firstCalls {
 		t.Fatalf("headroom calls = %d after %d, want the refusal to have evicted the stale entries", calls, firstCalls)
+	}
+}
+
+// TestRouterServableResolvesLikeTheFleet pins Sprint 738 C2a: a door started
+// by a service manager has a PATH without ~/.local/bin, where vendor CLIs
+// install themselves, so the router must find a tool the way the fleet
+// launches it. A CLI only in a per-user bin dir is servable, and so is a
+// managed tool whose pin carries this platform even with nothing on PATH;
+// a managed pin with no asset here, or a tool found nowhere, is not.
+func TestRouterServableResolvesLikeTheFleet(t *testing.T) {
+	root := t.TempDir()
+	userBin := filepath.Join(root, "user-bin")
+	if err := os.MkdirAll(userBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userBin, "user-only-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DHNT_BIN_DIR", userBin)
+	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv(fleet.ToolBinaryOverrideEnv("pinned-tool"), "")
+	t.Setenv(fleet.ToolBinaryOverrideEnv("pinned-elsewhere"), "")
+
+	cat := fleet.New(fleet.WithRoot(filepath.Join(root, "fleet")), fleet.WithBaselineFS(fstest.MapFS{}), fleet.WithoutCloudOverlay())
+	asset := func(platform string) map[string]fleet.ToolManagedAsset {
+		return map[string]fleet.ToolManagedAsset{platform: {
+			URL:    "https://example.invalid/{version}/pinned.tar.gz",
+			SHA256: strings.Repeat("a", 64),
+		}}
+	}
+	tools := []fleet.Tool{
+		{Name: "user-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "user-only-cli", Launch: fleet.ToolLaunch{Exec: "user-only-cli {prompt}"}}},
+		{Name: "nowhere-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "no-such-cli-anywhere", Launch: fleet.ToolLaunch{Exec: "no-such-cli-anywhere {prompt}"}}},
+		{Name: "pinned-tool", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "pinned-cli", Launch: fleet.ToolLaunch{Exec: "pinned-cli {prompt}"},
+			Managed: &fleet.ToolManaged{Source: "github-release", Version: "v1.0.0", License: "Apache-2.0", Assets: asset(binmgr.Platform())}}},
+		{Name: "pinned-elsewhere", Kind: fleet.ToolKindCLI, CLI: fleet.ToolCLI{Binary: "pinned-cli", Launch: fleet.ToolLaunch{Exec: "pinned-cli {prompt}"},
+			Managed: &fleet.ToolManaged{Source: "github-release", Version: "v1.0.0", License: "Apache-2.0", Assets: asset("plan9-mips")}}},
+	}
+	for _, tool := range tools {
+		if err := cat.SaveTool(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cat.SaveModel(fleet.Model{Name: "mid", Band: 3, Kind: fleet.ModelKindAPI, Provider: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []fleet.Agent{
+		{Name: "user-agent", Tool: "user-tool", Model: "mid"},
+		{Name: "nowhere-agent", Tool: "nowhere-tool", Model: "mid"},
+		{Name: "pinned-agent", Tool: "pinned-tool", Model: "mid"},
+		{Name: "elsewhere-agent", Tool: "pinned-elsewhere", Model: "mid"},
+	} {
+		if err := cat.SaveAgent(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog := NewFleetCatalog(cat)
+	agents := map[string]Agent{}
+	for _, a := range catalog.inventory() {
+		agents[a.Name] = a
+	}
+	router := NewRouter(catalog, DefaultPolicy())
+	for name, want := range map[string]bool{"user-agent": true, "pinned-agent": true, "nowhere-agent": false, "elsewhere-agent": false} {
+		a, ok := agents[name]
+		if !ok {
+			t.Fatalf("fixture inventory is missing %q", name)
+		}
+		if got, reason := router.Servable(a); got != want {
+			t.Fatalf("%s Servable = (%v, %q), want %v", name, got, reason, want)
+		}
 	}
 }

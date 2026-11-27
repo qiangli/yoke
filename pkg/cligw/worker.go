@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/chat"
 	"io"
 	"os"
 	"os/exec"
@@ -135,6 +136,13 @@ func resolveWorkerSeat(ctx context.Context, agent string) (string, agentlaunch.L
 	// applied here: cligw's pure-completion boundary remains fail-closed even if
 	// a caller replaces the resolver with a host-local profile.
 	launch.Args = agentlaunch.ApplySandbox(launch.ToolName, launch.Args, opt)
+	// An unpinned tool named by its bare name is resolved here, the way the
+	// fleet does, so a door with a service PATH still starts it.
+	if launch.ManagedTool == nil && !strings.ContainsRune(launch.Tool, '/') && !strings.ContainsRune(launch.Tool, filepath.Separator) {
+		if p := chat.ResolveToolBinary(launch.Tool); p != "" {
+			launch.Tool = p
+		}
+	}
 	tool, ok := agentlaunch.NewCatalog().Tool(launch.ToolName)
 	if !ok {
 		return "", launch, tool, "", fmt.Errorf("cligw: resolved tool %q is not in the fleet catalog", launch.ToolName)
