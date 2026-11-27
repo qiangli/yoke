@@ -153,7 +153,7 @@ func weaveHandoffNewClaims(dir string, it *weaveItem, actor string) ([]weaveWork
 			return nil, err
 		}
 		if story.Assignee != "" && !strings.EqualFold(story.Assignee, actor) {
-			return nil, fmt.Errorf("handoff story %s is held by %s; explicitly reassign the story to %s before handing off", st.ID, story.Assignee, actor)
+			return nil, fmt.Errorf("handoff story %s is held by %s; explicitly reassign the story to %s before handing off: bashy sprint yield %d %s --as %s --repo %s && bashy sprint claim %d %s --as %s --repo %s", st.ID, story.Assignee, actor, st.Sprint, st.ID, story.Assignee, st.Repo, st.Sprint, st.ID, actor, st.Repo)
 		}
 		if story.Assignee == "" {
 			st.Actor = actor

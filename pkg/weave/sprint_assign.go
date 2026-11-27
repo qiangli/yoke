@@ -361,7 +361,8 @@ func sprintAssignCommand(review bool) *cobra.Command {
 	var requiredCaps []string
 	var points, band, authorBand int
 	var dry bool
-	var idleTimeout time.Duration
+	var idleTimeout, maxRuntime time.Duration
+	var verify string
 	name := "assign"
 	short := "Schedule a fleet worker through the band ladder"
 	if review {
@@ -384,6 +385,8 @@ func sprintAssignCommand(review bool) *cobra.Command {
 		cmd.Flags().IntVar(&band, "band", 3, "owning band (3, 4 or 5)")
 		cmd.Flags().StringVar(&manual, "agent", "", "manual assignment override, recorded in the thread")
 		cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "output-idle watchdog threshold; 0 keeps default (10m)")
+		cmd.Flags().StringVar(&verify, "verify", "", "verify command the run records at terminal time (`bash -c` in the workspace); without one the worker cannot submit its own story")
+		cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "run wall-time cap; 0 keeps the points-derived default")
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		exclusions, err := sprintAssignExcludeOptions(excludeTools, excludeAgents)
@@ -582,7 +585,13 @@ func sprintAssignCommand(review bool) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "readiness=%s binding=%s venue=local-host required_capabilities=%v capability_band=%d band_source=%s band_season=%d capacity=local-queue-free evidence=bound-model-smoke+catalog+local-queue probe_at=%s checked_at=%s\n", selected, binding.MatrixKey(), requiredCaps, selectedModel.Band, selectedModel.BandSource, selectedModel.BandSeason, probeAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 			return nil
 		}
-		return sprintAssignDispatch(cmd, task, pool, lines, manual, dry, root, sprintAssignDeps{seed: func() (int64, error) { return sprintAssignSeed(cmd, id, root, story, points, band) }, preflight: preflight, record: record, launch: func(cmd *cobra.Command, r sprintAssignLaunch) error {
+		return sprintAssignDispatch(cmd, task, pool, lines, manual, dry, root, sprintAssignDeps{seed: func() (int64, error) {
+			run, err := sprintAssignSeed(cmd, id, root, story, points, band)
+			if err == nil && verify != "" {
+				err = sprintAssignSetVerify(root, run, verify)
+			}
+			return run, err
+		}, preflight: preflight, record: record, launch: func(cmd *cobra.Command, r sprintAssignLaunch) error {
 			// Re-read availability after seeding: do not use clones to bypass a busy base.
 			fresh, _, err := sprintAssignPool(root, events, time.Now(), exclusions)
 			if err != nil {
@@ -623,6 +632,9 @@ func sprintAssignCommand(review bool) *cobra.Command {
 			story.Assignee = r.Agent
 			if _, err = todopkg.RepoStore(root).Save(story); err != nil {
 				return err
+			}
+			if maxRuntime > 0 {
+				r.MaxRuntime = maxRuntime
 			}
 			return sprintAssignLaunchWorker(cmd, r)
 		}}, effIdleTimeout)
@@ -700,4 +712,23 @@ type weaveScriptAssignment struct {
 	Body   string `json:"body"`
 	Runner string `json:"runner"`
 	Digest string `json:"digest"`
+}
+
+// sprintAssignSetVerify records the conductor's verify command on a seeded
+// run, so the worker's terminal state carries a verify result and the run can
+// submit its own story (weaveSubmitWorkerStories refuses without one).
+func sprintAssignSetVerify(root string, run int64, verify string) error {
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		return err
+	}
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		for _, it := range q.Items {
+			if it.ID == run {
+				it.VerifyCommand = verify
+				return nil
+			}
+		}
+		return fmt.Errorf("run #%d not found", run)
+	})
 }
