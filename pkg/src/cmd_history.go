@@ -169,7 +169,7 @@ from --user or $BASHY_PRINCIPAL.`,
 }
 
 func newRestoreCmd() *cobra.Command {
-	var user string
+	var user, reason string
 	c := &cobra.Command{
 		Use:   "restore <app> <rev>",
 		Short: "Return to a version through a new forward commit, gated and activated",
@@ -190,7 +190,7 @@ $BASHY_PRINCIPAL.`,
 			if err != nil {
 				return err
 			}
-			res, err := RestoreSealed(cmd.Context(), "", args[0], args[1], p, RestoreSealedOptions{})
+			res, err := RestoreSealed(cmd.Context(), "", args[0], args[1], p, RestoreSealedOptions{Reason: reason})
 			if err != nil {
 				return err
 			}
@@ -203,12 +203,13 @@ $BASHY_PRINCIPAL.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&reason, "reason", "", "Reason to record in the decision log")
 	userFlag(c, &user)
 	return c
 }
 
 func newUndoCmd() *cobra.Command {
-	var user string
+	var user, reason string
 	c := &cobra.Command{
 		Use:   "undo <app>",
 		Short: "Return to the previous active revision through a new gated commit",
@@ -225,7 +226,7 @@ $BASHY_PRINCIPAL.`,
 			if err != nil {
 				return err
 			}
-			res, err := UndoSealed(cmd.Context(), "", args[0], p, RestoreSealedOptions{})
+			res, err := UndoSealed(cmd.Context(), "", args[0], p, RestoreSealedOptions{Reason: reason})
 			if err != nil {
 				return err
 			}
@@ -238,6 +239,7 @@ $BASHY_PRINCIPAL.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&reason, "reason", "", "Reason to record in the decision log")
 	userFlag(c, &user)
 	return c
 }

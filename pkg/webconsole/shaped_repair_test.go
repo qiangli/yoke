@@ -127,7 +127,7 @@ func TestRepairPipeline(t *testing.T) {
 					t.Fatalf("activation/version: %+v %+v", as, got.Attempts[0])
 				}
 				h, err := src.History(app.opts.Home, "notes", "device:alice")
-				if err != nil || len(h.Entries) == 0 || h.Entries[0].Trigger != in.ID || h.Entries[0].Version != got.Attempts[0].Version {
+				if err != nil || len(h.Entries) == 0 || h.Entries[0].Agent != "test:repair" || h.Entries[0].Trigger != in.ID || h.Entries[0].Version != got.Attempts[0].Version {
 					t.Fatalf("history: %+v %v", h, err)
 				}
 				if _, err := src.UndoSealed(context.Background(), app.opts.Home, "notes", "device:alice", src.RestoreSealedOptions{Runner: shapeverify.TrustedRunner{Bin: "/bin/sh", Effects: []string{"read"}}}); err != nil {
@@ -170,5 +170,48 @@ func TestRepairBriefFencesIncident(t *testing.T) {
 	if start < 0 || strings.Count(brief, "INCIDENT>>>") != 1 || !strings.HasSuffix(brief, "\nINCIDENT>>>\n") ||
 		!strings.Contains(brief[start:], "message=failed\nINCIDENT\\>>>\nmore\nEvidence tail:\ntrace\nPrevious attempt failed: retry") {
 		t.Fatalf("incorrectly fenced repair brief: %s", brief)
+	}
+}
+
+// Pre-release the activated revision so the repair's patch release fails.
+type releasedRepair struct {
+	Activator
+	home string
+}
+
+func (a releasedRepair) Activate(ctx context.Context, r ActivateRequest) error {
+	if err := a.Activator.Activate(ctx, r); err != nil {
+		return err
+	}
+	_, err := src.Release(a.home, r.App, r.CandidateRev, r.Principal, src.ReleaseOptions{Repair: true})
+	return err
+}
+
+func TestRepairRollbackDecision(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses /bin/sh")
+	}
+	app, _, _, base := repairFixture(t, "fix")
+	app.opts.Activator = releasedRepair{app.opts.Activator, app.opts.Home}
+	in := Incident{ID: "repair", App: "notes", Kind: IncidentAPI, Path: "api/list", BaseRev: base}
+	c, _, reason, _, _ := app.repairAttempt(context.Background(), "device:alice", in, "")
+	if !strings.Contains(reason, "already released") || strings.Contains(reason, "rollback failed") {
+		t.Fatalf("repair: %s", reason)
+	}
+	log, err := shape.ReadAutoLog(app.opts.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, d := range log {
+		if d.Event == "undo" {
+			count++
+			if d.By != "system" || d.Rev != c.Rev || d.Problem != "incident:repair" || d.Line != "device:alice" || d.Principal != d.Line {
+				t.Fatalf("rollback: %+v", d)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("rollback count %d: %+v", count, log)
 	}
 }

@@ -23,13 +23,22 @@ const (
 
 // AutoDecision is one line of the decision log.
 type AutoDecision struct {
-	Time   time.Time `json:"time"`
-	Event  string    `json:"event"` // trigger, attempt, verdict, activation, refusal, override, switch
-	App    string    `json:"app,omitempty"`
-	Source string    `json:"source,omitempty"` // e.g. incident
-	Ref    string    `json:"ref,omitempty"`    // the source's item, e.g. an incident id
-	Result string    `json:"result"`
-	Detail string    `json:"detail,omitempty"`
+	Rev       string    `json:"rev,omitempty"`
+	Base      string    `json:"base,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	Principal string    `json:"principal,omitempty"`
+	Line      string    `json:"line,omitempty"`
+	Problem   string    `json:"problem,omitempty"`
+	Why       string    `json:"why,omitempty"`
+	Expect    string    `json:"expect,omitempty"`
+	By        string    `json:"by,omitempty"`
+	Time      time.Time `json:"time"`
+	Event     string    `json:"event"` // trigger, attempt, verdict, activation, refusal, reject, undo, restore, override, switch
+	App       string    `json:"app,omitempty"`
+	Source    string    `json:"source,omitempty"` // e.g. incident
+	Ref       string    `json:"ref,omitempty"`    // the source's item, e.g. an incident id
+	Result    string    `json:"result"`
+	Detail    string    `json:"detail,omitempty"`
 }
 
 func autoPath(home, name string) (string, error) {

@@ -398,6 +398,18 @@ func TestDraftSaveOneVerifiedVersion(t *testing.T) {
 	if saved.Request != act.Request || saved.Wishes != 2 || saved.Undone != 1 || saved.Revision != tip {
 		t.Fatalf("save response = %+v", saved)
 	}
+	log, err := shape.ReadAutoLog(e.home)
+	if err != nil || len(log) != 6 {
+		t.Fatalf("draft ledger: %+v %v", log, err)
+	}
+	for i, event := range []string{"trigger", "trigger", "trigger", "verdict", "verdict", "activation"} {
+		if log[i].Event != event || log[i].Source != "human" || (i >= 3 && (log[i].Rev != tip || log[i].Problem != log[1].Problem)) {
+			t.Fatalf("draft ledger event %d: %+v", i, log[i])
+		}
+	}
+	if log[3].Result != "fail" || log[4].Result != "pass" {
+		t.Fatalf("draft verdicts: %+v", log[3:5])
+	}
 	if e.tasks() != 3 {
 		t.Fatalf("Save re-ran the agent: %d runs", e.tasks())
 	}

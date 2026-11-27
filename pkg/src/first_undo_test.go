@@ -63,7 +63,7 @@ func TestFirstActivationSealedUndoRetainsReleasePerPrincipal(t *testing.T) {
 	if _, err = wt.Add("public/index.html"); err != nil {
 		t.Fatal(err)
 	}
-	sha, err := wt.Commit("first wish", &gogit.CommitOptions{Author: &object.Signature{Name: "fixture", Email: "fixture@example.invalid", When: time.Now()}})
+	sha, err := wt.Commit("first wish\n\nShape-Agent: old-binding", &gogit.CommitOptions{Author: &object.Signature{Name: "fixture", Email: "fixture@example.invalid", When: time.Now()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,11 @@ func TestFirstActivationSealedUndoRetainsReleasePerPrincipal(t *testing.T) {
 		if e != nil || !proof.Passed() {
 			t.Fatalf("%s first wish proof: %v %+v", principal, e, proof.Record)
 		}
-		activated, e := src.Activate(home, app.Name, sha.String(), principal, src.ActivateOptions{ExpectedBase: base, Gate: shapegate.New(home, proof.Path)})
+		agent, wantAgent := "test-binding", "test-binding"
+		if principal == "bob" {
+			agent, wantAgent = "", "old-binding"
+		}
+		activated, e := src.Activate(home, app.Name, sha.String(), principal, src.ActivateOptions{Agent: agent, ExpectedBase: base, Gate: shapegate.New(home, proof.Path)})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -92,7 +96,7 @@ func TestFirstActivationSealedUndoRetainsReleasePerPrincipal(t *testing.T) {
 			t.Fatalf("%s lost actual release: %+v %+v", principal, activated, read(principal))
 		}
 		history, e := src.History(home, app.Name, principal)
-		if e != nil || len(history.Entries) != 1 {
+		if e != nil || len(history.Entries) != 1 || history.Entries[0].Agent != wantAgent {
 			t.Fatalf("first activation history: %+v %v", history, e)
 		}
 	}
@@ -109,5 +113,22 @@ func TestFirstActivationSealedUndoRetainsReleasePerPrincipal(t *testing.T) {
 	history, err := src.History(home, app.Name, "alice")
 	if err != nil || len(history.Entries) != 2 {
 		t.Fatalf("undo history: %+v %v", history, err)
+	}
+
+	if _, err := src.RestoreSealed(context.Background(), home, app.Name, sha.String(), "alice", src.RestoreSealedOptions{Runner: runner, Reason: "retry wish"}); err != nil {
+		t.Fatal(err)
+	}
+	log, err := state.ReadAutoLog(home)
+	if err != nil || len(log) != 2 {
+		t.Fatalf("decisions: %+v %v", log, err)
+	}
+	for i, event := range []string{"undo", "restore"} {
+		d := log[i]
+		if d.Event != event || d.By != "person" || d.Principal != "alice" || d.Line != "alice" || d.Rev != sha.String() {
+			t.Fatalf("%s: %+v", event, d)
+		}
+	}
+	if log[1].Detail != "retry wish" {
+		t.Fatalf("restore reason: %+v", log[1])
 	}
 }

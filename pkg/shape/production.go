@@ -227,6 +227,6 @@ func (a *ProductionActivator) Activate(ctx context.Context, req ActivateRequest)
 	if gate == nil {
 		gate = shapegate.New(home, req.Evidence)
 	}
-	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{PreSwitchHook: a.beforeActivate, ExpectedBase: req.BaseRev, Gate: gate, Request: req.Request, Trigger: req.Trigger, Author: req.Author})
+	_, err = src.Activate(home, req.App, req.CandidateRev, req.Principal, src.ActivateOptions{PreSwitchHook: a.beforeActivate, ExpectedBase: req.BaseRev, Gate: gate, Request: req.Request, Trigger: req.Trigger, Agent: req.Agent, Author: req.Author})
 	return err
 }

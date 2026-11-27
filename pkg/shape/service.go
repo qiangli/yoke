@@ -124,6 +124,8 @@ type CoverageSummary struct {
 	NotCovered []string `json:"not_covered"`
 }
 type Candidate struct {
+	Why                 string           `json:"why,omitempty"`
+	Expect              string           `json:"expect,omitempty"`
 	Source              Source           `json:"source,omitempty,omitzero"`
 	ProgramPreview      *ProgramPreview  `json:"program_preview,omitempty"`
 	ActivationPrincipal string           `json:"activation_principal,omitempty"`
@@ -566,7 +568,7 @@ func (s Service) begin(ctx context.Context, caller Caller, w Wish, recovery bool
 	if e = SaveCandidate(dir, c); e != nil {
 		return c, e
 	}
-	s.logAuto(c.Source, "trigger", "wish", c.ID)
+	s.LogDecision(c, "trigger", "wish", joinDetail(c.ID, c.Request))
 	return c, nil
 }
 
@@ -636,7 +638,7 @@ func (s Service) FileRequest(ctx context.Context, caller Caller, w Wish) (Candid
 	if e = SaveCandidate(dir, c); e != nil {
 		return c, e
 	}
-	s.logAuto(c.Source, "trigger", "request", c.ID)
+	s.LogDecision(c, "trigger", "request", joinDetail(c.ID, c.Request))
 	return c, nil
 }
 func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runErr error) (Candidate, error) {
@@ -677,7 +679,7 @@ func (s Service) complete(ctx context.Context, caller Caller, c Candidate, runEr
 		return c, e
 	}
 	if runErr != nil {
-		s.logAuto(c.Source, "verdict", "failed", joinDetail(c.ID, runErr.Error()))
+		s.LogDecision(c, "verdict", "failed", joinDetail(c.ID, runErr.Error()))
 	}
 	return c, runErr
 }
@@ -711,6 +713,7 @@ func (s Service) Wish(ctx context.Context, caller Caller, w Wish) (Candidate, er
 	res, e := s.Options.Delegate.Delegate(ctx, DelegateRequest{Dir: c.Workspace, Task: s.GenerationBrief(w)})
 	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	c.Coverage = ParseCoverage(res.Output)
+	c.Why, c.Expect = ParseReasons(res.Output)
 	c.Next = ParseNext(res.Output)
 	relativizeCoverage(&c)
 	if e == nil {
@@ -757,14 +760,14 @@ func (s Service) Diff(ctx context.Context, caller Caller, id string) (string, er
 	}
 	return Diff(work, c.BaseRev, c.Rev)
 }
-func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
+func (s Service) verify(ctx context.Context, c *Candidate, dir string, recordVerdict func(Candidate)) error {
 	if c.Rev == "" || (c.Status != Ready && c.Status != Verified) {
 		return ErrConflict
 	}
 	if e := TouchesProtected(filepath.Join(dir, "work"), c.BaseRev, c.Rev, s.App.Protected); e != nil {
 		c.Verdict = &Verdict{Pass: false, Detail: e.Error()}
 		c.Status = Ready
-		s.logAutoVerdict(*c)
+		recordVerdict(*c)
 		if s.Options.Track != nil {
 			if te := s.Options.Track(ctx, c); te != nil {
 				return te
@@ -780,7 +783,7 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string) error {
 		return e
 	}
 	c.Verdict = &v
-	s.logAutoVerdict(*c)
+	recordVerdict(*c)
 	if v.Artifact != "" {
 		c.Artifact = v.Artifact
 		c.ArtifactPath = v.ArtifactPath
@@ -811,7 +814,7 @@ func (s Service) Verify(ctx context.Context, caller Caller, id string) (Candidat
 	if e != nil {
 		return c, e
 	}
-	if e = s.verify(ctx, &c, d); e != nil {
+	if e = s.verify(ctx, &c, d, s.logAutoVerdict); e != nil {
 		return c, e
 	}
 	if c.Verdict == nil || !c.Verdict.Pass {
@@ -821,13 +824,12 @@ func (s Service) Verify(ctx context.Context, caller Caller, id string) (Candidat
 }
 func (s Service) Approve(ctx context.Context, caller Caller, id string) (Candidate, error) {
 	c, e := s.approve(ctx, caller, id)
-	// An unattended candidate's activation is on the decision log, so the
-	// owner can see what was switched and undo it.
+	// Log only decisions that name a candidate.
 	switch {
 	case c.Status == Approved:
-		s.logAuto(c.Source, "activation", "activated", joinDetail(c.ID, c.Rev))
-	case e != nil:
-		s.logAuto(c.Source, "activation", "failed", joinDetail(c.ID, e.Error()))
+		s.LogDecision(c, "activation", "activated", joinDetail(c.ID, c.Rev))
+	case e != nil && c.ID != "":
+		s.LogDecision(c, "activation", "failed", joinDetail(c.ID, e.Error()))
 	}
 	return c, e
 }
@@ -882,7 +884,7 @@ func (s Service) approve(ctx context.Context, caller Caller, id string) (Candida
 	if active != c.BaseRev {
 		return c, fmt.Errorf("%w: active revision changed (base %s, active %s); create a fresh candidate", ErrConflict, c.BaseRev, active)
 	}
-	if e = s.verify(ctx, &c, d); e != nil {
+	if e = s.verify(ctx, &c, d, s.logAutoVerdict); e != nil {
 		return c, e
 	}
 	if c.Verdict == nil || !c.Verdict.Pass {
@@ -971,13 +973,20 @@ func (s Service) finishApproval(ctx context.Context, c Candidate, d string) (Can
 			return c, fmt.Errorf("shape: activated, but tracking update failed: %w", e)
 		}
 	}
-	if e = s.remove(qp, c.ID, d); e != nil {
+	if e = s.cleanPreview(qp, c.ID); e == nil {
+		e = os.RemoveAll(d)
+	}
+	if e != nil {
 		return c, fmt.Errorf("shape: activated; disposable cleanup failed: %w", e)
 	}
 	return c, nil
 }
 
 func (s Service) Reject(ctx context.Context, caller Caller, id string) (Candidate, error) {
+	return s.RejectWithReason(ctx, caller, id, "")
+}
+
+func (s Service) RejectWithReason(ctx context.Context, caller Caller, id, reason string) (Candidate, error) {
 	l, e := s.lock(caller)
 	if e != nil {
 		return Candidate{}, e
@@ -990,7 +999,13 @@ func (s Service) Reject(ctx context.Context, caller Caller, id string) (Candidat
 	if c.Status == Approved || c.Status == "activating" {
 		return c, ErrConflict
 	}
-	if e = s.remove(s.candidateQueuePrincipal(c), c.ID, d); e != nil {
+	if e = s.cleanPreview(s.candidateQueuePrincipal(c), c.ID); e != nil {
+		return c, e
+	}
+	dlog := s.decision(c, "reject", "rejected", joinDetail(c.Request, reason))
+	dlog.Principal, dlog.By = caller.Principal, "person"
+	s.writeDecision(dlog)
+	if e = os.RemoveAll(d); e != nil {
 		return c, e
 	}
 	c.Status = Rejected
@@ -1008,9 +1023,9 @@ func (s Service) approvedDir(p, id string) (string, error) {
 	}
 	return filepath.Join(r, ".approved", s.App.Name, PrincipalKey(s.QueuePrincipal(p)), id), nil
 }
-func (s Service) remove(p, id, dir string) error {
+func (s Service) cleanPreview(p, id string) error {
 	if s.isBashy() {
-		return os.RemoveAll(dir)
+		return nil
 	}
 	if s.Kind() != "web" {
 		if c, _, e := s.load(p, id); e == nil {
@@ -1028,12 +1043,22 @@ func (s Service) remove(p, id, dir string) error {
 			return e
 		}
 	}
-	return os.RemoveAll(dir)
+	return nil
 }
 
 // VerifyRecord reuses the same verifier for console draft saves, whose record
 // is owned by the draft store rather than the ordinary candidate listing.
 func (s Service) VerifyRecord(ctx context.Context, caller Caller, c *Candidate, dir string) error {
+	return s.verifyRecord(ctx, caller, c, dir, s.logAutoVerdict)
+}
+
+// VerifyRepairRecord leaves verdict logging to the repair loop, which records
+// the attempt outcome and then its verdict together.
+func (s Service) VerifyRepairRecord(ctx context.Context, caller Caller, c *Candidate, dir string) error {
+	return s.verifyRecord(ctx, caller, c, dir, func(Candidate) {})
+}
+func (s Service) verifyRecord(ctx context.Context, caller Caller, c *Candidate, dir string, recordVerdict func(Candidate)) error {
+
 	if s.isBashy() {
 		return ErrBashyActivation
 	}
@@ -1056,7 +1081,7 @@ func (s Service) VerifyRecord(ctx context.Context, caller Caller, c *Candidate, 
 	if c.RepresentedUser == "" {
 		c.RepresentedUser = caller.Principal
 	}
-	return s.verify(ctx, c, dir)
+	return s.verify(ctx, c, dir, recordVerdict)
 }
 
 // Update serializes web-specific terminal metadata changes with CLI decisions.

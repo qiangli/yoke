@@ -265,6 +265,7 @@ type ActivateOptions struct {
 	Gate          state.ActivationGate
 	PreSwitchHook func() error
 	Request       string
+	Agent         string
 	Trigger       string // incident ID for a verified repair
 	Author        string // version author when distinct from Principal (a scoped member)
 	When          time.Time
@@ -390,6 +391,9 @@ func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (A
 		app, shortSHA(revSHA), principal, revSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
 	if author != principal {
 		msg += "Author: " + oneLineRequest(author) + "\n"
+	}
+	if agent := oneLineRequest(opts.Agent); agent != "" {
+		msg += "Agent: " + agent + "\n"
 	}
 	if opts.Trigger != "" {
 		msg += "Trigger: " + oneLineRequest(opts.Trigger) + "\n"

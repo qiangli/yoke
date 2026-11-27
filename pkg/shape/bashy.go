@@ -101,6 +101,6 @@ func (s Service) bashyRecord(ctx context.Context, caller Caller, w Wish) (Candid
 	if e = SaveCandidate(dir, c); e != nil {
 		return c, e
 	}
-	s.logAuto(c.Source, "trigger", "report", c.ID)
+	s.LogDecision(c, "trigger", "report", joinDetail(c.ID, c.Request))
 	return c, nil
 }

@@ -40,6 +40,7 @@ type historyVersion struct {
 	Summary     string    `json:"summary,omitempty"`
 	Verdict     string    `json:"verdict,omitempty"`
 	Evidence    string    `json:"evidence,omitempty"`
+	Agent       string    `json:"agent,omitempty"`
 	Trigger     string    `json:"trigger,omitempty"`
 	Principal   string    `json:"principal,omitempty"`
 	Author      string    `json:"author,omitempty"`
@@ -93,7 +94,7 @@ func toHistoryView(h src.VersionHistory) historyView {
 			Activation: e.Activation, Revision: e.Revision, Version: e.Version, Kind: e.Kind,
 			Request: e.Request, Verdict: e.Verdict, Evidence: e.Evidence, Trigger: e.Trigger,
 			Summary:   historySummary(message),
-			Principal: e.Principal, Author: e.Author, When: e.When,
+			Principal: e.Principal, Agent: e.Agent, Author: e.Author, When: e.When,
 			Names: names[e.Revision], Active: e.Revision == h.Active && h.Active != "",
 		})
 	}
@@ -299,12 +300,12 @@ func restoreRunner(a *shapedApp) (shapeverify.Runner, error) {
 // shared verify-seal-gate function the src CLI uses too. Every refusal —
 // unknown version, failed verification, schema incompatibility, gate
 // refusal — returns the reason and leaves the active revision unchanged.
-func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, home, rev string) (src.ActivateResult, error) {
+func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, home, rev, reason string) (src.ActivateResult, error) {
 	runner, err := restoreRunner(a)
 	if err != nil {
 		return src.ActivateResult{}, err
 	}
-	res, err := src.RestoreSealed(ctx, home, a.name, rev, principal, src.RestoreSealedOptions{Runner: runner})
+	res, err := src.RestoreSealed(ctx, home, a.name, rev, principal, src.RestoreSealedOptions{Runner: runner, Reason: reason})
 	if err != nil {
 		if errors.Is(err, src.ErrUnknownVersion) {
 			return src.ActivateResult{}, errUnknownHistoryVersion
@@ -316,12 +317,12 @@ func (s *server) restoreVersion(ctx context.Context, a *shapedApp, principal, ho
 
 // undoVersion returns to the previous active revision through the same
 // shared function: the undo of a restore is a restore.
-func (s *server) undoVersion(ctx context.Context, a *shapedApp, principal, home string) (src.ActivateResult, error) {
+func (s *server) undoVersion(ctx context.Context, a *shapedApp, principal, home, reason string) (src.ActivateResult, error) {
 	runner, err := restoreRunner(a)
 	if err != nil {
 		return src.ActivateResult{}, err
 	}
-	res, err := src.UndoSealed(ctx, home, a.name, principal, src.RestoreSealedOptions{Runner: runner})
+	res, err := src.UndoSealed(ctx, home, a.name, principal, src.RestoreSealedOptions{Runner: runner, Reason: reason})
 	if err != nil {
 		if errors.Is(err, src.ErrUnknownVersion) {
 			return src.ActivateResult{}, errUnknownHistoryVersion
@@ -351,7 +352,8 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var in struct {
-		Rev string `json:"rev"`
+		Rev    string `json:"rev"`
+		Reason string `json:"reason"`
 	}
 	if !decodeHistoryBody(w, r, &in) {
 		return
@@ -361,7 +363,7 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if a.candidateService().Kind() != "web" {
-		status, e := a.candidateService().HostRestore(r.Context(), a.caller(principal), in.Rev)
+		status, e := a.candidateService().HostRestoreWithReason(r.Context(), a.caller(principal), in.Rev, in.Reason)
 		if e != nil {
 			http.Error(w, e.Error(), http.StatusConflict)
 			return
@@ -369,7 +371,7 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{"active": status.SourceRevision, "host": status})
 		return
 	}
-	res, err := s.restoreVersion(r.Context(), a, h.Principal, home, in.Rev)
+	res, err := s.restoreVersion(r.Context(), a, h.Principal, home, in.Rev, in.Reason)
 	if err != nil {
 		slog.Warn("shape history restore refused", "app", a.name, "principal", principal, "rev", in.Rev, "err", err)
 		if errors.Is(err, errUnknownHistoryVersion) {
@@ -390,8 +392,14 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength != 0 && !decodeHistoryBody(w, r, &in) {
+		return
+	}
 	if a.candidateService().Kind() != "web" {
-		status, e := a.candidateService().HostUndo(r.Context(), a.caller(principal))
+		status, e := a.candidateService().HostUndoWithReason(r.Context(), a.caller(principal), in.Reason)
 		if e != nil {
 			http.Error(w, e.Error(), http.StatusConflict)
 			return
@@ -399,7 +407,7 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"active": status.SourceRevision, "host": status})
 		return
 	}
-	res, err := s.undoVersion(r.Context(), a, h.Principal, home)
+	res, err := s.undoVersion(r.Context(), a, h.Principal, home, in.Reason)
 	if err != nil {
 		slog.Warn("shape history undo refused", "app", a.name, "principal", principal, "err", err)
 		if errors.Is(err, errUnknownHistoryVersion) {

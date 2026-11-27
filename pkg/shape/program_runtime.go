@@ -705,6 +705,10 @@ func (s Service) restoreTarget(ctx context.Context, ref string) (string, string,
 // source and artifact. Product emergency recovery is separate and keeps exact
 // retained release bytes runnable even when normal proof is unavailable.
 func (s Service) HostUndo(ctx context.Context, caller Caller) (HostStatus, error) {
+	return s.HostUndoWithReason(ctx, caller, "")
+}
+
+func (s Service) HostUndoWithReason(ctx context.Context, caller Caller, reason string) (HostStatus, error) {
 	if s.isBashy() {
 		return HostStatus{}, ErrBashyActivation
 	}
@@ -742,9 +746,17 @@ func (s Service) HostUndo(ctx context.Context, caller Caller) (HostStatus, error
 	if target == "" {
 		return HostStatus{}, errors.New("shape: no previous host version")
 	}
-	return s.HostRestore(ctx, caller, target)
+	return s.restoreHost(ctx, caller, target, "undo", reason)
 }
 func (s Service) HostRestore(ctx context.Context, caller Caller, ref string) (HostStatus, error) {
+	return s.HostRestoreWithReason(ctx, caller, ref, "")
+}
+
+func (s Service) HostRestoreWithReason(ctx context.Context, caller Caller, ref, reason string) (HostStatus, error) {
+	return s.restoreHost(ctx, caller, ref, "restore", reason)
+}
+
+func (s Service) restoreHost(ctx context.Context, caller Caller, ref, event, reason string) (HostStatus, error) {
 	if s.isBashy() {
 		return HostStatus{}, ErrBashyActivation
 	}
@@ -807,6 +819,12 @@ func (s Service) HostRestore(ctx context.Context, caller Caller, ref string) (Ho
 	if e = s.activateProgram(ctx, c); e != nil {
 		return HostStatus{}, e
 	}
+	decision := s.decision(c, event, "activated", reason)
+	decision.By = "person"
+	if event == "undo" {
+		decision.Rev = c.BaseRev
+	}
+	s.writeDecision(decision)
 	c.Status = Approved
 	if _, e = s.finishApproval(ctx, c, dir); e != nil {
 		return HostStatus{}, e

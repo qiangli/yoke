@@ -154,7 +154,7 @@ func repairBrief(app string, in Incident, previous string) string {
 	if previous != "" {
 		details += "\nPrevious attempt failed: " + previous
 	}
-	return brief + shapecore.FenceUntrusted("INCIDENT", details)
+	return brief + "Finish with WHY: and EXPECT: sections. Give one bullet under each for the reason and the outcome predicted before verification.\n" + shapecore.FenceUntrusted("INCIDENT", details)
 }
 
 func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
@@ -180,7 +180,7 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 		if home, err := a.opts.home(); err == nil {
 			var why string
 			if why, override = shape.TakeAutoOverride(home); override {
-				a.logAuto(first, "override", "used", why)
+				a.logAuto(principal, first, "override", "used", why)
 			}
 		}
 		limit = a.repairLimit(first.BaseRev, override)
@@ -204,13 +204,13 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 		// off switch, the wall-time bound, or a cancelled parent.
 		if !a.autoEnabled() {
 			_, _ = incidents.Fail(id)
-			a.logAuto(in, "refusal", "off", fmt.Sprintf("stopped after %d attempts: unattended shaping is off on this host", len(in.Attempts)))
+			a.logAuto(principal, in, "refusal", "off", fmt.Sprintf("stopped after %d attempts: unattended shaping is off on this host", len(in.Attempts)))
 			return
 		}
 		if ctx.Err() != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				_, _ = incidents.Fail(id)
-				a.logAuto(in, "refusal", "wall-time", fmt.Sprintf("stopped after %d attempts: over the host bound of %s", len(in.Attempts), wall))
+				a.logAuto(principal, in, "refusal", "wall-time", fmt.Sprintf("stopped after %d attempts: over the host bound of %s", len(in.Attempts), wall))
 			}
 			return
 		}
@@ -241,19 +241,28 @@ func (a *shapedApp) repairIncident(ctx context.Context, principal, id string) {
 		if err != nil {
 			return
 		}
-		a.logAuto(in, "attempt", result, reason)
+		if candidate.ID == "" {
+			candidate.Source = shapecore.Source{Kind: "incident", Ref: in.ID}
+			candidate.Principal = principal
+			candidate.BaseRev = in.BaseRev
+		}
+		svc := a.candidateService()
+		record := coreCandidate(candidate)
+		record.ActivationPrincipal = principal
+		svc.LogDecision(record, "attempt", result, reason)
 		if candidate.Verdict != nil {
 			verdict := "fail"
 			if candidate.Verdict.Pass {
 				verdict = "pass"
 			}
-			a.logAuto(in, "verdict", verdict, candidate.Verdict.Detail)
+			svc.LogDecision(record, "verdict", verdict, candidate.Verdict.Detail)
 		}
+
 		switch result {
 		case "activated":
-			a.logAuto(in, "activation", "activated", strings.TrimSpace(revision+" "+version))
+			svc.LogDecision(record, "activation", "activated", strings.TrimSpace(revision+" "+version))
 		case "refused":
-			a.logAuto(in, "refusal", "review", reason)
+			svc.LogDecision(record, "refusal", "review", reason)
 		}
 		if refused {
 			// The candidate is a normal request for human review, with its
@@ -296,10 +305,12 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 		return c, dir, err.Error(), false, ""
 	}
 	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work, Task: repairBrief(a.name, in, previous)})
+	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	if err != nil {
 		return c, dir, err.Error(), false, ""
 	}
-	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
+
+	c.Why, c.Expect = shapecore.ParseReasons(res.Output)
 	c.Rev, err = commitCandidate(wr, c)
 	if err != nil {
 		return c, dir, err.Error(), false, ""
@@ -309,7 +320,10 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 		return c, dir, err.Error(), false, ""
 	}
 	// First run the existing protected-path and frozen, sealed verifier.
-	if err = (&server{}).verifyCandidate(ctx, a, &c, dir); err != nil {
+	record := coreCandidate(c)
+	err = a.candidateService().VerifyRepairRecord(ctx, a.caller(principal), &record, dir)
+	c = webCandidate(record)
+	if err != nil && !errors.Is(err, shapecore.ErrVerification) {
 		return c, dir, err.Error(), false, ""
 	}
 	if c.Verdict == nil {
@@ -365,7 +379,7 @@ func (a *shapedApp) repairAttempt(ctx context.Context, principal string, in Inci
 		// the same sealed restore gate so the previous active revision wins.
 		rollbackCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		options := src.RestoreSealedOptions{}
+		options := src.RestoreSealedOptions{System: true, Incident: in.ID, Reason: "patch release failed: " + err.Error()}
 		if v, ok := a.opts.Verifier.(interface{ VerifyRunner() verify.Runner }); ok {
 			options.Runner = v.VerifyRunner()
 		}

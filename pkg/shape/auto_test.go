@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qiangli/yoke/pkg/shape/state"
@@ -104,23 +106,49 @@ func TestUnattendedWishLogsFailedVerdictAndNoActivation(t *testing.T) {
 	}
 }
 
-func TestHumanWishLogsNothing(t *testing.T) {
-	for _, src := range []Source{{}, {Kind: "human", Ref: "alice"}} {
-		s, c, from, _, _ := testService(t)
-		ctx := context.Background()
-		candidate, err := s.Import(ctx, c, Wish{Request: "change greeting", Source: src}, from)
-		if err != nil {
-			t.Fatal(err)
+type reasoningDelegate struct{}
+
+func (reasoningDelegate) Delegate(_ context.Context, r DelegateRequest) (DelegateResult, error) {
+	return DelegateResult{Agent: "binding", Output: "COVERED:\n- greeting\nNOT COVERED:\n- (none)\nWHY:\n- requested wording\nEXPECT:\n- new greeting\nNEXT:\n- edit colors"}, os.WriteFile(filepath.Join(r.Dir, "index.html"), []byte("new greeting"), 0600)
+}
+
+func TestHumanWishDecisionLog(t *testing.T) {
+	s, caller, _, _, _ := testService(t)
+	s.Options.Delegate = reasoningDelegate{}
+	ctx := context.Background()
+	c, err := s.Wish(ctx, caller, Wish{Request: "change greeting", Todo: "123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Approve(ctx, caller, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	log := autoLog(t, s)
+	if len(log) != 3 {
+		t.Fatalf("decisions: %+v", log)
+	}
+	for i, event := range []string{"trigger", "verdict", "activation"} {
+		d := log[i]
+		if d.Event != event || d.Problem != "todo:123" || d.Principal != caller.Principal || d.Line != caller.Principal || d.Source != "human" || d.Base != c.BaseRev {
+			t.Fatalf("unexpected %s: %+v", event, d)
 		}
-		if _, err = s.Approve(ctx, c, candidate.ID); err != nil {
-			t.Fatal(err)
+		if i > 0 && (d.Rev != c.Rev || d.Agent != "binding" || d.Why != "requested wording" || d.Expect != "new greeting") {
+			t.Fatalf("missing candidate metadata: %+v", d)
 		}
-		p, err := state.AutoLogPath(s.Options.Home)
-		if err != nil {
-			t.Fatal(err)
+	}
+}
+
+func TestClosingBlockReasons(t *testing.T) {
+	old := "COVERED:\n- one\nNOT COVERED:\n- two\nNEXT:\n- edit colors"
+	for _, extra := range []string{"", "\n## WHY:\n\n- first\n* second\nEXPECT:\n- result"} {
+		output := old + extra
+		why, expect := ParseReasons(output)
+		if extra == "" && (why != "" || expect != "") || extra != "" && (why != "first\nsecond" || expect != "result") {
+			t.Fatalf("reasons: %q, %q", why, expect)
 		}
-		if _, err = os.Stat(p); !os.IsNotExist(err) {
-			t.Fatalf("source %+v wrote a decision log (%v)", src, err)
+		coverage := ParseCoverage(output)
+		if coverage == nil || strings.Join(coverage.NotCovered, ",") != "two" || strings.Join(ParseNext(output), ",") != "edit colors" {
+			t.Fatalf("sections mixed: %q", output)
 		}
 	}
 }

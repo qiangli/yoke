@@ -100,6 +100,8 @@ const candKindRepair = "repair"
 
 // Candidate is the metadata record of one shaping attempt.
 type Candidate struct {
+	Why                 string                    `json:"why,omitempty"`
+	Expect              string                    `json:"expect,omitempty"`
 	Source              shapecore.Source          `json:"source,omitempty,omitzero"`
 	ActivationPrincipal string                    `json:"activation_principal,omitempty"`
 	ArtifactPath        string                    `json:"artifact_path,omitempty"`
@@ -497,6 +499,9 @@ func (a *shapedApp) recordWish(principal string, w wish, status, kind string) (C
 	if err := saveCandidate(dir, c); err != nil {
 		return Candidate{}, "", err
 	}
+	if kind == candKindRequest {
+		svc.LogDecision(coreCandidate(c), "trigger", "request", c.Request)
+	}
 	return c, dir, nil
 }
 
@@ -517,12 +522,14 @@ func (s *server) runCandidate(a *shapedApp, dir string, c Candidate, operator bo
 		return
 	}
 	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work, Task: shapingTaskFor(a.name, wish{Request: c.Request, Page: c.Page, Element: c.Element})})
+	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
 	if err != nil {
 		fail(fmt.Errorf("shaping agent: %w", err))
 		return
 	}
-	c.Agent, c.Identity, c.Receipt = res.Agent, res.Identity, res.Receipt
+
 	c.Coverage = parseCoverageSummary(res.Output)
+	c.Why, c.Expect = shapecore.ParseReasons(res.Output)
 	c.Next = parseNextSteps(res.Output)
 	// Genie may have answered that the wish is for a new app: then nothing
 	// changed here, the app is made, and this record points at it.
@@ -1012,7 +1019,13 @@ func (s *server) handleShapeReject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	callerPrincipal, _ := PrincipalFromRequest(r)
-	v, e := a.candidateService().Reject(r.Context(), a.caller(callerPrincipal), c.ID)
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength != 0 && !decodeHistoryBody(w, r, &in) {
+		return
+	}
+	v, e := a.candidateService().RejectWithReason(r.Context(), a.caller(callerPrincipal), c.ID, in.Reason)
 	if e != nil {
 		http.Error(w, "reject: "+e.Error(), http.StatusConflict)
 		return

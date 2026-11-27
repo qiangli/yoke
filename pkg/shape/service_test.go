@@ -121,11 +121,19 @@ func TestServicePrincipalAndReject(t *testing.T) {
 	if _, e = s.Show(ctx, other, candidate.ID); !os.IsNotExist(e) {
 		t.Fatalf("wrong principal: %v", e)
 	}
-	if _, e = s.Reject(ctx, c, candidate.ID); e != nil {
+	if _, e = s.RejectWithReason(ctx, c, candidate.ID, "wrong greeting"); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = s.Show(ctx, c, candidate.ID); !os.IsNotExist(e) {
 		t.Fatalf("rejected candidate: %v", e)
+	}
+	log := autoLog(t, s)
+	if len(log) != 2 {
+		t.Fatalf("decisions: %+v", log)
+	}
+	d := log[1]
+	if d.Event != "reject" || d.By != "person" || d.Problem != "cand:"+candidate.ID || d.Line != c.Principal || d.Principal != c.Principal || d.Rev != candidate.Rev || !strings.Contains(d.Detail, "wrong greeting") {
+		t.Fatalf("reject: %+v", d)
 	}
 }
 func TestServiceTrackingFailureBeforeGeneration(t *testing.T) {

@@ -2,6 +2,7 @@ package src
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +35,7 @@ type VersionEntry struct {
 	Request    string    `json:"request,omitempty"`
 	Verdict    string    `json:"verdict,omitempty"`
 	Evidence   string    `json:"evidence,omitempty"`
+	Agent      string    `json:"agent,omitempty"`
 	Trigger    string    `json:"trigger,omitempty"`
 	Principal  string    `json:"principal,omitempty"`
 	Author     string    `json:"author,omitempty"`
@@ -188,6 +190,12 @@ func walkLine(r *gogit.Repository, tip string, released map[string]string) []Ver
 				version = pseudoVersion(rc)
 			}
 		}
+		agent := commitTrailer(c.Message, "Agent")
+		if agent == "" && c.NumParents() > 1 {
+			if candidate, e := c.Parent(1); e == nil {
+				agent = commitTrailer(candidate.Message, "Shape-Agent")
+			}
+		}
 		author := commitTrailer(c.Message, "Author")
 		if author == "" {
 			author = c.Author.Name
@@ -202,8 +210,8 @@ func walkLine(r *gogit.Repository, tip string, released map[string]string) []Ver
 			Evidence:   commitTrailer(c.Message, "Evidence"),
 			Trigger:    commitTrailer(c.Message, "Trigger"),
 			Principal:  commitTrailer(c.Message, "Principal"),
-			Author:     author,
-			When:       c.Author.When,
+			Agent:      agent, Author: author,
+			When: c.Author.When,
 		})
 		if c.NumParents() == 0 {
 			return out
@@ -509,9 +517,13 @@ func itoaSmall(n int) string {
 // the rev argument. The undo verbs pass "undo". When overrides the commit
 // time; zero means the server clock now (UTC).
 type RestoreOptions struct {
-	Gate    state.ActivationGate
-	Request string
-	When    time.Time
+	Undo     bool
+	System   bool
+	Reason   string
+	Incident string
+	Gate     state.ActivationGate
+	Request  string
+	When     time.Time
 }
 
 // restoreDisplay names the restore target the way the request line does: the
@@ -619,7 +631,7 @@ func restoreUnlocked(home, app, rev, principal string, opts RestoreOptions) (Act
 		reqText = "restore to " + restoreDisplay(rev, targetSHA)
 	}
 	subject := fmt.Sprintf("Restore %s %s for %s", app, shortSHA(targetSHA), principal)
-	if reqText == "undo" {
+	if opts.Undo || reqText == "undo" {
 		subject = fmt.Sprintf("Undo %s %s for %s", app, shortSHA(targetSHA), principal)
 	}
 	msg := fmt.Sprintf("%s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
@@ -638,6 +650,24 @@ func restoreUnlocked(home, app, rev, principal string, opts RestoreOptions) (Act
 	st.ActiveRevision = targetSHA
 	if err := store.Write(st); err != nil {
 		return out, err
+	}
+	event, revision := "restore", targetSHA
+	if opts.Undo || reqText == "undo" {
+		event, revision = "undo", out.Previous
+	}
+	by, source := "person", "human"
+	problem := ""
+	if opts.System {
+		by, source = "system", "incident"
+		problem = "incident:" + opts.Incident
+	}
+	decision := state.AutoDecision{
+		App: app, Source: source, Event: event, Result: "activated",
+		Principal: principal, Line: principal, By: by, Rev: revision, Base: out.Previous,
+		Ref: opts.Incident, Problem: problem, Detail: opts.Reason,
+	}
+	if err := state.LogAuto(home, decision); err != nil {
+		slog.Warn("src: decision log write failed", "app", app, "err", err)
 	}
 	return out, nil
 }

@@ -41,9 +41,8 @@ func ParseCoverage(output string) *CoverageSummary {
 				section = "not_covered"
 			}
 			continue
-		case NextHeading:
-			// The follow-up list (parseNextSteps) ends the coverage list;
-			// its bullets are not NOT COVERED items.
+		case NextHeading, "WHY:", "EXPECT:":
+			// Bullets under later headings belong to those sections.
 			if section == "not_covered" {
 				section = "done"
 			}
@@ -116,6 +115,7 @@ func BriefWithExtra(app string, w Wish, extra string) string {
 		ShapingContext(w.Page, w.Element) +
 		"End your final response with a short coverage list against every part of the user's request, then two or three likely follow-up wishes. Use these exact headings and bullet format; write - (none) when a section is empty:\n" +
 		"COVERED:\n- what you completed\nNOT COVERED:\n- what you did not complete\n" +
+		"WHY:\n- why you chose this change\nEXPECT:\n- the observable outcome you predict before verification\n" +
 		"NEXT:\n- a follow-up wish this user is likely to ask next, as they would type it (plain words, one line, at most twelve words)\n- another\n\n" +
 		"The user's request (between the markers):\n" + FenceUntrusted("REQUEST", w.Request)
 }
@@ -238,6 +238,8 @@ func workspaceSpellings(workspace string) []string {
 }
 
 func relativizeCoverage(c *Candidate) {
+	c.Why = RelativizeWorkspace(c.Why, c.Workspace)
+	c.Expect = RelativizeWorkspace(c.Expect, c.Workspace)
 	if c.Coverage != nil {
 		for i := range c.Coverage.Covered {
 			c.Coverage.Covered[i] = RelativizeWorkspace(c.Coverage.Covered[i], c.Workspace)
@@ -252,28 +254,43 @@ func relativizeCoverage(c *Candidate) {
 }
 
 func ParseNext(output string) []string {
+	return CleanWishes(sectionBullets(output, NextHeading))
+}
+
+func ParseReasons(output string) (why, expect string) {
+	return strings.Join(sectionBullets(output, "WHY:"), "\n"), strings.Join(sectionBullets(output, "EXPECT:"), "\n")
+}
+
+func sectionBullets(output, label string) []string {
 	var items []string
 	in := false
 	for _, raw := range strings.Split(output, "\n") {
 		line := strings.TrimSpace(raw)
 		heading := strings.TrimSpace(strings.Trim(line, "#* "))
-		if heading == NextHeading {
+		if heading == "COVERED:" {
+			items = nil
+			in = false
+		}
+		if heading == label {
 			items, in = nil, true
 			continue
 		}
 		if !in {
 			continue
 		}
-		if line == "" || strings.HasSuffix(heading, ":") {
+		if (line == "" && label == NextHeading) || strings.HasSuffix(heading, ":") {
 			in = false
 			continue
 		}
 		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
 			continue
 		}
-		items = append(items, line[2:])
+		item := strings.TrimSpace(line[2:])
+		if item != "" && !strings.EqualFold(item, "(none)") {
+			items = append(items, item)
+		}
 	}
-	return CleanWishes(items)
+	return items
 }
 func CleanWishes(in []string) []string {
 	var out []string

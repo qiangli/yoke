@@ -25,9 +25,51 @@ func (s Service) logAuto(src Source, event, result, detail string) {
 	if !src.Unattended() {
 		return
 	}
+	s.LogDecision(Candidate{Source: src}, event, result, detail)
+}
+
+func (c Candidate) problemKey() string {
+	switch {
+	case c.Source.Kind == "incident" && c.Source.Ref != "":
+		return "incident:" + c.Source.Ref
+	case c.Source.Ref != "":
+		return c.Source.Ref
+	case c.Todo != "":
+		return "todo:" + c.Todo
+	case c.Story != "":
+		return "story:" + c.Story
+	case c.ID != "":
+		return "cand:" + c.ID
+	}
+	return ""
+}
+
+func (s Service) decision(c Candidate, event, result, detail string) state.AutoDecision {
+	source := c.Source.Kind
+	if source == "" {
+		source = "human"
+	}
+	d := state.AutoDecision{
+		Event: event, Result: result, Detail: detail,
+		App: s.App.Name, Source: source, Ref: c.Source.Ref, Problem: c.problemKey(),
+		Base: c.BaseRev, Rev: c.Rev, Agent: c.Agent, Principal: c.Principal,
+		Why: c.Why, Expect: c.Expect,
+	}
+	if c.Principal != "" {
+		d.Line = s.candidateActivationPrincipal(c)
+	}
+	return d
+}
+
+// LogDecision records the candidate metadata known at the time of the event.
+func (s Service) LogDecision(c Candidate, event, result, detail string) {
+	s.writeDecision(s.decision(c, event, result, detail))
+}
+
+func (s Service) writeDecision(d state.AutoDecision) {
 	home, err := s.home()
 	if err == nil {
-		err = state.LogAuto(home, state.AutoDecision{Event: event, App: s.App.Name, Source: src.Kind, Ref: src.Ref, Result: result, Detail: detail})
+		err = state.LogAuto(home, d)
 	}
 	if err != nil {
 		slog.Warn("shape: decision log write failed", "app", s.App.Name, "err", err)
@@ -56,7 +98,7 @@ func (s Service) logAutoVerdict(c Candidate) {
 	if c.Verdict.Pass {
 		result = "pass"
 	}
-	s.logAuto(c.Source, "verdict", result, joinDetail(c.ID, c.Verdict.Detail))
+	s.LogDecision(c, "verdict", result, joinDetail(c.ID, c.Verdict.Detail))
 }
 
 func joinDetail(id, detail string) string {

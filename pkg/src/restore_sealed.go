@@ -29,10 +29,13 @@ var ErrUnknownVersion = errors.New("unknown version: restore a version from your
 // empty derives "restore to <name or short sha>" from the rev argument.
 // When overrides the commit time; zero means the server clock now (UTC).
 type RestoreSealedOptions struct {
-	Runner  verify.Runner
-	Request string
-	Undo    bool
-	When    time.Time
+	System   bool // An automatic repair rollback.
+	Reason   string
+	Incident string
+	Runner   verify.Runner
+	Request  string
+	Undo     bool
+	When     time.Time
 }
 
 // resolveHistoryTarget maps anything the principal may name — a version-line
@@ -206,7 +209,7 @@ func restoreSealedUnlocked(ctx context.Context, home, app, rev, principal string
 		request = "restore to " + restoreDisplay(rev, targetSHA)
 	}
 	return restoreUnlocked(home, app, targetSHA, principal, RestoreOptions{
-		Gate: shapegate.New(home, report.Path), Request: request, When: opts.When,
+		Undo: opts.Undo, System: opts.System, Reason: opts.Reason, Incident: opts.Incident, Gate: shapegate.New(home, report.Path), Request: request, When: opts.When,
 	})
 }
 

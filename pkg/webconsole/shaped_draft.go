@@ -23,6 +23,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/qiangli/yoke/pkg/coopauth"
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 )
 
 // The edit session (Sprint 526.B1h, docs/sprint-526/document-model-shaping-
@@ -58,6 +59,8 @@ const (
 
 // draftStep is one wish applied on the draft: a commit on top of ParentRev.
 type draftStep struct {
+	Why      string           `json:"why,omitempty"`
+	Expect   string           `json:"expect,omitempty"`
 	ID       string           `json:"id"`
 	Request  string           `json:"request"`
 	Page     string           `json:"page,omitempty"`
@@ -75,6 +78,10 @@ type draftStep struct {
 	// says the app was just created for this request (shaped_newapp.go).
 	First   bool      `json:"first,omitempty"`
 	Created time.Time `json:"created"`
+}
+
+func (step draftStep) candidate(principal string) shapecore.Candidate {
+	return shapecore.Candidate{ID: step.ID, Principal: principal, ActivationPrincipal: principal, Request: step.Request, BaseRev: step.Parent, Rev: step.Rev, Agent: step.Agent, Why: step.Why, Expect: step.Expect}
 }
 
 // Draft is the stored edit session of one principal on one app.
@@ -331,6 +338,7 @@ func (s *server) addDraftWish(a *shapedApp, principal string, w wish) (Draft, er
 	if err != nil {
 		return d, err
 	}
+	a.candidateService().LogDecision(step.candidate(principal), "trigger", "wish", step.Request)
 	s.shapes.wg.Add(1)
 	go func() {
 		defer s.shapes.wg.Done()
@@ -350,6 +358,7 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, op
 	}
 	work := filepath.Join(dir, "work")
 	fail := func(err error) {
+		a.candidateService().LogDecision(step.candidate(principal), "verdict", "failed", err.Error())
 		_, _ = s.updateDraft(a, principal, func(d *Draft) error {
 			if i := d.find(step.ID); i >= 0 {
 				d.Steps = append(d.Steps[:i:i], d.Steps[i+1:]...)
@@ -383,6 +392,8 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, op
 	}
 	res, err := a.opts.Delegate.Delegate(ctx, DelegateRequest{Dir: work,
 		Task: shapingTaskFor(a.name, wish{Request: step.Request, Page: step.Page, Element: step.Element, first: step.First})})
+	step.Agent = res.Agent
+	step.Why, step.Expect = shapecore.ParseReasons(res.Output)
 	if err != nil {
 		fail(fmt.Errorf("shaping agent: %w", err))
 		return
@@ -422,6 +433,7 @@ func (s *server) runDraftStep(a *shapedApp, principal string, step draftStep, op
 		st.Rev, st.Status = rev, stepReady
 		st.Agent, st.Identity, st.Receipt = res.Agent, res.Identity, res.Receipt
 		st.Coverage = parseCoverageSummary(res.Output)
+		st.Why, st.Expect = step.Why, step.Expect
 		st.Next = next
 		d.Cursor = i + 1
 		return nil
@@ -491,6 +503,9 @@ func (s *server) saveDraftSession(ctx context.Context, a *shapedApp, principal s
 
 	work := filepath.Join(dir, "work")
 	tip := d.tip()
+	candidate := d.Steps[d.Cursor-1].candidate(principal)
+	candidate.BaseRev = d.BaseRev
+	svc := a.candidateService()
 	refuse := func(v Verdict) (*draftSaved, draftView, error) {
 		d2, uerr := s.updateDraft(a, principal, func(d *Draft) error { d.Verdict = &v; return nil })
 		if uerr != nil {
@@ -500,6 +515,7 @@ func (s *server) saveDraftSession(ctx context.Context, a *shapedApp, principal s
 	}
 	if len(a.protected) > 0 {
 		if perr := candidateTouchesProtected(work, d.BaseRev, tip, a.protected); perr != nil {
+			svc.LogDecision(candidate, "verdict", "fail", perr.Error())
 			return refuse(Verdict{Pass: false, Detail: perr.Error()})
 		}
 	}
@@ -518,8 +534,10 @@ func (s *server) saveDraftSession(ctx context.Context, a *shapedApp, principal s
 		return nil, viewDraft(d), fmt.Errorf("verify: %w", err)
 	}
 	if !v.Pass {
+		svc.LogDecision(candidate, "verdict", "fail", v.Detail)
 		return refuse(v)
 	}
+	svc.LogDecision(candidate, "verdict", "pass", v.Detail)
 	if a.opts.Activator == nil {
 		return nil, viewDraft(d), errors.New("no activator is configured on this console")
 	}
@@ -529,8 +547,10 @@ func (s *server) saveDraftSession(ctx context.Context, a *shapedApp, principal s
 		BaseRev: d.BaseRev, CandidateRev: tip, Request: request, Agent: agent, Evidence: v.Evidence,
 	})
 	if err != nil {
+		svc.LogDecision(candidate, "activation", "failed", err.Error())
 		return refuse(Verdict{Pass: false, Evidence: v.Evidence, Detail: "activation refused: " + err.Error()})
 	}
+	svc.LogDecision(candidate, "activation", "activated", request)
 	s.shapes.mu.Lock()
 	rerr := a.removeDraft(principal, dir)
 	s.shapes.mu.Unlock()

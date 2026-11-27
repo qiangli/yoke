@@ -80,6 +80,11 @@ func TestProgramHostLifecycleAndExactRelease(t *testing.T) {
 	if restored.SourceRevision != s.App.ReleaseRevision || restored.Slot.Active.Digest != restored.Slot.Release.Digest {
 		t.Fatal(restored)
 	}
+	log := autoLog(t, s)
+	last := log[len(log)-1]
+	if last.Event != "undo" || last.By != "person" || last.Line != HostPrincipal || last.Principal != c.Principal || last.Rev != approved.Rev {
+		t.Fatalf("host undo: %+v", last)
+	}
 	bytes, e := os.ReadFile(restored.Slot.Active.Path)
 	if e != nil || string(bytes) != "released binary" {
 		t.Fatalf("release rebuilt/substituted: %q %v", bytes, e)

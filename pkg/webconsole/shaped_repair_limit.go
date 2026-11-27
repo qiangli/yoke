@@ -5,6 +5,7 @@ package webconsole
 
 import (
 	"fmt"
+	shapecore "github.com/qiangli/yoke/pkg/shape"
 	"log/slog"
 	"strconv"
 	"time"
@@ -79,24 +80,21 @@ func (a *shapedApp) autoEnabled() bool {
 
 // logAuto appends one line to the host's decision log for incident in.
 // The log is a record, not a gate: a write error only warns.
-func (a *shapedApp) logAuto(in Incident, event, result, detail string) {
-	home, err := a.opts.home()
-	if err == nil {
-		err = shape.LogAuto(home, shape.AutoDecision{Event: event, App: a.name, Source: "incident", Ref: in.ID, Result: result, Detail: detail})
-	}
-	if err != nil {
-		slog.Warn("shaped app: decision log write failed", "app", a.name, "err", err)
-	}
+func (a *shapedApp) logAuto(principal string, in Incident, event, result, detail string) {
+	a.candidateService().LogDecision(shapecore.Candidate{
+		Principal: principal, ActivationPrincipal: principal, BaseRev: in.BaseRev,
+		Source: shapecore.Source{Kind: "incident", Ref: in.ID},
+	}, event, result, detail)
 }
 
 // logTrigger records what an observed incident triggered: a repair, or a
 // refusal because unattended shaping is off on this host.
-func (a *shapedApp) logTrigger(in Incident, start bool) {
+func (a *shapedApp) logTrigger(principal string, in Incident, start bool) {
 	switch {
 	case start:
-		a.logAuto(in, "trigger", "repair", string(in.Kind)+" "+in.Path)
+		a.logAuto(principal, in, "trigger", "repair", string(in.Kind)+" "+in.Path)
 	case in.Count == 1 && !a.autoEnabled():
-		a.logAuto(in, "refusal", "off", "unattended shaping is off on this host")
+		a.logAuto(principal, in, "refusal", "off", "unattended shaping is off on this host")
 	}
 }
 
