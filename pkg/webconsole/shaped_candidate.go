@@ -736,6 +736,27 @@ func (s *server) requestShapeCaller(a *shapedApp, r *http.Request, principal str
 	return c
 }
 
+// shapeReadCaller checks access before opening history, incident or ledger data.
+func (s *server) shapeReadCaller(w http.ResponseWriter, r *http.Request) (*shapedApp, string, bool) {
+	a, principal, ok := s.shapeCaller(w, r)
+	if !ok {
+		return nil, "", false
+	}
+	svc := a.candidateService()
+	if svc.Kind() == "web" && svc.Owner() != "" {
+		admitted, err := svc.AdmitsScope(s.requestShapeCaller(a, r, principal), appserver.ScopeEdit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return nil, "", false
+		}
+		if !admitted {
+			http.Error(w, "shaping requires the owner or a scoped member", http.StatusForbidden)
+			return nil, "", false
+		}
+	}
+	return a, principal, true
+}
+
 func (s *server) handleShapeCreate(w http.ResponseWriter, r *http.Request) {
 	a, principal, ok := s.shapeCaller(w, r)
 	if !ok {

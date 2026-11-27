@@ -293,4 +293,46 @@ func TestWebconsoleOutOfScopeWishQueuesOnOwnerAndOwnerApprovesMemberCandidate(t 
 	if len(hist.Versions) != 1 || hist.Versions[0].Author != "cloud:c@example.test" || !strings.Contains(hist.Versions[0].Summary, "member code change") {
 		t.Fatalf("O history view = %+v", hist)
 	}
+
+	incident := postJSON(hdrO, "/api/shape/site/incidents", `{"kind":"script","message":"offline","offline":true}`)
+	var created struct {
+		ID string `json:"incident"`
+	}
+	if incident.StatusCode != http.StatusCreated || json.NewDecoder(incident.Body).Decode(&created) != nil || created.ID == "" {
+		t.Fatalf("owner incident status %d, id %q", incident.StatusCode, created.ID)
+	}
+	rev := hist.Versions[0].Revision
+	signedIn := signedMemberHeaders(secret, prefix, "", "", "", "d@example.test")
+	signedIn.Del(coopauth.HdrRelationshipSig)
+	for _, tc := range []struct {
+		name    string
+		headers http.Header
+		want    int
+	}{
+		{"signed-in", signedIn, http.StatusForbidden},
+		{"account", signedMemberHeaders(secret, prefix, "account", "", "", "e@example.test"), http.StatusForbidden},
+		{"outside-scope", signedMemberHeaders(secret, prefix, "member", "guest", "", "b@example.test"), http.StatusForbidden},
+		{"edit", hdrA, http.StatusOK},
+		{"shape", hdrC, http.StatusOK},
+		{"owner", hdrO, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, path := range []string{
+				"/api/shape/site/history",
+				"/api/shape/site/history/diff?from=base&to=" + rev,
+				"/api/shape/site/incidents/" + created.ID,
+			} {
+				resp := send(h, http.MethodGet, path, "127.0.0.1:4100", tc.headers, "")
+				if resp.Code != tc.want {
+					t.Errorf("GET %s = %d, want %d", path, resp.Code, tc.want)
+				}
+			}
+		})
+	}
+	for _, action := range []string{"restore", "undo", "name"} {
+		resp := postJSON(hdrC, "/api/shape/site/history/"+action, `{}`)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("member %s = %d, want 403", action, resp.StatusCode)
+		}
+	}
 }

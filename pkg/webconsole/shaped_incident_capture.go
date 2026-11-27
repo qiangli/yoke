@@ -352,11 +352,9 @@ func crossOrigin(r *http.Request, raw string) bool {
 	return false
 }
 
-// handleShapeIncident answers one of the principal's own incidents: its state
-// and attempts, for the page polling a repair. Another principal's id is
-// simply not in this store: 404.
+// handleShapeIncident reads an incident from the authorized shaping store.
 func (s *server) handleShapeIncident(w http.ResponseWriter, r *http.Request) {
-	a, principal, ok := s.shapeCaller(w, r)
+	a, principal, ok := s.shapeReadCaller(w, r)
 	if !ok {
 		return
 	}

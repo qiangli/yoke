@@ -174,8 +174,14 @@ func resolveHistoryVersion(h src.VersionHistory, rev string) (string, bool) {
 }
 
 func (s *server) historyFor(w http.ResponseWriter, r *http.Request) (*shapedApp, string, string, src.VersionHistory, bool) {
-	a, principal, ok := s.shapeCaller(w, r)
+	a, principal, ok := s.shapeReadCaller(w, r)
 	if !ok {
+		return nil, "", "", src.VersionHistory{}, false
+	}
+	svc := a.candidateService()
+	linePrincipal := svc.QueuePrincipal(svc.ActivationPrincipal(principal))
+	if r.Method == http.MethodPost && svc.Kind() == "web" && !strings.EqualFold(linePrincipal, principal) {
+		http.Error(w, "only the owner may change this version history", http.StatusForbidden)
 		return nil, "", "", src.VersionHistory{}, false
 	}
 	home, err := a.srcRepo()
@@ -183,8 +189,7 @@ func (s *server) historyFor(w http.ResponseWriter, r *http.Request) (*shapedApp,
 		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return nil, "", "", src.VersionHistory{}, false
 	}
-	svc := a.candidateService()
-	h, err := src.History(home, a.name, svc.QueuePrincipal(svc.ActivationPrincipal(principal)))
+	h, err := src.History(home, a.name, linePrincipal)
 	if err != nil {
 		http.Error(w, "version history unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return nil, "", "", src.VersionHistory{}, false
@@ -243,7 +248,7 @@ func decodeHistoryBody(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func (s *server) handleShapeHistoryName(w http.ResponseWriter, r *http.Request) {
-	_, principal, home, h, ok := s.historyFor(w, r)
+	_, _, home, h, ok := s.historyFor(w, r)
 	if !ok {
 		return
 	}
@@ -263,7 +268,7 @@ func (s *server) handleShapeHistoryName(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "send {\"rev\": \"<version>\", \"name\": \"<label>\"}", http.StatusBadRequest)
 		return
 	}
-	ref, err := src.Name(home, h.App, principal, target, strings.TrimSpace(in.Name))
+	ref, err := src.Name(home, h.App, h.Principal, target, strings.TrimSpace(in.Name))
 	if err != nil {
 		if strings.Contains(err.Error(), "already names") {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -364,7 +369,7 @@ func (s *server) handleShapeHistoryRestore(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{"active": status.SourceRevision, "host": status})
 		return
 	}
-	res, err := s.restoreVersion(r.Context(), a, principal, home, in.Rev)
+	res, err := s.restoreVersion(r.Context(), a, h.Principal, home, in.Rev)
 	if err != nil {
 		slog.Warn("shape history restore refused", "app", a.name, "principal", principal, "rev", in.Rev, "err", err)
 		if errors.Is(err, errUnknownHistoryVersion) {
@@ -394,7 +399,7 @@ func (s *server) handleShapeHistoryUndo(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"active": status.SourceRevision, "host": status})
 		return
 	}
-	res, err := s.undoVersion(r.Context(), a, principal, home)
+	res, err := s.undoVersion(r.Context(), a, h.Principal, home)
 	if err != nil {
 		slog.Warn("shape history undo refused", "app", a.name, "principal", principal, "err", err)
 		if errors.Is(err, errUnknownHistoryVersion) {
@@ -456,11 +461,7 @@ func (s *server) handleShapeHistoryPreview(w http.ResponseWriter, r *http.Reques
 	a.serveTree(w, r2, commit, mountRel(r2), principal, data)
 }
 
-// historyRoutes registers the version-history view beside the candidate
-// routes. Every route starts at shapeCaller — the same signed-in-principal
-// gate as the shape routes — and the console gate applies the same
-// session/scope rules (a device scoped to the app reaches its own history;
-// anything else is refused before a handler runs).
+// historyRoutes registers the version-history view and its actions.
 func (s *server) historyRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/shape/{app}/history", s.handleShapeHistory)
 	mux.HandleFunc("GET /api/shape/{app}/history/diff", s.handleShapeHistoryDiff)
