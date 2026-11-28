@@ -304,6 +304,10 @@ func newRemoteCallCmd() *cobra.Command {
 		_, err = request("POST", "", body)
 		return err
 	}}
+	// Parsing stays manual (the offer's own flags pass through); these are
+	// declared so the front door and help know the call speaks --json.
+	c.Flags().Bool("json", false, "print the JSON result (the output is always JSON)")
+	c.Flags().Bool("definition", false, "print the offer's typed definition instead of calling it")
 	return c
 }
 
