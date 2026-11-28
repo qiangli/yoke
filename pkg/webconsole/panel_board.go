@@ -144,6 +144,12 @@ type boardView struct {
 	Resources   *resources.System      `json:"resources,omitempty"`
 	Utilization *resources.Utilization `json:"utilization,omitempty"`
 
+	// NeedsYou are the "needs you" requests waiting on the human (Sprint 745),
+	// and CanAnswer whether THIS caller may answer them here (a signed-in
+	// owner); otherwise the page shows each request's CLI answer line.
+	NeedsYou  []needView `json:"needs_you"`
+	CanAnswer bool       `json:"can_answer"`
+
 	// All reports whether history was included, so the page never claims to
 	// show everything while showing only the live slice.
 	All bool `json:"all"`
@@ -208,6 +214,10 @@ func (s *server) handleBoardOverview(w http.ResponseWriter, r *http.Request) {
 		Warnings: b.Warnings, Resources: b.Resources, Utilization: b.Utilization,
 		All:         all,
 		SprintTotal: len(b.Sprints), RunTotal: len(b.Runs), TodoTotal: len(b.Todos),
+		NeedsYou: needsForBoard(time.Now()),
+	}
+	if who, _ := s.boardAnswerer(r); who != "" {
+		v.CanAnswer = true
 	}
 
 	// The `done` lane is 75 of this host's 98 cards. It is history in kanban

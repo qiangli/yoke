@@ -14,8 +14,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/qiangli/yoke/pkg/ask"
 	"github.com/qiangli/yoke/pkg/issue"
 	"github.com/qiangli/yoke/pkg/room"
 	todopkg "github.com/qiangli/yoke/pkg/todo"
@@ -404,6 +406,7 @@ func renderSprintExecution(w io.Writer, s *weaveStory) {
 	if next, err := nextSprintStory(s); err == nil && next != nil {
 		fmt.Fprintf(w, "  next:       [%s/%s] %s (%s)\n", next.Priority, next.Status, next.Title, next.Ref.ID)
 	}
+	renderSprintNeeds(w, s)
 	if len(s.Goal) > 0 {
 		fmt.Fprintln(w, "  ── goal checklist (derived from story closure + evidence) ──")
 		for _, g := range s.Goal {
@@ -984,4 +987,41 @@ func newSprintFocusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&override, "override", "", "required reason when bypassing a runnable higher-priority story")
 	flags.attach(cmd)
 	return cmd
+}
+
+// renderSprintNeeds lists the sprint's open "needs you" requests (bashy approve
+// request --kind ... --sprint N), so a manager's question to the human is on the
+// card instead of in report prose. A request its delegate is still handling is
+// shown as delegated; nothing is listed when there is none.
+func renderSprintNeeds(w io.Writer, s *weaveStory) {
+	pending, err := ask.PendingNeeds()
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	id := strconv.FormatInt(s.ID, 10)
+	now := time.Now()
+	var lines []string
+	for _, r := range pending {
+		if r.Approval.Sprint != id {
+			continue
+		}
+		n := r.Approval.Need
+		short := r.ID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		owner := n.Human
+		if st := ask.NeedState(r, now); st == "delegated" {
+			owner = n.Delegate + " for " + n.Human
+		}
+		lines = append(lines, fmt.Sprintf("    [%s] %s %s: %s (%s, %s old) — bashy approve show %s",
+			ask.NeedState(r, now), short, n.Kind, n.Title, owner, now.Sub(r.Created).Round(time.Minute), short))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  NEEDS YOU:  %d open request(s)\n", len(lines))
+	for _, l := range lines {
+		fmt.Fprintln(w, l)
+	}
 }

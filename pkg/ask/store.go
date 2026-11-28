@@ -253,6 +253,9 @@ func Find(id string) (Request, error) {
 	if id == "" {
 		return Request{}, fmt.Errorf("ask: name a request id — `bashy ask ls`")
 	}
+	if key, ok := strings.CutPrefix(id, "key:"); ok {
+		return findNeedByKey(key)
+	}
 	if r, err := Load(id); err == nil {
 		return r, nil
 	}

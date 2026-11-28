@@ -4,11 +4,13 @@
 // <base href> is the LAUNCHER's, so "api/sprint" and "./" resolve correctly at /
 // on loopback and under outpost's /matrix/h/<host>/app/<name>/ prefix alike.
 //
-// READ-ONLY BY CONSTRUCTION. `board` is the one work verb the atlas marks
+// READ-ONLY FOR WORK. `board` is the one work verb the atlas marks
 // CapReadOnly — it reports across the machine but never starts, merges, or
-// kills work — so this page has no action anywhere on it. In particular it must
-// never touch a sprint lease: a browser tab left open would otherwise look like
-// a working conductor.
+// kills work — so this page has no work action anywhere on it. In particular it
+// must never touch a sprint lease: a browser tab left open would otherwise look
+// like a working conductor. Its one write is the human's answer to a "needs
+// you" request (renderNeeds), which the server accepts only from a signed-in
+// owner and which touches no sprint, lease or run.
 const url = (p) => new URL(p, document.baseURI);
 
 try {
@@ -541,6 +543,78 @@ function renderWarnings(d) {
     el("strong", null, ws.length + " source warning" + (ws.length === 1 ? "" : "s")),
     ...ws.map((w) => el("div", "w", w)),
   );
+}
+
+// renderNeeds is the "Needs you" alert: every request waiting on the human,
+// with its options (the recommendation marked). A signed-in owner answers with
+// the buttons; anyone else sees the shell line that answers it.
+function renderNeeds(d) {
+  const host = $("bd-needs");
+  const ns = d.needs_you || [];
+  host.hidden = ns.length === 0;
+  if (!ns.length) { host.replaceChildren(); return; }
+  const head = el("h2", null, "Needs you (" + ns.length + ")");
+  host.replaceChildren(head, ...ns.map((n) => needEl(n, d.can_answer)));
+}
+
+function needEl(n, canAnswer) {
+  const box = el("div", "bd-need");
+  box.dataset.need = n.short;
+  const title = el("div", "t");
+  title.append(el("strong", null, n.kind + ": "), document.createTextNode(n.title));
+  box.append(title);
+  const bits = [n.state, n.urgency, "asked " + (dur(n.age_seconds) || "just now") + " ago"];
+  if (n.deadline) bits.push("due " + new Date(n.deadline).toLocaleString());
+  if (n.sprint) bits.push("sprint " + n.sprint);
+  if (n.from) bits.push("from " + n.from);
+  if (n.risk && n.risk.length) bits.push("risk " + n.risk.join(", "));
+  box.append(el("div", "meta", bits.join(" · ")));
+  if (n.refs && n.refs.length) box.append(el("div", "meta", "refs: " + n.refs.join(", ")));
+  const acts = el("div", "acts");
+  if (canAnswer) {
+    const reason = el("input");
+    reason.type = "text";
+    reason.placeholder = "reason (optional)";
+    reason.setAttribute("aria-label", "Reason for " + n.title);
+    const send = async (verdict, option, btn) => {
+      btn.disabled = true;
+      const r = await fetch(url("api/sprint/needs/" + encodeURIComponent(n.id)), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ verdict, option, reason: reason.value }),
+      }).catch((e) => ({ ok: false, json: async () => ({ error: String(e) }) }));
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        const msg = el("span", "meta", "Not answered: " + (body.error || ("HTTP " + r.status)));
+        msg.setAttribute("role", "alert");
+        acts.append(msg);
+        btn.disabled = false;
+        return;
+      }
+      load();
+    };
+    const opts = n.options || [];
+    for (const o of opts) {
+      const label = (o.name || o.id) + (o.id === n.recommend ? " (recommended)" : "");
+      const b = el("button", "btn" + (o.id === n.recommend ? " rec" : ""), label);
+      b.type = "button";
+      b.addEventListener("click", () => send("allow", o.id, b));
+      acts.append(b);
+    }
+    if (!opts.length) {
+      const b = el("button", "btn rec", n.kind === "info" ? "Acknowledge" : "Allow");
+      b.type = "button";
+      b.addEventListener("click", () => send("allow", "", b));
+      acts.append(b);
+    }
+    const no = el("button", "btn", opts.length ? "Decline all" : "Deny");
+    no.type = "button";
+    no.addEventListener("click", () => send("deny", "", no));
+    acts.append(no, reason);
+  } else {
+    acts.append(el("span", "meta", "Answer at a shell (or sign in here): "), el("code", null, n.answer));
+  }
+  box.append(acts);
+  return box;
 }
 
 function card(c) {
@@ -1319,6 +1393,7 @@ async function load() {
     $("bd-page").setAttribute("aria-busy", "false");
   }
   renderWarnings(d);
+  renderNeeds(d);
   renderSummary(d);
   state.runs = d.runs || [];
   state.data = d;

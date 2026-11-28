@@ -75,6 +75,8 @@ type Approval struct {
 	Options []ApprovalOption `json:"options,omitempty"`
 	// Mode is the agent permission mode that raised it (ask | review).
 	Mode string `json:"mode,omitempty"`
+	// Need is set on a typed "needs you" request (Source SourceNeeds).
+	Need *Need `json:"need,omitempty"`
 }
 
 // ApprovalOption mirrors an ACP permission option without importing pkg/acp.
@@ -96,6 +98,11 @@ type Decision struct {
 	Reason   string    `json:"reason,omitempty"`
 	OptionID string    `json:"option_id,omitempty"`
 	At       time.Time `json:"at"`
+	// OnBehalfOf names the human a delegate decided for (needs requests).
+	OnBehalfOf string `json:"on_behalf_of,omitempty"`
+	// Overrides describes the decision this one replaced, when the human
+	// overrode it.
+	Overrides string `json:"overrides,omitempty"`
 }
 
 // Allowed reports a positive decision.
@@ -115,6 +122,8 @@ type ApprovalSpec struct {
 	// already owns one (an @confirm token must be passed through unchanged).
 	Token string
 	TTL   time.Duration
+
+	need *Need // set by RaiseNeed only
 }
 
 const decisionFile = "decision.json"
@@ -178,6 +187,7 @@ func Raise(spec ApprovalSpec) (Request, error) {
 			Session: spec.Session,
 			Options: append([]ApprovalOption(nil), spec.Options...),
 			Mode:    spec.Mode,
+			Need:    spec.need,
 		},
 	}
 	// Reap on the way in, as ask does, so the store stays self-cleaning.
@@ -286,6 +296,9 @@ type DecideOpts struct {
 	Token string
 	// Via defaults to ViaHuman.
 	Via string
+	// Caller names a human a front end authenticated (the board). Needs
+	// requests check it; other approvals ignore it.
+	Caller Caller
 }
 
 // Decide settles an approval exactly once.
@@ -311,6 +324,17 @@ func Decide(idOrPrefix string, d Decision, opt DecideOpts) (Request, error) {
 	if d.Verdict == VerdictDeny {
 		d.Always = false
 	}
+	if r.IsNeed() {
+		// A needs request is answered only by its human or, inside its scope,
+		// the human's delegate; never "always", which belongs to resume tokens.
+		d.Always = false
+		if err := checkNeedDecider(r, &d, opt); err != nil {
+			return Request{}, err
+		}
+		if d.Via == "" {
+			d.Via = opt.Via
+		}
+	}
 	d.Via = firstNonEmpty(opt.Via, d.Via, ViaHuman)
 	if d.By == "" {
 		d.By = principalName()
@@ -321,6 +345,9 @@ func Decide(idOrPrefix string, d Decision, opt DecideOpts) (Request, error) {
 	}
 	room.Record(room.EventApproval, d.By, approvalTarget(r), d.Verdict,
 		fmt.Sprintf("%s via %s (token %s)", d.Verdict, d.Via, r.Approval.Token))
+	if r.IsNeed() {
+		wakeRequester(r, d)
+	}
 	return r, nil
 }
 
@@ -429,6 +456,9 @@ func consume(id string) bool {
 
 func approvalExpired(r Request, now time.Time) bool {
 	if d, ok := LoadDecision(r.ID); ok {
+		if r.IsNeed() {
+			return now.After(d.At.Add(NeedRetention))
+		}
 		return now.After(d.At.Add(DecisionRetention))
 	}
 	// No pid check, unlike a value ask: the requester of a yielded @confirm has

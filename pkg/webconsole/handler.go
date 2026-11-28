@@ -457,7 +457,7 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 
 	// The steward board, same shape again: the tile is an atlas declaration,
 	// the page is served at the launcher's root, and panelHandler claims
-	// nothing. Read-only by construction: Sprint's browser projection must not
+	// nothing. Read-only for sprint state: Sprint's browser projection must not
 	// acquire the command's lifecycle mutations merely because it shares a noun.
 	if on["sprint"] {
 		mux.HandleFunc("GET /sprint/", s.handleBoardPage)
@@ -465,6 +465,10 @@ func newHandler(opts Options) (*server, http.Handler, func() error, error) {
 		mux.HandleFunc("GET /api/sprint", s.handleBoardOverview)
 		mux.HandleFunc("GET /api/sprint/panel/{id}", s.handleBoardPanel)
 		mux.HandleFunc("GET /api/sprint/story/{id}", s.handleBoardStory)
+		// The board's one write (Sprint 745): the signed-in owner answers a
+		// "needs you" request. No lease, sprint or run is touched; pkg/ask
+		// refuses anyone who is not the request's human (panel_needs.go).
+		mux.HandleFunc("POST /api/sprint/needs/{id}", s.handleNeedAnswer)
 		// Runbooks: the kb pages of type runbook that this board's sprints
 		// can cite — read-only, one list and one body (panel_runbooks.go).
 		mux.HandleFunc("GET /api/sprint/runbooks", s.handleRunbooks)
