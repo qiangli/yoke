@@ -2,6 +2,7 @@ package sharedfiles
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,6 +61,41 @@ type call struct {
 }
 
 var client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// Fetch streams a designated peer file into dst. The caller chooses dst inside
+// its private run directory; credentials are loaded from the local peer store.
+func Fetch(ctx context.Context, uri, dst string) error {
+	if !strings.HasPrefix(uri, "bashy://") {
+		return fmt.Errorf("expected bashy:// files URI")
+	}
+	t, err := ParseTarget(uri)
+	if err != nil || t.Path == "" {
+		return fmt.Errorf("invalid bashy files URI")
+	}
+	door, err := toolcmd.LoadPeer(t.Host)
+	if err != nil {
+		return err
+	}
+	endpoint, err := url.JoinPath(door.URL+"/files/"+t.Name, t.Path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+door.Credential)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("files get: peer request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("files get: peer returned HTTP %d", resp.StatusCode)
+	}
+	_, err = download(dst, resp.Body)
+	return err
+}
 
 func memberCmd(verb string, asJSON *bool) *cobra.Command {
 	var offset, length int64

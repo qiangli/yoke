@@ -66,6 +66,51 @@ func sharedDir() (string, error) {
 	return dir, nil
 }
 
+// EnsureOffers creates the managed read-only output share with an empty
+// audience. K4 may populate its audience when the offering is configured.
+func EnsureOffers() (string, error) {
+	dir, err := sharedDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "offers")
+	if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("offers share must be a managed directory")
+	}
+	record := filepath.Join(dir, "offers.json")
+	f, err := os.OpenFile(record, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		data, readErr := os.ReadFile(record)
+		if readErr != nil {
+			return "", readErr
+		}
+		var existing Record
+		if json.Unmarshal(data, &existing) != nil || existing.Name != "offers" || existing.Mode != "ro" || existing.Path != path {
+			return "", fmt.Errorf("offers share record conflicts with managed output share")
+		}
+		return path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	encErr := json.NewEncoder(f).Encode(Record{Name: "offers", Path: path, Mode: "ro", Created: time.Now().UTC()})
+	closeErr := f.Close()
+	if encErr != nil {
+		return "", encErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	return path, nil
+}
+
 // contains compares existing directories by identity, including case aliases.
 func contains(parent, child string) (bool, error) {
 	p, err := os.Stat(parent)

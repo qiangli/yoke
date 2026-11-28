@@ -946,6 +946,11 @@ func (b *Broker) delegateCLI(w http.ResponseWriter, r *http.Request, ri *reqInfo
 		writeErr(w, r.URL.Path, http.StatusNotFound, "this broker serves no fleet agents")
 		return
 	}
+	principal := ri.principal
+	if principal == b.opts.Principal {
+		principal = "owner"
+	}
+	r = r.WithContext(cligw.WithPrincipal(r.Context(), principal))
 	r.Header.Set("Authorization", "Bearer "+b.opts.CLI.Token())
 	if body != nil {
 		r.Body = io.NopCloser(bytes.NewReader(body))

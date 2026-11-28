@@ -14,11 +14,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/llmgw/anthropic"
 	"github.com/qiangli/yoke/pkg/llmgw/openai"
 	"github.com/qiangli/yoke/pkg/llmgw/sched"
 	"github.com/qiangli/yoke/pkg/toolcmd"
 )
+
+type principalKey struct{}
+
+// WithPrincipal carries the broker-authenticated caller across the in-process
+// gateway. An HTTP client cannot supply this context value.
+func WithPrincipal(ctx context.Context, principal string) context.Context {
+	return context.WithValue(ctx, principalKey{}, principal)
+}
 
 // Tool commands over the llm API (Sprint #324 S5, dhnt
 // docs/tool-commands-design.md §4).
@@ -261,7 +270,7 @@ type slashMessage struct {
 // artifacts, one path per line.
 func slashText(res toolcmd.Result) string {
 	text := res.Text
-	if len(res.Artifacts) > 0 {
+	if len(res.Artifacts)+len(res.ArtifactRefs) > 0 {
 		var b strings.Builder
 		b.WriteString(strings.TrimRight(text, "\n"))
 		if b.Len() > 0 {
@@ -270,6 +279,9 @@ func slashText(res toolcmd.Result) string {
 		b.WriteString("Artifacts:\n")
 		for _, a := range res.Artifacts {
 			b.WriteString("- " + a + "\n")
+		}
+		for _, a := range res.ArtifactRefs {
+			b.WriteString("- " + a.URI + "\n")
 		}
 		text = b.String()
 	}
@@ -366,6 +378,19 @@ func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), toolcmd.CommandTimeout(cmd, opts))
 	defer cancel()
+	if principal, _ := r.Context().Value(principalKey{}).(string); principal != "" && principal != "owner" {
+		if cmd.HTTP != nil && len(cmd.HTTP.Args) > 0 && cmd.HTTP.Args[0].Type == fleet.ToolCommandArgJSONFile && args != "" && !strings.HasPrefix(args, "bashy://") {
+			fail(slashFailure{Status: http.StatusBadRequest, Type: "invalid_request", Message: "json-file input must be a bashy://HOST/files-NAME/PATH URI", Command: name})
+			return
+		}
+		var release func()
+		args, opts, release, err = preparePeerFiles(ctx, args, opts)
+		if err != nil {
+			fail(slashFailure{Status: http.StatusBadRequest, Type: "invalid_request", Message: err.Error(), Command: name})
+			return
+		}
+		defer release()
+	}
 
 	jobID, _ := sched.ResolveJobID(r)
 	h := w.Header()
@@ -376,6 +401,9 @@ func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte,
 	done := make(chan slashRun, 1)
 	go func() {
 		res, err := runToolCommand(ctx, tool, cmd, args, opts)
+		if opts.Dir != "" {
+			res, err = publishPeerArtifacts(res, err)
+		}
 		done <- slashRun{res, err}
 	}()
 

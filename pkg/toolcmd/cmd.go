@@ -257,6 +257,9 @@ func newRunCmd() *cobra.Command {
 			for _, a := range res.Artifacts {
 				fmt.Fprintln(out, a)
 			}
+			for _, a := range res.ArtifactRefs {
+				fmt.Fprintln(out, a.URI)
+			}
 			return runErr
 		},
 	}
@@ -313,6 +316,9 @@ func runPeer(cmd *cobra.Command, args []string, peer, capabilityName, caller, mo
 	}
 	for _, a := range res.Artifacts {
 		fmt.Fprintln(out, a)
+	}
+	for _, a := range res.ArtifactRefs {
+		fmt.Fprintln(out, a.URI)
 	}
 	return nil
 }
@@ -395,6 +401,9 @@ func newResultCmd() *cobra.Command {
 			}
 			for _, a := range r.Artifacts {
 				fmt.Fprintln(out, a)
+			}
+			for _, a := range r.ArtifactRefs {
+				fmt.Fprintln(out, a.URI)
 			}
 			if r.Outcome != OutcomeSuccess {
 				return fmt.Errorf("outcome %s: %s", r.Outcome, r.Error)
