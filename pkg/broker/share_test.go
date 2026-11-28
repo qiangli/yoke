@@ -104,6 +104,24 @@ func useFakeOutpost(t *testing.T) *fakeOutpost {
 	return f
 }
 
+func TestSharePreservesGatedAppLogin(t *testing.T) {
+	f := useFakeOutpost(t)
+	f.apps = fmt.Sprintf(`{"apps":[{"name":"llm","host":"127.0.0.1","port":%d,"enabled":true,"require_login":true,"trust_cloud_identity":true}]}`, door.Port())
+	if err := ensureLocalAppTrust(t.Context(), door.Port(), true); err != nil {
+		t.Fatal(err)
+	}
+	if f.count("apps add llm") != 0 {
+		t.Fatal("gated app was unnecessarily replaced")
+	}
+	f.apps = fmt.Sprintf(`{"apps":[{"name":"llm","host":"127.0.0.1","port":%d,"enabled":true,"require_login":true,"trust_cloud_identity":false}]}`, door.Port())
+	if err := ensureLocalAppTrust(t.Context(), door.Port(), true); err != nil {
+		t.Fatal(err)
+	}
+	if f.count(fmt.Sprintf("apps add llm --url http://127.0.0.1:%d --trust-cloud-identity --require-login", door.Port())) != 1 {
+		t.Fatalf("login flag lost on update: %v", f.calls)
+	}
+}
+
 func runShareLLM(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
 	cmd := NewCmd()

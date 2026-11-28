@@ -35,6 +35,7 @@ import (
 	"github.com/qiangli/yoke/pkg/boundary"
 	"github.com/qiangli/yoke/pkg/broker/door"
 	"github.com/qiangli/yoke/pkg/cligw"
+	"github.com/qiangli/yoke/pkg/coopauth"
 	"github.com/qiangli/yoke/pkg/llmgw/gateway"
 	"github.com/qiangli/yoke/pkg/llmprice"
 	"github.com/qiangli/yoke/pkg/quotaobs"
@@ -114,6 +115,8 @@ type Options struct {
 	// PeersFile holds hashed per-peer credentials and their share policy
 	// ("" = no peer is ever admitted). See peershare.go.
 	PeersFile string
+	// OffersDir holds the owner-only offer records. Empty uses $BASHY_HOME/offers.
+	OffersDir string
 	// Members checks Cloudbox membership for peers carrying an email binding.
 	// Nil refuses bound peers while leaving legacy unbound peers unchanged.
 	Members MemberAuthorizer
@@ -162,6 +165,8 @@ type Broker struct {
 	sticky          *stickyStore
 	audit           *auditLog
 	meter           *peerMeter // per-peer limit counters (peerlimit.go)
+	offerMu         sync.Mutex
+	offerCalls      map[string]uint64
 	tracer          trace.Tracer
 
 	// stickyW holds one warm CLI per bind=worker/reset=none binding, keyed
@@ -191,11 +196,12 @@ func New(ctx context.Context, opts Options) (*Broker, error) {
 		opts.Now = time.Now
 	}
 	b := &Broker{
-		opts:    opts,
-		device:  NewDevice(opts.QueueLimit),
-		tracer:  otel.Tracer("bashy/broker"),
-		derived: map[string]bool{},
-		stickyW: map[string]*stickyEntry{},
+		opts:       opts,
+		device:     NewDevice(opts.QueueLimit),
+		tracer:     otel.Tracer("bashy/broker"),
+		derived:    map[string]bool{},
+		stickyW:    map[string]*stickyEntry{},
+		offerCalls: map[string]uint64{},
 	}
 	var stickyPath, auditPath string
 	if opts.StateDir != "" {
@@ -271,6 +277,8 @@ const unixOwnerKey ctxKey = 1
 // reqInfo is everything the pipeline learned about a request.
 type reqInfo struct {
 	principal         string
+	offerName         string
+	offerUnit         string
 	session           string
 	class             Class
 	params            map[string]string
@@ -315,6 +323,9 @@ func (b *Broker) authorize(r *http.Request, pathToken string) (peerAuthorization
 		presented = strings.TrimSpace(r.Header.Get("x-api-key"))
 	}
 	if presented == "" {
+		if coopauth.ArrivedViaCloud(r) {
+			return b.authorizeOfferMember(r)
+		}
 		return peerAuthorization{}, errors.New("missing token: use the owner-only socket, a bearer token, or the /k/<token> URL form (see `bashy llm env`)")
 	}
 	if subtle.ConstantTimeCompare([]byte(presented), []byte(b.opts.Token)) == 1 {
@@ -354,7 +365,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if cw.status == 0 {
 				cw.status = http.StatusOK
 			}
-			ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok, ri.rec.CacheWriteTok = parseUsage(cw.tail)
+			if ri.rec.PromptTok == 0 && ri.rec.OutputTok == 0 {
+				ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok, ri.rec.CacheWriteTok = parseUsage(cw.tail)
+			}
 			b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
 		}
 		if capture && ri.principal != "" {
@@ -365,7 +378,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusUnauthorized
 		var memberRefusal *peerMemberRefusal
-		if errors.Is(err, errPeerNotShared) || errors.As(err, &memberRefusal) {
+		if errors.Is(err, errPeerNotShared) || errors.As(err, &memberRefusal) || coopauth.ArrivedViaCloud(r) {
 			status = http.StatusForbidden
 			ri.rec.Principal = auth.principal
 		}
@@ -376,9 +389,16 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	principal, limits := auth.principal, auth.limits
 	stampMemberDecision(ri, auth.member)
 	ri.principal = principal
+	ri.offerName = auth.offerName
 	ri.rec.Principal = principal
-	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) {
+	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) && !peerOfferAllowed(r.Method, rest, auth.commands) && !peerFilesOfferAllowed(r.Method, rest, auth.commands) {
 		writeErr(w, rest, http.StatusForbidden, fmt.Sprintf("%s may reach only inference routes on this door, not %s %s", principal, r.Method, rest))
+		return
+	}
+	if strings.HasPrefix(principal, "member:") && !b.memberOfferRouteAllowed(w, r, rest, auth.offerName) {
+		return
+	}
+	if strings.HasPrefix(principal, "member:") && isInferencePath(rest) && !b.admitOfferLimit(w, ri, auth.offerName) {
 		return
 	}
 	if strings.HasPrefix(principal, PeerPrincipalPrefix) && r.Method == http.MethodPost && isInferencePath(rest) {
@@ -407,6 +427,8 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del("x-api-key")
 
 	switch {
+	case strings.HasPrefix(rest, "/offers/"):
+		b.serveOffer(w, r, ri, auth)
 	case rest == "/files" || strings.HasPrefix(rest, "/files/"):
 		b.serveFiles(w, r, ri)
 	case strings.HasPrefix(rest, "/cligw/"):
@@ -805,6 +827,20 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 	ri.rec.MemberListOffline = ri.memberListOffline
 	b.price(ri)
 	b.audit.append(ri.rec)
+	if ri.offerName != "" && ri.rec.Status < 300 && ri.rec.Principal != b.opts.Principal {
+		var used uint64 = 1
+		switch ri.offerUnit {
+		case "token":
+			used = uint64(max(0, ri.rec.PromptTok+ri.rec.OutputTok))
+		case "bytes":
+			used = uint64(max(int64(0), ri.rec.Bytes))
+		case "seconds":
+			used = uint64(max(int64(1), (ri.rec.WallMS+999)/1000))
+		}
+		b.offerMu.Lock()
+		b.offerCalls[ri.rec.Principal+"\x00"+ri.offerName] += used
+		b.offerMu.Unlock()
+	}
 	if b.meter != nil && strings.HasPrefix(ri.rec.Principal, PeerPrincipalPrefix) {
 		tokens, usd := recordUsage(ri.rec)
 		b.meter.observe(ri.rec.Principal, tokens, usd, b.opts.Now())

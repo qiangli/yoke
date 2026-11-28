@@ -292,6 +292,7 @@ type peerAuthorization struct {
 	limits    *PeerLimits
 	member    *boundary.Decision
 	commands  []string
+	offerName string
 }
 
 type peerMemberRefusal struct{ reason string }

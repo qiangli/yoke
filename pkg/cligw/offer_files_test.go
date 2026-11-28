@@ -61,6 +61,19 @@ func TestPeerFilesRefuseHostPathAndFetchURI(t *testing.T) {
 	}
 }
 
+func TestOfferTypedArgvRefusesHostPath(t *testing.T) {
+	local := filepath.Join(t.TempDir(), "private.json")
+	if err := os.WriteFile(local, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, release, err := preparePeerArgv(t.Context(), toolcmd.Options{Argv: []string{"--file", local}}); err == nil || release != nil {
+		t.Fatalf("host path admitted: %v", err)
+	}
+	if _, release, err := preparePeerArgv(t.Context(), toolcmd.Options{Argv: []string{"--file=file://" + local}}); err == nil || release != nil {
+		t.Fatalf("file URL admitted: %v", err)
+	}
+}
+
 func TestPublishPeerArtifacts(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("BASHY_HOME", home)

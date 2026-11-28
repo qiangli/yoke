@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/qiangli/yoke/pkg/fleet"
 	"github.com/qiangli/yoke/pkg/sharedfiles"
 	"github.com/qiangli/yoke/pkg/toolcmd"
 )
@@ -72,6 +73,67 @@ func preparePeerFiles(ctx context.Context, args string, opts toolcmd.Options) (s
 		opts.Argv = []string{args}
 	}
 	return args, opts, release, nil
+}
+
+// RunOfferedTool applies the same peer file boundary as slash runs to a
+// typed /offers call, preserving each already-bound argv element.
+func RunOfferedTool(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, argv []string, catalog *fleet.Catalog) (toolcmd.Result, error) {
+	opts := toolcmd.Options{Catalog: catalog, Argv: argv}
+	principal, _ := ctx.Value(principalKey{}).(string)
+	if principal != "" && principal != "owner" {
+		var release func()
+		var err error
+		opts, release, err = preparePeerArgv(ctx, opts)
+		if err != nil {
+			return toolcmd.Result{}, err
+		}
+		defer release()
+	}
+	res, err := toolcmd.Run(ctx, tool, cmd, "", opts)
+	if opts.Dir != "" {
+		return publishPeerArtifacts(res, err)
+	}
+	return res, err
+}
+
+func preparePeerArgv(ctx context.Context, opts toolcmd.Options) (toolcmd.Options, func(), error) {
+	dir, err := os.MkdirTemp("", "bashy-offer-*")
+	if err != nil {
+		return opts, nil, err
+	}
+	release := func() { _ = os.RemoveAll(dir) }
+	argv := append([]string(nil), opts.Argv...)
+	for i, word := range argv {
+		candidate := strings.Trim(word, "\"'(),")
+		prefix := ""
+		if j := strings.IndexByte(candidate, '='); j >= 0 {
+			prefix, candidate = candidate[:j+1], candidate[j+1:]
+		}
+		if strings.HasPrefix(candidate, "bashy://") {
+			target, parseErr := sharedfiles.ParseTarget(candidate)
+			if parseErr != nil || target.Path == "" {
+				release()
+				return opts, nil, fmt.Errorf("invalid bashy:// files URI")
+			}
+			dst := filepath.Join(dir, fmt.Sprintf("input-%d-%s", i, filepath.Base(target.Path)))
+			if err := sharedfiles.Fetch(ctx, candidate, dst); err != nil {
+				release()
+				return opts, nil, err
+			}
+			argv[i] = strings.Replace(word, prefix+candidate, prefix+dst, 1)
+			continue
+		}
+		if strings.HasPrefix(candidate, "file://") {
+			release()
+			return opts, nil, fmt.Errorf("host paths are refused for peer tool calls; use a bashy://HOST/files-NAME/PATH URI")
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			release()
+			return opts, nil, fmt.Errorf("host paths are refused for peer tool calls; use a bashy://HOST/files-NAME/PATH URI")
+		}
+	}
+	opts.Argv, opts.Dir = argv, dir
+	return opts, release, nil
 }
 
 func offerHost() (string, error) {

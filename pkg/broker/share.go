@@ -245,8 +245,12 @@ func ensureLocalAppTrust(ctx context.Context, port int, trust bool) error {
 	// plus the door's port), which cloudbox proxies to a 502. Only a bare
 	// loopback host counts as present; anything else is re-added below.
 	present := false
+	requireLogin := false
 	for _, a := range list.Apps {
-		if a.Name == doorServiceName && a.Port == port && a.Enabled && !a.RequireLogin && bareLoopbackHost(a.Host) && (a.Trust || !trust) {
+		if a.Name == doorServiceName {
+			requireLogin = a.RequireLogin
+		}
+		if a.Name == doorServiceName && a.Port == port && a.Enabled && bareLoopbackHost(a.Host) && (a.Trust || !trust) {
 			present = true
 		}
 	}
@@ -254,6 +258,9 @@ func ensureLocalAppTrust(ctx context.Context, port int, trust bool) error {
 		args := []string{"apps", "add", doorServiceName, "--url", fmt.Sprintf("http://127.0.0.1:%d", port)}
 		if trust {
 			args = append(args, "--trust-cloud-identity")
+		}
+		if requireLogin {
+			args = append(args, "--require-login")
 		}
 		if _, err := outpostRun(ctx, nil, args...); err != nil {
 			return err

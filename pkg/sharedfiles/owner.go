@@ -2,6 +2,7 @@
 package sharedfiles
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,10 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+// Offer hooks are wired by pkg/offer when the host mounts the offer CLI.
+var RegisterOffer func(context.Context, string, []string, []string, []string) error
+var StopOffer func(context.Context, string) error
 
 type Audience struct {
 	Circles []string `json:"circles"`
@@ -227,6 +232,11 @@ func NewCmd() *cobra.Command {
 			return err
 		}
 		record.Name, record.Mode, record.Created = name, "ro", time.Now().UTC()
+		if RegisterOffer != nil && len(record.Audience.Circles)+len(record.Audience.Groups)+len(record.Audience.Emails) > 0 {
+			if err := RegisterOffer(cmd.Context(), name, record.Audience.Circles, record.Audience.Groups, record.Audience.Emails); err != nil {
+				return err
+			}
+		}
 		tmp, err := os.CreateTemp(dir, ".share-*")
 		if err != nil {
 			return err
@@ -260,6 +270,11 @@ func NewCmd() *cobra.Command {
 	root.AddCommand(share, &cobra.Command{Use: "unshare NAME", Short: "Remove a share record and keep its files", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if err := checkName(args[0]); err != nil {
 			return err
+		}
+		if StopOffer != nil {
+			if err := StopOffer(cmd.Context(), args[0]); err != nil {
+				return err
+			}
 		}
 		dir, err := sharedDir()
 		if err != nil {
