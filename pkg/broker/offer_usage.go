@@ -315,12 +315,8 @@ func AppendRemoteUsage(host string, u OfferUsage) error {
 		return err
 	}
 	row := struct {
-		Time time.Time `json:"time"
- "slices"
-
- "github.com/qiangli/yoke/mcp"
- "github.com/qiangli/yoke/pkg/broker/door"`
-		Host string `json:"host"`
+		Time time.Time `json:"time"`
+		Host string    `json:"host"`
 		OfferUsage
 	}{time.Now().UTC(), host, u}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
