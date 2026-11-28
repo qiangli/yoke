@@ -43,6 +43,7 @@ type Record struct {
 	CachedTok     int            `json:"cached_tokens,omitempty"`
 	CacheWriteTok int            `json:"cache_write_tokens,omitempty"`
 	OutputTok     int            `json:"completion_tokens,omitempty"`
+	Bytes         int64          `json:"bytes,omitempty"`
 	Error         string         `json:"error,omitempty"`
 	// MemberListAgeMS is present for every member-bound peer decision. Offline
 	// says the master was unreachable and the last known list was used.

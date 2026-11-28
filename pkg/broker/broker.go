@@ -407,6 +407,8 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del("x-api-key")
 
 	switch {
+	case rest == "/files" || strings.HasPrefix(rest, "/files/"):
+		b.serveFiles(w, r, ri)
 	case strings.HasPrefix(rest, "/cligw/"):
 		// cligw's own surface (its /health for `llm pools`, its routes).
 		r.URL.Path = strings.TrimPrefix(rest, "/cligw")
