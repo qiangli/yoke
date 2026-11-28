@@ -45,8 +45,11 @@ import (
 // `bashy chat steer elif "..."`.
 //
 // A named agent is its name. An unnamed `tool:model` launch has no identity of
-// its own, so it becomes its sanitized binding — still one-per-host, because it
-// still resolves to one store and one key. Naming it is how you get a second.
+// its own, so it becomes its sanitized binding — still one store and one key.
+//
+// An INTERACTIVE unnamed launch does not hold this id in the room: it is the
+// base of a per-launch id (adHocID), so two of them never share an inbox and a
+// later one never inherits an earlier one's mail.
 func agentID(l Launch) string {
 	label := strings.TrimSpace(l.Nick)
 	if label == "" {

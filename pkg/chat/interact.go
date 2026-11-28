@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/qiangli/yoke/pkg/agentctl"
 	"github.com/qiangli/yoke/pkg/agentlaunch"
 	"github.com/qiangli/yoke/pkg/agentpty"
@@ -197,7 +199,31 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		Caps:      []string{room.CapInboxDelivery, newSteerInboxCap()},
 		Joined:    time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := room.Join(card); err != nil {
+	// An ad hoc launch (a bare tool or tool:model, no named agent behind it) is
+	// not a lasting identity, so it never claims the bare name. Its id is the
+	// name plus the short form of the UUID its instance will open with — unique
+	// to this launch, so no later session inherits its inbox.
+	var instUUID string
+	adHoc := !toAgentLaunch(l).Named()
+	if adHoc && opt.Attach {
+		prior, n := liveAdHocSessions(id, l)
+		if n > 1 {
+			return 1, fmt.Errorf("chat: %d live %s sessions — attach one by id (`bashy chat sessions`)", n, id)
+		}
+		if n == 1 {
+			if err := AttachTo(ctx, os.Stdin, os.Stdout, status, prior); err != nil {
+				return 1, err
+			}
+			return 0, nil
+		}
+	}
+	if adHoc {
+		instUUID, err = joinAdHoc(&card)
+		if err != nil {
+			return 1, err
+		}
+		id, sock, name = card.ID, card.CtlSock, card.ID
+	} else if err := room.Join(card); err != nil {
 		var live *room.ErrLive
 		if errors.As(err, &live) {
 			prior, _, _ := room.Find(live.ID)
@@ -221,7 +247,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		}
 	}
 	defer room.Leave(card.ID)
-	instCtx, sessionClaim, releaseSessionInst := openInteractiveInstance(&card, l, cwd)
+	instCtx, sessionClaim, releaseSessionInst := openInteractiveInstance(&card, l, cwd, instUUID)
 	if releaseSessionInst != nil {
 		defer releaseSessionInst()
 	}
@@ -668,10 +694,84 @@ func joinNextInstance(card *room.Card) error {
 	return fmt.Errorf("chat: %s has no free instance up to %s+99", base, base)
 }
 
+// adHocIDLen is how much of the instance UUID an ad hoc session id carries: the
+// UUID's first group.
+const adHocIDLen = 8
+
+// adHocID is the session id of an ad hoc launch: its base name and the first
+// group of its instance UUID, e.g. claude-7f3a9c1e.
+func adHocID(base, instUUID string) string {
+	short := strings.ToLower(strings.ReplaceAll(instUUID, "-", ""))
+	if len(short) > adHocIDLen {
+		short = short[:adHocIDLen]
+	}
+	return room.AgentClaimID(base + "-" + short)
+}
+
+// joinAdHoc claims a per-launch room key for card and returns the UUID it was
+// derived from, moving the control socket with it. card.Nick keeps the base
+// name: the id says which session, the nick says which tool. A candidate a live
+// session holds is skipped and a new UUID minted.
+func joinAdHoc(card *room.Card) (string, error) {
+	base := card.ID
+	for n := 0; n < 20; n++ {
+		instUUID := newInstanceUUID()
+		id := adHocID(base, instUUID)
+		sock, err := sessionSock(id)
+		if err != nil {
+			return "", err
+		}
+		next := *card
+		next.ID, next.CtlSock = id, sock
+		err = room.Join(next)
+		if err == nil {
+			*card = next
+			return instUUID, nil
+		}
+		var live *room.ErrLive
+		if !errors.As(err, &live) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("chat: no free session id for %s", base)
+}
+
+// newInstanceUUID is a seam so a test can state the UUIDs a launch draws.
+var newInstanceUUID = uuid.NewString
+
+// liveAdHocSessions returns the live ad hoc sessions of the launch whose base
+// name is base, and one of them. Only ids this file mints match: base plus a
+// short UUID, on the same tool and binding.
+func liveAdHocSessions(base string, l Launch) (room.Card, int) {
+	members, err := room.Members()
+	if err != nil {
+		return room.Card{}, 0
+	}
+	var (
+		first room.Card
+		n     int
+	)
+	for _, c := range members {
+		if c.Mode != "interactive" || c.Tool != l.ToolName || c.Binding != l.Binding() {
+			continue
+		}
+		rest, ok := strings.CutPrefix(c.ID, base+"-")
+		if !ok || len(rest) != adHocIDLen || strings.Trim(rest, "0123456789abcdef") != "" {
+			continue
+		}
+		if n == 0 {
+			first = c
+		}
+		n++
+	}
+	return first, n
+}
+
 // openInteractiveInstance opens a fresh UUID-keyed fleet.Instance for an
-// interactive session so NAME and NAME+N each own an isolated mailbox, cursor,
-// and sender snapshot, and retires it on exit.
-func openInteractiveInstance(card *room.Card, l Launch, cwd string) (agentlaunch.InstanceContext, string, func()) {
+// interactive session so each session owns an isolated mailbox, cursor, and
+// sender snapshot, and retires it on exit. instUUID, when set, is the UUID the
+// session id was derived from; the instance opens with it.
+func openInteractiveInstance(card *room.Card, l Launch, cwd, instUUID string) (agentlaunch.InstanceContext, string, func()) {
 	store := bus.InstanceStoreFn()
 	if store == nil {
 		return agentlaunch.InstanceContext{}, "", nil
@@ -696,6 +796,7 @@ func openInteractiveInstance(card *room.Card, l Launch, cwd string) (agentlaunch
 	inst, err := store.Open(fam, fleet.OpenOptions{
 		Label:    card.ID,
 		MailFrom: mailFrom,
+		UUID:     instUUID,
 	})
 	if err != nil {
 		return agentlaunch.InstanceContext{}, "", nil

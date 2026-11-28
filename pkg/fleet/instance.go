@@ -294,6 +294,10 @@ type OpenOptions struct {
 	Label string
 	// Handle is an optional self-chosen short address.
 	Handle string
+	// UUID is an optional pre-minted identity. A caller that has to name the
+	// instance after its UUID before opening it (an ad hoc chat session's id is
+	// derived from it) mints one and passes it here. Empty means "mint one".
+	UUID string
 	// MailFrom is the bus sequence the new mailbox begins at — normally the
 	// caller's current timeline head. It is passed IN rather than read here so
 	// pkg/fleet stays a leaf and so a test can state the watermark exactly.
@@ -348,8 +352,22 @@ func (s *InstanceStore) Open(f Family, opts OpenOptions) (Instance, error) {
 			}
 		}
 
+		id := strings.ToLower(strings.TrimSpace(opts.UUID))
+		if id == "" {
+			id = uuid.NewString()
+		} else {
+			if _, err := uuid.Parse(id); err != nil {
+				return fmt.Errorf("fleet: open instance: uuid %q: %w", opts.UUID, err)
+			}
+			for _, i := range all {
+				if strings.EqualFold(i.UUID, id) {
+					return fmt.Errorf("fleet: open instance: uuid %s is already recorded", id)
+				}
+			}
+		}
+
 		inst = Instance{
-			UUID:     uuid.NewString(),
+			UUID:     id,
 			FamilyID: famID,
 			Family:   f.Name,
 			Policy:   f.Policy,

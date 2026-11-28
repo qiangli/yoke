@@ -613,3 +613,24 @@ func TestParkedInstanceIsNotCountedAndUnparkReadmits(t *testing.T) {
 		t.Fatalf("unpark did not re-admit the same context: %+v %v", un, err)
 	}
 }
+
+// A caller that names an instance after its UUID mints it first: Open records
+// exactly that UUID, and refuses one that is malformed or already recorded.
+func TestOpenTakesAPreMintedUUID(t *testing.T) {
+	s := instanceStore(t)
+	f := testFamily()
+	const id = "7f3a9c1e-0000-4000-8000-000000000001"
+	inst, err := s.Open(f, OpenOptions{UUID: id, Label: "claude-7f3a9c1e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.UUID != id || inst.MailAddress() != "instance/"+id {
+		t.Fatalf("uuid = %q, mail = %q", inst.UUID, inst.MailAddress())
+	}
+	if _, err := s.Open(f, OpenOptions{UUID: id, Label: "other"}); err == nil {
+		t.Fatal("a recorded uuid was opened twice")
+	}
+	if _, err := s.Open(f, OpenOptions{UUID: "not-a-uuid", Label: "bad"}); err == nil {
+		t.Fatal("a malformed uuid was accepted")
+	}
+}
