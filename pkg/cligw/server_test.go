@@ -846,3 +846,29 @@ func TestServer429BodyAndLogNameRefusedCandidates(t *testing.T) {
 		}
 	}
 }
+
+// A caller that goes away mid-request is not an upstream failure: the worker
+// is killed and the backend answers 502 (TestAgentBackendClientCancelKillsWorker),
+// but the binding must stay routable for the next caller. (Sprint 738 drill:
+// a stopped run left its binding in breaker cooldown.) The door's own request
+// timeout is a deadline on a derived context and still counts.
+func TestCallerAbortDoesNotCountAgainstAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		caller error
+		want   bool
+	}{
+		{"upstream 502", http.StatusBadGateway, nil, true},
+		{"upstream 500", http.StatusInternalServerError, nil, true},
+		{"caller went away", http.StatusBadGateway, context.Canceled, false},
+		{"caller deadline", http.StatusGatewayTimeout, context.DeadlineExceeded, false},
+		{"served", http.StatusOK, nil, false},
+		{"refused", http.StatusTooManyRequests, nil, false},
+		{"nothing written", 0, nil, false},
+	} {
+		if got := countsAgainstAgent(tc.status, tc.caller); got != tc.want {
+			t.Errorf("%s: countsAgainstAgent(%d, %v) = %v, want %v", tc.name, tc.status, tc.caller, got, tc.want)
+		}
+	}
+}

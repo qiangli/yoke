@@ -849,7 +849,7 @@ func (s *Server) route(next http.Handler) http.Handler {
 			// needs-login episode is over, with no restart.
 			s.clearNeedsLogin(decision.Agent)
 		}
-		if recorder.status >= http.StatusInternalServerError {
+		if countsAgainstAgent(recorder.status, r.Context().Err()) {
 			if _, needsLogin := s.NeedsLogin(decision.Agent); !needsLogin {
 				s.breaker.Trip(decision.Agent, 0)
 			}
@@ -1146,6 +1146,16 @@ func (s *Server) checkSpawnable(agent string) error {
 			agent, stats.Failed)
 	}
 	return nil
+}
+
+// countsAgainstAgent reports whether a finished request is evidence that its
+// agent is failing. A 5xx is, unless the caller's own context ended first:
+// a caller that goes away has its worker killed and the backend answers 502,
+// which says nothing about the agent. callerErr is the incoming request's
+// context error, not the door's request timeout, which is set on a derived
+// context and still counts.
+func countsAgainstAgent(status int, callerErr error) bool {
+	return status >= http.StatusInternalServerError && callerErr == nil
 }
 
 // writeNeedsLogin answers a needs-login refusal in the gateway's classified
