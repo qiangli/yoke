@@ -1001,6 +1001,9 @@ func unattributedSessionGuidance() string {
 // pass. No attribution is better than a guessed one — the whole point of a
 // receipt is that it names somebody.
 func BoardIdentity(as string) (string, error) {
+	// A native agent session with no identity of its own is given its ad hoc
+	// instance first, so the checks below find it stamped like any other.
+	adoptAdHocIdentity(as)
 	if s := strings.TrimSpace(as); s != "" {
 		// Resolve +N extension addresses to the live instance UUID and enforce
 		// generation isolation when the caller already carries an instance stamp.

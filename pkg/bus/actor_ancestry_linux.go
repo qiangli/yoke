@@ -27,3 +27,12 @@ func parentProcessID(pid int) (int, bool) {
 	ppid, err := strconv.Atoi(fields[1])
 	return ppid, err == nil
 }
+
+func processName(pid int) (string, bool) {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return "", false
+	}
+	name := strings.TrimSpace(string(b))
+	return name, name != ""
+}

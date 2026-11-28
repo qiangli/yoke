@@ -44,6 +44,7 @@ func HashSessionClaim(raw string) string {
 // and requires an unattributed external harness to prove its live session claim.
 func ResolveAuthoredActor(explicit string) (string, error) {
 	requested := strings.TrimSpace(explicit)
+	adoptAdHocIdentity(requested)
 	stamp := strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL"))
 	if id, ok, err := authoredInstanceID(requested, stamp); err != nil {
 		return "", err

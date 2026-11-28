@@ -64,3 +64,8 @@ func cardAlive(c Card) bool {
 func heldByOtherThan(c Card, pid int) bool {
 	return cardAlive(c) && holderPID(c) != pid
 }
+
+// PIDStart is the kernel's start time for pid, in the same opaque encoding
+// HolderStart records. A caller that keys something on a process pairs it with
+// the pid, so a recycled pid is never mistaken for the process it replaced.
+func PIDStart(pid int) (string, bool) { return pidStart(pid) }

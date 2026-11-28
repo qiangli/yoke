@@ -66,3 +66,21 @@ func TestProcessAncestryRejectsDeadAnchor(t *testing.T) {
 		t.Fatal("empty session id must not produce a claim")
 	}
 }
+
+// The harness is found by NAME among this process's ancestors: the parent's
+// own executable name finds the parent, and a name nobody above carries finds
+// nothing.
+func TestAncestorNamedFindsTheNearestAncestorByExecutableName(t *testing.T) {
+	parent := os.Getppid()
+	name, ok := processName(parent)
+	if !ok {
+		t.Skip("cannot read the parent's process name on this host")
+	}
+	pid, found := ancestorNamed("no-such-harness", strings.ToUpper(name))
+	if !found || pid != parent {
+		t.Fatalf("ancestorNamed(%q) = %d, %v; want the parent %d", name, pid, found, parent)
+	}
+	if pid, found := ancestorNamed("no-such-harness"); found {
+		t.Fatalf("found pid %d for a name no ancestor has", pid)
+	}
+}

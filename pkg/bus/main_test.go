@@ -33,6 +33,9 @@ func TestMain(m *testing.M) {
 		}
 		os.Setenv("YOKE_BUS_TEST_FENCED", "1")
 	}
+	// The test binary may itself run under an agent harness; which ancestor is
+	// "the harness" is stated by each test that cares, never read from the venue.
+	harnessAncestor = func(...string) (int, bool) { return 0, false }
 	guard := func(m RemoteMessage) (RemoteReceipt, error) {
 		relayDials = append(relayDials, m.To)
 		return RemoteReceipt{}, fmt.Errorf("test dialed the real relay for %s", m.To)
