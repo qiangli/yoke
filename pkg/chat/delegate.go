@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,8 +14,54 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/tool"
+	"github.com/qiangli/yoke/mcp"
 	"github.com/qiangli/yoke/pkg/fleet"
 )
+
+// delegateRunner runs the delegated turn; tests replace it with a fake tool.
+var delegateRunner Runner = execRunner{}
+
+// MCPAgentCommand is the typed tool `agent`: one read-only `delegate --json`
+// turn, arguments bound by schema, the bashy-chat-v1 envelope on stdout. K2
+// serves this same definition for the Agent offer class.
+func MCPAgentCommand() mcp.RegisteredCommand {
+	return mcp.RegisteredCommand{
+		Name:     "agent",
+		Synopsis: "one-shot agent call: one task in, one result out, read-only",
+		Usage: "agent is a nickname or tool:model; instruction is the task; max-tokens is a hard total cap, refused when the agent's adapter cannot enforce it. " +
+			"Output: bashy-chat-v1 {agent, model, output, exit_code, usage {input, output} (when the agent reports it), error {kind, message}}. " +
+			"Unit: token. The agent runs with no write authority.",
+		Schema: &tool.ArgSchema{Flags: []tool.ArgFlag{
+			{Name: "agent", Required: true},
+			{Name: "instruction", Required: true},
+			{Name: "file"},
+			{Name: "max-tokens", Type: "int"},
+			{Name: "timeout"},
+		}},
+		// The agent is launched read-only: no host write, but it spends.
+		Effects: []string{"net", "read", "spend"},
+		Run: func(ctx context.Context, argv []string, stdin, dir string) (string, string, int) {
+			cmd := NewDelegateCmd()
+			cmd.SetContext(ctx)
+			var out, errb bytes.Buffer
+			args := []string{"--json", "--read-only"}
+			if dir != "" {
+				args = append(args, "--cwd", dir)
+			}
+			cmd.SetArgs(append(args, argv...))
+			cmd.SetIn(strings.NewReader(stdin))
+			cmd.SetOut(&out)
+			cmd.SetErr(&errb)
+			cmd.SilenceErrors = true
+			if err := cmd.Execute(); err != nil {
+				fmt.Fprintln(&errb, err)
+				return out.String(), errb.String(), 1
+			}
+			return out.String(), errb.String(), 0
+		},
+	}
+}
 
 // NewDelegateCmd builds `bashy delegate` — the ergonomic verb for handing a task to an
 // agent: a DIFFERENT one (codex, claude, a tool:model), or YOURSELF (the same tool
@@ -142,7 +189,7 @@ An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 				raw = Result{SchemaVersion: schemaVersion, Agent: opt.Agent}
 				invokeErr = err
 			} else {
-				raw, invokeErr = Invoke(ctx, opt, execRunner{})
+				raw, invokeErr = Invoke(ctx, opt, delegateRunner)
 			}
 			res, err := finishDelegate(raw, invokeErr, g)
 			if opt.JSON {
@@ -175,7 +222,8 @@ An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 	cmd.Flags().Int64Var(&tokens, "max-tokens", 0, "require a hard total token cap; refuse adapters that cannot enforce it")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "sandbox override, e.g. workspace-write or danger-full-access")
 	cmd.Flags().StringArrayVar(&opt.WritableRoots, "writable-root", nil, "explicitly grant an extra writable path to a --sandbox workspace-write launch (repeatable)")
-	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
+	cmd.Flags().BoolVar(&opt.ReadOnly, "read-only", false, "launch with NO write authority (as bashy chat --read-only)")
+	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope (usage {input, output} when the tool reports it)")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation (incl. a self-fork) without running it")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	_ = cmd.Flags().MarkHidden("plain")

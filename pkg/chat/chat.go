@@ -218,6 +218,62 @@ type Result struct {
 	// ReaderProfile is the content-free effective reader profile (view, help,
 	// dialect, budget, each with its source layer).
 	ReaderProfile string `json:"reader_profile,omitempty"`
+	// Usage is the token count the tool itself reported for this turn. It is
+	// omitted when the tool reported none, and is never estimated.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage is a tool-reported token count for one turn.
+type Usage struct {
+	Input  int64 `json:"input"`
+	Output int64 `json:"output"`
+}
+
+// reportedUsage finds the usage record a tool printed with its result: a JSON
+// object (the whole output, or its last such line) whose "usage" member counts
+// tokens in the Anthropic (input_tokens, output_tokens, plus the cache input
+// counts) or OpenAI (prompt_tokens, completion_tokens) spelling. Prose output
+// reports nothing, so it yields nil.
+func reportedUsage(out string) *Usage {
+	parse := func(s string) *Usage {
+		var rec struct {
+			Usage *struct {
+				Input       *int64 `json:"input_tokens"`
+				Output      *int64 `json:"output_tokens"`
+				CacheCreate int64  `json:"cache_creation_input_tokens"`
+				CacheRead   int64  `json:"cache_read_input_tokens"`
+				Prompt      *int64 `json:"prompt_tokens"`
+				Completion  *int64 `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(s), &rec) != nil || rec.Usage == nil {
+			return nil
+		}
+		u := rec.Usage
+		switch {
+		case u.Input != nil && u.Output != nil:
+			return &Usage{Input: *u.Input + u.CacheCreate + u.CacheRead, Output: *u.Output}
+		case u.Prompt != nil && u.Completion != nil:
+			return &Usage{Input: *u.Prompt, Output: *u.Completion}
+		}
+		return nil
+	}
+	out = strings.TrimSpace(out)
+	if !strings.Contains(out, `"usage"`) {
+		return nil
+	}
+	if u := parse(out); u != nil {
+		return u
+	}
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); strings.HasPrefix(line, "{") {
+			if u := parse(line); u != nil {
+				return u
+			}
+		}
+	}
+	return nil
 }
 
 // LaunchProfile is the minimal headless launch contract needed by chat.
@@ -1666,6 +1722,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// spilled by reduceInvokeOutput, and the bounded view tells the next agent
 	// exactly how to recover them.
 	res.ExitCode = code
+	res.Usage = reportedUsage(out)
 	plan, planErr := readerSinkPlan(name, opt)
 	if planErr != nil {
 		return res, planErr
