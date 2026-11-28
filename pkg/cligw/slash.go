@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -370,8 +371,21 @@ func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	args := lastUserText(req)
-	opts := toolcmd.Options{Agent: agent.Name}
-	if args != "" {
+	opts := toolcmd.Options{Agent: agent.Name, Catalog: s.catalog.fleet}
+	if tool.Name == fleet.OffersTool {
+		live, err := s.catalog.fleet.RegisteredOfferCommand(name)
+		if err != nil || !reflect.DeepEqual(live, cmd) {
+			fail(slashFailure{Status: http.StatusConflict, Type: "offer_changed", Message: "registered command changed; refresh its offer", Command: name})
+			return
+		}
+	}
+	if cmd.Args != nil {
+		opts.Argv, err = cmd.Args.OfferArgv(args)
+		if err != nil {
+			fail(slashFailure{Status: http.StatusBadRequest, Type: "invalid_request", Message: err.Error(), Command: name})
+			return
+		}
+	} else if args != "" {
 		// The message is ONE operand, as on the shell door: split into words
 		// it would inject vendor CLI flags through an exec: seed's {args}.
 		opts.Argv = []string{args}

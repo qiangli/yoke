@@ -262,7 +262,8 @@ func ParseFilterWithDefault(header string, config Filter) (Filter, error) {
 
 // Match reports whether an agent satisfies every non-empty field.
 func (f Filter) Match(a Agent) bool {
-	return (f.Kind == "" || a.Kind == f.Kind) &&
+	return (a.Tool != fleet.OffersTool || f.Slash != "") &&
+		(f.Kind == "" || a.Kind == f.Kind) &&
 		(f.Provider == "" || a.Provider == f.Provider) &&
 		(f.Tool == "" || a.Tool == f.Tool) &&
 		(f.BandSource == "" || a.BandSource == f.BandSource) &&

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/qiangli/bash/pathconv"
 	"gopkg.in/yaml.v3"
@@ -54,7 +55,8 @@ type Command struct {
 
 	// The persisted argument schema (command_schema.go). nil = a pre-schema
 	// record: untyped pass-through, exactly as before the field existed.
-	Args *CommandSchema `yaml:"args,omitempty" json:"args,omitempty" doc:"argument schema the shell binds and validates before the body runs (typed positionals, flags, enums, defaults); absent = untyped pass-through"`
+	Args    *CommandSchema `yaml:"args,omitempty" json:"args,omitempty" doc:"argument schema the shell binds and validates before the body runs (typed positionals, flags, enums, defaults); absent = untyped pass-through"`
+	Timeout string         `yaml:"timeout,omitempty" json:"timeout,omitempty" doc:"duration bounding an offered invocation; empty uses the runner default"`
 
 	// Open capability names and JSON request matchers make a registered
 	// command discoverable as a provider without teaching the caller a closed
@@ -222,6 +224,12 @@ func (c Command) AtlasSpec() atlas.RegisteredSpec {
 // answer to "does this name already resolve to something you ship" (see
 // WithReservedNames); the ring's own names are checked by the caller.
 func (c Command) Validate(reserved ReservedName) error {
+	if c.Timeout != "" {
+		d, err := time.ParseDuration(c.Timeout)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("fleet: command %q: timeout must be a positive duration", c.Name)
+		}
+	}
 	for _, n := range c.Names() {
 		if err := validName(n); err != nil {
 			return err

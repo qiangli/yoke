@@ -302,7 +302,12 @@ func ToolsSHA256(ctx context.Context, srv *mcpsdk.Server) (string, error) {
 	}
 	result.NextCursor = ""
 	sort.Slice(result.Tools, func(i, j int) bool { return result.Tools[i].Name < result.Tools[j].Name })
-	data, err := json.Marshal(result)
+	return CanonicalSHA256(result)
+}
+
+// CanonicalSHA256 hashes JSON with sorted object keys and exact JSON numbers.
+func CanonicalSHA256(value any) (string, error) {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}

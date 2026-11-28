@@ -236,6 +236,10 @@ type ToolCommand struct {
 	Steps      []ToolCommandStep      `yaml:"steps,omitempty" json:"steps,omitempty" doc:"tui only: scripted frames after the slash line"`
 	Quit       string                 `yaml:"quit,omitempty" json:"quit,omitempty" doc:"tui only: line that ends the session; empty = the tool's graceful quit"`
 	HTTP       *ToolCommandHTTPAction `yaml:"http,omitempty" json:"http,omitempty" doc:"http only: typed request declaration; JSON is encoded by the runner, never by a shell"`
+
+	Description string         `yaml:"description,omitempty" json:"description,omitempty" doc:"model-facing command description"`
+	Args        *CommandSchema `yaml:"args,omitempty" json:"args,omitempty" doc:"typed arguments to a print command"`
+	Unit        string         `yaml:"unit,omitempty" json:"unit,omitempty" doc:"offer output unit: call (default), seconds or bytes"`
 }
 
 // ToolCommandHTTPAction is the declarative transport for a tool command that talks

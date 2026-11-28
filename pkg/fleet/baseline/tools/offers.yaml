@@ -1,0 +1,11 @@
+name: offers
+kind: cli
+display: Offered registered commands
+builtin: true
+hidden: true
+cli:
+  binary: bashy
+  # The print runner resolves a launch before applying each command's exec.
+  # A plain launch displays help. Only slash calls route to this tool.
+  launch:
+    exec: bashy commands --help -- {model} {prompt}

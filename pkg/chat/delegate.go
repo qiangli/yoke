@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/tool"
@@ -229,3 +230,6 @@ An enclosing attestation launcher may export its receipt as BASHY_ATTEST_ID.`,
 	_ = cmd.Flags().MarkHidden("plain")
 	return cmd
 }
+
+// MCPAgentOutputSchema describes the JSON returned by the one-shot agent command.
+func MCPAgentOutputSchema() (*jsonschema.Schema, error) { return jsonschema.For[delegateResult](nil) }
