@@ -150,6 +150,78 @@ func adoptAdHocIdentity(requested string) bool {
 	return true
 }
 
+// ErrAgentIDRequired reports an agent session that named nobody and that
+// nothing could be derived for: no vendor session id and no harness process
+// found above the command. It wraps ErrUnattributed.
+var ErrAgentIDRequired = fmt.Errorf("%w: an agent id is required", ErrUnattributed)
+
+// AgentIDGuidance is how such a session names itself. One place, so every
+// refusal says the same thing.
+func AgentIDGuidance() string {
+	return "name this session, then run the command again:\n" +
+		"  BASHY_AGENT=NAME bashy <command> ...     a name of your choosing, on every call\n" +
+		"  bashy agent add NAME --tool T --model M  register it once, to be addressable by that name\n" +
+		"  " + AdHocIdentityEnv + "=off                 run as before this check (the bare tool name)"
+}
+
+// StampAdHocIdentity is the front-door step: a native agent session that
+// declared no identity is given its ad hoc instance and the process is stamped
+// the way a bashy launcher stamps a session it starts, so every resolver in
+// this process and every child sees one named agent and never the bare tool.
+//
+// stamped reports that this call did it. A caller that already has an
+// identity — any of the launcher's variables, even an unregistered name it
+// chose itself — is left exactly as it is, and so is a caller that is not an
+// agent harness. An agent session with nothing to key an identity on returns
+// ErrAgentIDRequired; a store that cannot hold one more instance returns
+// neither, and the caller runs as it did before this step existed.
+func StampAdHocIdentity() (inst fleet.Instance, stamped bool, err error) {
+	if DetectHarness == nil || strings.EqualFold(strings.TrimSpace(os.Getenv(AdHocIdentityEnv)), "off") {
+		return fleet.Instance{}, false, nil
+	}
+	for _, env := range []string{"BASHY_PRINCIPAL", principal.InstanceEnv, "BASHY_INSTANCE_UUID",
+		"BASHY_AGENT", "WEAVE_AGENT", "BASHY_AGENT_ID", "WEAVE_CONDUCTOR"} {
+		if strings.TrimSpace(os.Getenv(env)) != "" {
+			return fleet.Instance{}, false, nil
+		}
+	}
+	tool, detected := DetectHarness()
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	if !detected || tool == "" {
+		return fleet.Instance{}, false, nil
+	}
+	store := InstanceStoreFn()
+	if store == nil {
+		return fleet.Instance{}, false, nil
+	}
+	key, synthetic, ok := adHocSessionKey(tool)
+	if !ok {
+		return fleet.Instance{}, false, fmt.Errorf("%w: running under %s with no declared identity, no session id and no %s process above this command",
+			ErrAgentIDRequired, tool, tool)
+	}
+	inst, opened, oerr := adHocInstance(store, tool, key)
+	if oerr != nil {
+		return fleet.Instance{}, false, nil
+	}
+	for k, v := range map[string]string{
+		principal.InstanceEnv:   inst.UUID,
+		"BASHY_INSTANCE_UUID":   inst.UUID,
+		"BASHY_INSTANCE_FAMILY": inst.FamilyID,
+		"BASHY_INSTANCE_LABEL":  inst.Label,
+		"BASHY_AGENT":           inst.Label,
+	} {
+		_ = os.Setenv(k, v)
+	}
+	if synthetic {
+		_ = os.Setenv("BASHY_SESSION_CLAIM", HashSessionClaim(key))
+	}
+	if opened && AdHocNotice != nil {
+		fmt.Fprintf(AdHocNotice, "bashy: this %s session is %s — others reach it with `bashy mb send %s \"...\"`; read with `bashy inbox`\n",
+			tool, inst.Label, inst.Label)
+	}
+	return inst, true, nil
+}
+
 // adHocSessionKey is what stays constant across one session's commands.
 // synthetic reports a key made from the harness process rather than from the
 // vendor's session id.

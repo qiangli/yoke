@@ -319,6 +319,123 @@ func TestWithAdHocIdentityIsScoped(t *testing.T) {
 	}
 }
 
+// stampEnv are the variables the front-door stamp sets. A test registers
+// their restoration before stamping, because the stamp writes the process
+// environment directly.
+var stampEnv = []string{principal.InstanceEnv, "BASHY_INSTANCE_UUID", "BASHY_INSTANCE_FAMILY",
+	"BASHY_INSTANCE_LABEL", "BASHY_AGENT", "BASHY_SESSION_CLAIM"}
+
+func clearStampEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range stampEnv {
+		t.Setenv(k, "")
+	}
+}
+
+// The front door stamps a native session the way a launcher stamps one it
+// starts: the instance, its label, and the label as the agent's name, so a
+// resolver that reads the name records the session and not the bare tool.
+func TestStampAdHocIdentityStampsTheProcess(t *testing.T) {
+	store, notice := adHocEnv(t, "claude")
+	AdHocIdentity = false // the stamp is its own step; the per-surface switch is not needed
+	clearStampEnv(t)
+	CurrentSessionClaim = func(string) string { return "sess-1" }
+
+	inst, stamped, err := StampAdHocIdentity()
+	if err != nil || !stamped {
+		t.Fatalf("stamp = %+v, %v, %v", inst, stamped, err)
+	}
+	if rec, gerr := store.Get(inst.UUID); gerr != nil || rec.Label != inst.Label || !adHocLabelWant.MatchString(inst.Label) {
+		t.Fatalf("stamped instance %+v is not the stored one: %+v, %v", inst, rec, gerr)
+	}
+	for k, want := range map[string]string{
+		principal.InstanceEnv:  inst.UUID,
+		"BASHY_INSTANCE_UUID":  inst.UUID,
+		"BASHY_INSTANCE_LABEL": inst.Label,
+		"BASHY_AGENT":          inst.Label,
+	} {
+		if got := os.Getenv(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	if !strings.Contains(notice.String(), inst.Label) {
+		t.Fatalf("the session was not told its name: %q", notice.String())
+	}
+	// Every resolver now agrees, with the per-surface switch off.
+	if who, err := BoardIdentity(""); err != nil || who != inst.MailAddress() {
+		t.Fatalf("BoardIdentity = %q, %v; want %q", who, err, inst.MailAddress())
+	}
+	if actor, err := ResolveAuthoredActor(""); err != nil || actor != inst.MailAddress() {
+		t.Fatalf("authored actor = %q, %v; want %q", actor, err, inst.MailAddress())
+	}
+	// A second stamp in the same process finds an identity and leaves it.
+	if _, again, err := StampAdHocIdentity(); again || err != nil {
+		t.Fatalf("second stamp = %v, %v; want a no-op", again, err)
+	}
+	// The next command of the session is stamped as the same agent.
+	clearStampEnv(t)
+	notice.Reset()
+	next, stamped, err := StampAdHocIdentity()
+	if err != nil || !stamped || next.UUID != inst.UUID || notice.Len() != 0 {
+		t.Fatalf("next command = %+v, %v, %v, notice %q; want the same instance, unannounced", next, stamped, err, notice.String())
+	}
+}
+
+// An agent session with nothing to key an identity on is refused with the way
+// to name itself; it is never passed through as the bare tool.
+func TestStampAdHocIdentityRequiresAnAgentID(t *testing.T) {
+	store, _ := adHocEnv(t, "gemini")
+	clearStampEnv(t)
+	harnessAncestor = func(...string) (int, bool) { return 0, false }
+
+	_, stamped, err := StampAdHocIdentity()
+	if stamped || !errors.Is(err, ErrAgentIDRequired) || !errors.Is(err, ErrUnattributed) {
+		t.Fatalf("stamp = %v, %v; want ErrAgentIDRequired", stamped, err)
+	}
+	if !strings.Contains(err.Error(), "gemini") {
+		t.Fatalf("the refusal does not name the harness: %v", err)
+	}
+	for _, want := range []string{"BASHY_AGENT=NAME", "bashy agent add NAME", AdHocIdentityEnv + "=off"} {
+		if !strings.Contains(AgentIDGuidance(), want) {
+			t.Errorf("guidance lacks %q:\n%s", want, AgentIDGuidance())
+		}
+	}
+	if all, _ := store.List(); len(all) != 0 {
+		t.Fatalf("an instance was opened: %+v", all)
+	}
+}
+
+// The stamp is only for an agent session that named nobody. A name the caller
+// chose (registered or not), a launcher's stamp, a human and the off switch
+// are all left alone, with no error.
+func TestStampAdHocIdentityLeavesEveryOtherCallerAlone(t *testing.T) {
+	cases := map[string]func(t *testing.T){
+		"self-chosen name":   func(t *testing.T) { t.Setenv("BASHY_AGENT", "not-registered-anywhere") },
+		"weave agent":        func(t *testing.T) { t.Setenv("WEAVE_AGENT", "worker-1") },
+		"launcher principal": func(t *testing.T) { t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/someone") },
+		"launcher instance":  func(t *testing.T) { t.Setenv(principal.InstanceEnv, instanceTestUUID) },
+		"off switch":         func(t *testing.T) { t.Setenv(AdHocIdentityEnv, "off") },
+		"human":              func(t *testing.T) { DetectHarness = func() (string, bool) { return "", false } },
+		"no hook":            func(t *testing.T) { DetectHarness = nil },
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			store, _ := adHocEnv(t, "claude")
+			clearStampEnv(t)
+			// No session key at all: the error path would fire if the caller
+			// were not recognised as already identified.
+			harnessAncestor = func(...string) (int, bool) { return 0, false }
+			setup(t)
+			if _, stamped, err := StampAdHocIdentity(); stamped || err != nil {
+				t.Fatalf("stamp = %v, %v; want an untouched caller", stamped, err)
+			}
+			if all, _ := store.List(); len(all) != 0 {
+				t.Fatalf("an instance was opened: %+v", all)
+			}
+		})
+	}
+}
+
 func TestProcessBaseName(t *testing.T) {
 	for in, want := range map[string]string{
 		"claude":                       "claude",
