@@ -138,3 +138,45 @@ func TestOfferLimitCountsTokenUnit(t *testing.T) {
 		}
 	}
 }
+
+func TestOfferCallRefusesStalePinnedDigest(t *testing.T) {
+	dir := t.TempDir()
+	rec := OfferRecord{Name: "sample", Definition: json.RawMessage(`{"name":"sample","class":"tool","unit":"call"}`), Digest: "current", SSOSecret: "secret"}
+	if err := SaveOffer(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(t.Context(), Options{Token: "owner-key", OffersDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := 0
+	offerRunner.Lock()
+	old := offerRunner.run
+	offerRunner.run = func(_ context.Context, _ OfferRecord, _ map[string]any) (json.RawMessage, any, error) {
+		ran++
+		return json.RawMessage(`{"ok":true}`), map[string]int{"calls": 1}, nil
+	}
+	offerRunner.Unlock()
+	t.Cleanup(func() { offerRunner.Lock(); offerRunner.run = old; offerRunner.Unlock() })
+	for _, tc := range []struct {
+		pinned string
+		want   int
+	}{{"stale", 409}, {"current", 200}, {"", 200}} {
+		r := signedOfferRequest("POST", "/offers/sample", "sample", rec.SSOSecret)
+		r.Body = io.NopCloser(bytes.NewReader([]byte(`{"args":{}}`)))
+		if tc.pinned != "" {
+			r.Header.Set(OfferDigestHeader, tc.pinned)
+		}
+		w := httptest.NewRecorder()
+		b.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("pinned %q status %d, want %d: %s", tc.pinned, w.Code, tc.want, w.Body.String())
+		}
+		if tc.want == 409 && !bytes.Contains(w.Body.Bytes(), []byte("bashy remote add HOST sample")) {
+			t.Fatalf("refusal does not name the fix: %s", w.Body.String())
+		}
+	}
+	if ran != 2 {
+		t.Fatalf("runner ran %d times, want 2", ran)
+	}
+}

@@ -218,7 +218,11 @@ func newStopCmd() *cobra.Command {
 }
 
 // RemoteSubcommands are mounted under bashy's existing remote noun.
-func RemoteSubcommands() []*cobra.Command { return []*cobra.Command{newRemoteCallCmd()} }
+// The options configure the catalog a mount is written to (the embedding
+// shell passes its reserved names so a mount cannot shadow a shipped verb).
+func RemoteSubcommands(opts ...fleet.Option) []*cobra.Command {
+	return []*cobra.Command{newRemoteCallCmd(), newRemoteAddCmd(opts), newRemoteRemoveCmd(opts), newRemoteListCmd(opts)}
+}
 
 func newRemoteCallCmd() *cobra.Command {
 	var asJSON, definition bool
@@ -241,6 +245,8 @@ func newRemoteCallCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		// Set when this call runs through a mounted record (mount.go).
+		pinned := pinnedDigest(host, name)
 		client := &http.Client{Timeout: 30 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		request := func(method, suffix string, body []byte) ([]byte, error) {
 			req, err := http.NewRequestWithContext(c.Context(), method, base+suffix, bytes.NewReader(body))
@@ -249,6 +255,9 @@ func newRemoteCallCmd() *cobra.Command {
 			}
 			req.Header.Set("Authorization", "Bearer "+credential)
 			req.Header.Set("Content-Type", "application/json")
+			if pinned != "" {
+				req.Header.Set(broker.OfferDigestHeader, pinned)
+			}
 			resp, err := client.Do(req)
 			if err != nil {
 				return nil, err
@@ -273,9 +282,13 @@ func newRemoteCallCmd() *cobra.Command {
 		}
 		var meta struct {
 			Definition ToolDefinition `json:"definition"`
+			Digest     string         `json:"digest"`
 		}
 		if err := json.Unmarshal(data, &meta); err != nil {
 			return err
+		}
+		if pinned != "" && meta.Digest != pinned {
+			return digestChanged(host, name, pinned, meta.Digest)
 		}
 		args, err := parseRemoteArgs(meta.Definition, flags)
 		if err != nil {
@@ -299,31 +312,43 @@ func newRemoteCallCmd() *cobra.Command {
 func parseRemoteArgs(d ToolDefinition, flags []string) (map[string]any, error) {
 	props, _ := d.Input["properties"].(map[string]any)
 	args := map[string]any{}
-	for i := 0; i < len(flags); i += 2 {
-		if i+1 >= len(flags) || !strings.HasPrefix(flags[i], "--") {
+	for i := 0; i < len(flags); i++ {
+		if !strings.HasPrefix(flags[i], "--") {
 			return nil, errors.New("remote call arguments must be --ARG value pairs")
 		}
-		key := strings.TrimPrefix(flags[i], "--")
+		// A typed tool call spells a true boolean as a bare --ARG and may
+		// spell any value as --ARG=value; both bind like --ARG value.
+		key, text, inline := strings.Cut(strings.TrimPrefix(flags[i], "--"), "=")
 		prop, ok := props[key].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("unknown argument %q", key)
 		}
-		var val any = flags[i+1]
+		switch {
+		case inline:
+		case prop["type"] == "boolean" && (i+1 >= len(flags) || strings.HasPrefix(flags[i+1], "--")):
+			text = "true"
+		case i+1 >= len(flags):
+			return nil, errors.New("remote call arguments must be --ARG value pairs")
+		default:
+			i++
+			text = flags[i]
+		}
+		var val any = text
 		switch prop["type"] {
 		case "integer":
-			n, err := strconv.ParseInt(flags[i+1], 10, 64)
+			n, err := strconv.ParseInt(text, 10, 64)
 			if err != nil {
 				return nil, err
 			}
 			val = n
 		case "number":
-			n, err := strconv.ParseFloat(flags[i+1], 64)
+			n, err := strconv.ParseFloat(text, 64)
 			if err != nil {
 				return nil, err
 			}
 			val = n
 		case "boolean":
-			b, err := strconv.ParseBool(flags[i+1])
+			b, err := strconv.ParseBool(text)
 			if err != nil {
 				return nil, err
 			}

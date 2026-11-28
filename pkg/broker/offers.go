@@ -38,6 +38,9 @@ type OfferRecord struct {
 	SSOSecret string    `json:"sso_secret"`
 }
 
+// OfferDigestHeader carries the definition digest a mounted tool pinned.
+const OfferDigestHeader = "X-Bashy-Offer-Digest"
+
 type offerDefinition struct {
 	Name  string `json:"name"`
 	Class string `json:"class"`
@@ -318,6 +321,12 @@ func (b *Broker) serveOffer(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "use POST or GET ?definition", 405)
+		return
+	}
+	// A mounted tool sends the digest it pinned; a changed definition must be
+	// accepted again by the caller before it runs.
+	if pinned := r.Header.Get(OfferDigestHeader); pinned != "" && pinned != o.Digest {
+		http.Error(w, "offer definition changed (now "+o.Digest+"); run `bashy remote add HOST "+name+"` to accept it", http.StatusConflict)
 		return
 	}
 	if !b.admitOfferLimit(w, ri, name) {
