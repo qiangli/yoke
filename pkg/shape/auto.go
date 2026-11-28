@@ -55,6 +55,9 @@ func (s Service) decision(c Candidate, event, result, detail string) state.AutoD
 		Base: c.BaseRev, Rev: c.Rev, Agent: c.Agent, Principal: c.Principal,
 		Why: c.Why, Expect: c.Expect,
 	}
+	if c.Verdict != nil {
+		d.Spec = c.Verdict.Spec
+	}
 	if c.Principal != "" {
 		d.Line = s.candidateActivationPrincipal(c)
 	}

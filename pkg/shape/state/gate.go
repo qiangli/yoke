@@ -11,6 +11,9 @@ type EvidenceRef struct {
 	Verdict string
 	// EvidenceID identifies the evidence record behind the verdict.
 	EvidenceID string
+	// Spec is the digest of the spec the revision carries, as the sealed
+	// record states it; empty for records minted before specs were recorded.
+	Spec string
 }
 
 // ActivationGate decides whether a candidate revision may become a

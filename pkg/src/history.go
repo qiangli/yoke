@@ -28,18 +28,20 @@ var previewRefspecs = []config.RefSpec{
 // VersionEntry is one commit on a principal's version line: the request it
 // recorded, the gate verdict behind it, and the evidence it rests on.
 type VersionEntry struct {
-	Activation string    `json:"activation"`
-	Revision   string    `json:"revision"`
-	Version    string    `json:"version,omitempty"`
-	Kind       string    `json:"kind"`
-	Request    string    `json:"request,omitempty"`
-	Verdict    string    `json:"verdict,omitempty"`
-	Evidence   string    `json:"evidence,omitempty"`
-	Agent      string    `json:"agent,omitempty"`
-	Trigger    string    `json:"trigger,omitempty"`
-	Principal  string    `json:"principal,omitempty"`
-	Author     string    `json:"author,omitempty"`
-	When       time.Time `json:"when,omitempty"`
+	Activation string `json:"activation"`
+	Revision   string `json:"revision"`
+	Version    string `json:"version,omitempty"`
+	Kind       string `json:"kind"`
+	Request    string `json:"request,omitempty"`
+	Verdict    string `json:"verdict,omitempty"`
+	Evidence   string `json:"evidence,omitempty"`
+	// Spec is the digest of the spec the version was verified against.
+	Spec      string    `json:"spec,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	Trigger   string    `json:"trigger,omitempty"`
+	Principal string    `json:"principal,omitempty"`
+	Author    string    `json:"author,omitempty"`
+	When      time.Time `json:"when,omitempty"`
 }
 
 // NamedVersion pins a human label to one revision under the principal's
@@ -208,6 +210,7 @@ func walkLine(r *gogit.Repository, tip string, released map[string]string) []Ver
 			Request:    commitTrailer(c.Message, "Request"),
 			Verdict:    commitTrailer(c.Message, "Verdict"),
 			Evidence:   commitTrailer(c.Message, "Evidence"),
+			Spec:       commitTrailer(c.Message, "Spec"),
 			Trigger:    commitTrailer(c.Message, "Trigger"),
 			Principal:  commitTrailer(c.Message, "Principal"),
 			Agent:      agent, Author: author,
@@ -636,6 +639,9 @@ func restoreUnlocked(home, app, rev, principal string, opts RestoreOptions) (Act
 	}
 	msg := fmt.Sprintf("%s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
 		subject, targetSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
+	if verdict.Spec != "" {
+		msg += "Spec: " + verdict.Spec + "\n"
+	}
 	restoration, err := recordLineCommit(dir, plumbing.NewHash(base), target.TreeHash, msg, principal, "bashy@localhost", opts.When)
 	if err != nil {
 		return out, err
@@ -664,7 +670,7 @@ func restoreUnlocked(home, app, rev, principal string, opts RestoreOptions) (Act
 	decision := state.AutoDecision{
 		App: app, Source: source, Event: event, Result: "activated",
 		Principal: principal, Line: principal, By: by, Rev: revision, Base: out.Previous,
-		Ref: opts.Incident, Problem: problem, Detail: opts.Reason,
+		Ref: opts.Incident, Problem: problem, Detail: opts.Reason, Spec: verdict.Spec,
 	}
 	if err := state.LogAuto(home, decision); err != nil {
 		slog.Warn("src: decision log write failed", "app", app, "err", err)

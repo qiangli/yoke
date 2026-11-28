@@ -389,6 +389,9 @@ func activateUnlocked(home, app, rev, principal string, opts ActivateOptions) (A
 	}
 	msg := fmt.Sprintf("Activate %s %s for %s\n\nRevision: %s\nRequest: %s\nVerdict: %s\nEvidence: %s\nPrincipal: %s\n",
 		app, shortSHA(revSHA), principal, revSHA, reqText, verdict.Verdict, verdict.EvidenceID, principal)
+	if verdict.Spec != "" {
+		msg += "Spec: " + verdict.Spec + "\n"
+	}
 	if author != principal {
 		msg += "Author: " + oneLineRequest(author) + "\n"
 	}

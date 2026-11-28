@@ -84,13 +84,14 @@ func Check(dir, candidate, base, principal string) error {
 func New(dir, evidenceID string) state.ActivationGate {
 	return state.GateFunc(func(candidate, base, principal string) (state.EvidenceRef, error) {
 		h := home(dir)
-		if err := Check(h, candidate, base, principal); err != nil {
-			return state.EvidenceRef{}, err
+		rec, err := Require(h, candidate, base, principal)
+		if err != nil {
+			return state.EvidenceRef{}, fmt.Errorf("gate: refusing to activate %s: %w", shortSHA(candidate), err)
 		}
 		id := evidenceID
 		if id == "" {
 			id = evidence.Path(h, candidate)
 		}
-		return state.EvidenceRef{Verdict: "pass", EvidenceID: id}, nil
+		return state.EvidenceRef{Verdict: "pass", EvidenceID: id, Spec: rec.Spec}, nil
 	})
 }

@@ -9,6 +9,12 @@
 // instead. Weakening a check is therefore not a way to pass, and adding one
 // is always allowed.
 //
+// Spec changes. A candidate that edits or removes a base check changes the
+// spec: it is refused unless the caller supplies the owner's review of
+// exactly that spec (Options.Spec), and then it is graded against its own
+// checks under the base's effect cap. An undo or restore grades the recorded
+// version against the spec it carries (VersionSpec).
+//
 // Contained execution. Checks run in an isolated clone detached at the
 // candidate commit, through pkg/shape/contain: cwd-only writes, scrubbed
 // environment, loopback-only network, the base contract's effect cap, and
@@ -55,7 +61,7 @@ import (
 // part of the build id, so every record minted by an older engine goes
 // stale rather than being honoured by a verifier that would now judge
 // differently.
-const engineVersion = "shape-verify/2"
+const engineVersion = "shape-verify/3"
 
 // StagedChecks is the verifier-owned directory, inside the clone, that the
 // frozen check bodies are written to. It is not a candidate path: whatever
@@ -94,6 +100,13 @@ type Options struct {
 	// separate contract step. It is supplied by the caller, never read
 	// from the candidate, so a candidate cannot approve its own removals.
 	Contract []string
+	// Spec authorizes grading a candidate that changes the spec (edits or
+	// removes a base check) against its own spec. Empty refuses such a
+	// candidate. A contract digest is an owner review of exactly that
+	// candidate spec. VersionSpec grades a version already recorded on the
+	// principal's line against the spec it carries (undo and restore). Like
+	// Contract it is supplied by the caller, never read from the candidate.
+	Spec string
 	// KeepClone leaves the isolated clone on disk for inspection.
 	KeepClone bool
 }
@@ -234,16 +247,21 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	changed := SpecChange(base, candidate)
+	graded, capFrom, specFrom, refusal := gradingSpec(base, candidate, o.Spec, changed)
 	rec := evidence.Record{
 		Binding: evidence.Binding{
 			Candidate:  o.CandidateSHA,
 			Base:       o.BaseSHA,
 			Verifier:   BuildID(),
-			Contract:   base.Digest(),
+			Contract:   graded.Digest(),
 			Dependency: dep,
 			Principal:  o.Principal,
 		},
-		Verdict: evidence.VerdictFail,
+		Verdict:    evidence.VerdictFail,
+		Spec:       candidate.Digest(),
+		SpecFrom:   specFrom,
+		SpecChange: changed,
 	}
 	report := Report{Base: base, Candidate: candidate}
 	if o.KeepClone {
@@ -266,14 +284,20 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		return report, nil
 	}
 
-	// The cap is the base's. A candidate may only ever declare effects the
-	// base already allowed; asking for more is an escalation and is
-	// refused before anything of the candidate's runs.
-	if ex := escalated(base.Effects, candidate.Effects); len(ex) > 0 {
-		return finish(fmt.Sprintf("effect cap escalation: the candidate declares %s, outside the base cap %s",
-			strings.Join(ex, ","), capText(base.Effects)), nil, nil)
+	// A spec change nobody authorized is refused before anything of the
+	// candidate's runs: its checks would not be the ones it is graded by.
+	if refusal != "" {
+		return finish(refusal, nil, nil)
 	}
-	capSpec := base.Cap()
+	// The cap is the base's (a recorded version's own, on restore). A
+	// candidate may only ever declare effects the base already allowed;
+	// asking for more is an escalation and is refused before anything of
+	// the candidate's runs.
+	if ex := escalated(capFrom.Effects, candidate.Effects); len(ex) > 0 {
+		return finish(fmt.Sprintf("effect cap escalation: the candidate declares %s, outside the base cap %s",
+			strings.Join(ex, ","), capText(capFrom.Effects)), nil, nil)
+	}
+	capSpec := capFrom.Cap()
 	if capSpec == "" {
 		// contain refuses an empty cap, and so do we: an uncapped run is
 		// not a contained one.
@@ -283,7 +307,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		return finish(fmt.Sprintf("the base contract's effect cap is unusable: %v", err), nil, nil)
 	}
 
-	frozen, err := freezeChecks(clone, base, candidate)
+	frozen, err := freezeChecks(clone, graded, candidate)
 	if err != nil {
 		return Report{}, err
 	}
@@ -343,7 +367,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	// has not been verified against it. Candidate, because contracted code
 	// a candidate ADDS without a check that reaches it is unverified code —
 	// and candidate checks do run, so adding one is always available.
-	uncalled := missingCalls(union(base.FunctionNames(), candidate.FunctionNames()), seen)
+	uncalled := missingCalls(union(graded.FunctionNames(), candidate.FunctionNames()), seen)
 
 	reason := ""
 	if !allPass {

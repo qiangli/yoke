@@ -16,6 +16,7 @@ import (
 	shapeverify "github.com/qiangli/yoke/pkg/shape/verify"
 	"github.com/qiangli/yoke/pkg/src"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +57,9 @@ type VerifyRequest struct {
 	BaseRev      string
 	CandidateRev string
 	Agent        string
+	// Spec is the owner-reviewed spec digest that authorizes grading a
+	// spec-changing candidate against its own spec (verify.Options.Spec).
+	Spec string
 }
 
 // Verdict is the verifier's answer. Only Pass permits activation.
@@ -66,6 +70,13 @@ type Verdict struct {
 	Pass         bool   `json:"pass"`
 	Evidence     string `json:"evidence,omitempty"`
 	Detail       string `json:"detail,omitempty"`
+	// Spec is the digest of the spec the candidate carries; SpecFrom is
+	// "candidate" when it was graded against that spec rather than the
+	// base's; SpecChange lists the base checks it edits or removes, comma
+	// separated (a string keeps Verdict comparable).
+	Spec       string `json:"spec,omitempty"`
+	SpecFrom   string `json:"spec_from,omitempty"`
+	SpecChange string `json:"spec_change,omitempty"`
 }
 
 // ProductionVerifier is the console's trusted verifier. Tests may supply a
@@ -88,38 +99,49 @@ func (v ProductionVerifier) Verify(ctx context.Context, req VerifyRequest) (Verd
 			return Verdict{}, err
 		}
 	}
-	// Candidate workspaces are detached by design. Give the verifier's local
-	// clone one temporary advertised branch; go-git's clone transport cannot
-	// clone a repository whose HEAD is detached.
-	repo, err := gogit.PlainOpen(req.CandidateDir)
+	var report shapeverify.Report
+	err := withVerifyHead(req.CandidateDir, req.CandidateRev, func() error {
+		var rerr error
+		report, rerr = shapeverify.Run(ctx, shapeverify.Options{
+			Home: home, RepoDir: req.CandidateDir, BaseSHA: req.BaseRev,
+			CandidateSHA: req.CandidateRev, Principal: req.Principal, Runner: v.Runner,
+			Spec: req.Spec,
+		})
+		return rerr
+	})
 	if err != nil {
 		return Verdict{}, err
+	}
+	return Verdict{Pass: report.Passed(), Evidence: report.Path, Detail: report.Record.Reason,
+		Spec: report.Record.Spec, SpecFrom: report.Record.SpecFrom, SpecChange: strings.Join(report.Record.SpecChange, ", ")}, nil
+}
+
+// withVerifyHead runs fn while the detached candidate workspace dir
+// advertises rev on one temporary branch. Candidate workspaces are detached
+// by design; go-git's clone transport cannot clone a repository whose HEAD
+// is detached, and the verifier clones the workspace.
+func withVerifyHead(dir, rev string, fn func() error) error {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return err
 	}
 	oldHead, err := repo.Storer.Reference(plumbing.HEAD)
 	if err != nil {
-		return Verdict{}, err
+		return err
 	}
 	verifyRef := plumbing.ReferenceName("refs/heads/bashy-shape-verify")
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(verifyRef, plumbing.NewHash(req.CandidateRev))); err != nil {
-		return Verdict{}, err
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(verifyRef, plumbing.NewHash(rev))); err != nil {
+		return err
 	}
 	if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, verifyRef)); err != nil {
 		_ = repo.Storer.RemoveReference(verifyRef)
-		return Verdict{}, err
+		return err
 	}
 	defer func() {
 		_ = repo.Storer.SetReference(oldHead)
 		_ = repo.Storer.RemoveReference(verifyRef)
 	}()
-
-	report, err := shapeverify.Run(ctx, shapeverify.Options{
-		Home: home, RepoDir: req.CandidateDir, BaseSHA: req.BaseRev,
-		CandidateSHA: req.CandidateRev, Principal: req.Principal, Runner: v.Runner,
-	})
-	if err != nil {
-		return Verdict{}, err
-	}
-	return Verdict{Pass: report.Passed(), Evidence: report.Path, Detail: report.Record.Reason}, nil
+	return fn()
 }
 
 // Activator makes an approved candidate the principal's active revision.

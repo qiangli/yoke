@@ -40,6 +40,9 @@ type AutoDecision struct {
 	Ref       string    `json:"ref,omitempty"`    // the source's item, e.g. an incident id
 	Result    string    `json:"result"`
 	Detail    string    `json:"detail,omitempty"`
+	// Spec is the digest of the spec the event's revision was verified
+	// against (a verdict, an activation, an undo or a restore).
+	Spec string `json:"spec,omitempty"`
 }
 
 func autoPath(home, name string) (string, error) {

@@ -152,6 +152,7 @@ type Candidate struct {
 	Coverage            *CoverageSummary `json:"coverage,omitempty"`
 	Next                []string         `json:"next,omitempty"`
 	Verdict             *Verdict         `json:"verdict,omitempty"`
+	SpecReview          *SpecReview      `json:"spec_review,omitempty"`
 	NewApp              json.RawMessage  `json:"new_app,omitempty"`
 	Deciding            bool             `json:"deciding,omitempty"`
 	Created             time.Time        `json:"created"`
@@ -782,7 +783,7 @@ func (s Service) verify(ctx context.Context, c *Candidate, dir string, recordVer
 	if s.Verifier() == nil {
 		return errors.New("shape: no verifier configured")
 	}
-	v, e := s.Verifier().Verify(ctx, VerifyRequest{App: c.App, Principal: s.candidateActivationPrincipal(*c), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(dir, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Agent: c.Agent})
+	v, e := s.Verifier().Verify(ctx, VerifyRequest{App: c.App, Principal: s.candidateActivationPrincipal(*c), SourceDir: s.App.SourceDir, CandidateDir: filepath.Join(dir, "work"), BaseRev: c.BaseRev, CandidateRev: c.Rev, Agent: c.Agent, Spec: c.reviewedSpec()})
 	if e != nil {
 		return e
 	}

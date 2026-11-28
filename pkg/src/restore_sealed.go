@@ -128,7 +128,8 @@ func prepareRestoreWorkspace(ctx context.Context, srcDir, target, base string) (
 // RestoreSealed returns the principal's active revision to rev the way the
 // web history route does: resolve rev against the principal's own version
 // line, refuse a target that cannot read the current data schema, verify
-// the target against the current line tip through the trusted verifier —
+// the target, by the spec it carries, against the current line tip through
+// the trusted verifier —
 // sealing fresh evidence bound to exactly that (candidate, base,
 // principal, verifier) binding — and only then commit forward through the
 // production gate. Every refusal leaves the active revision unchanged.
@@ -187,9 +188,13 @@ func restoreSealedUnlocked(ctx context.Context, home, app, rev, principal string
 		return out, err
 	}
 	defer os.RemoveAll(filepath.Dir(work))
+	// The target is a version of this line: it is graded against the spec
+	// it carries, so an undo after a spec-changing approval restores code
+	// and spec together instead of grading the old code by the new spec.
 	report, err := verify.Run(ctx, verify.Options{
 		Home: home, RepoDir: work, BaseSHA: h.Tip,
 		CandidateSHA: targetSHA, Principal: principal, Runner: opts.Runner,
+		Spec: verify.VersionSpec,
 	})
 	if err != nil {
 		return out, err

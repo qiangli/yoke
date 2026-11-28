@@ -75,7 +75,11 @@ type Attempt struct {
 	Incidents []string `json:"incidents,omitempty"`
 	Base      string   `json:"base,omitempty"`
 	Rev       string   `json:"rev,omitempty"`
-	Standing  string   `json:"standing"`
+	// Spec is the digest of the spec the attempt's revision was verified
+	// against; SpecReview is the owner's review of its spec change.
+	Spec       string `json:"spec,omitempty"`
+	SpecReview string `json:"spec_review,omitempty"`
+	Standing   string `json:"standing"`
 	// By and Reason describe the reject, undo or restore that set Standing.
 	By     string `json:"by,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -171,7 +175,7 @@ func Fold(lines []state.AutoDecision, app, base string) Ledger {
 				}
 			}
 			continue
-		case "trigger", "attempt", "verdict", "activation", "refusal", "reject":
+		case "trigger", "attempt", "verdict", "activation", "refusal", "reject", "spec-review":
 		default:
 			continue
 		}
@@ -248,6 +252,7 @@ func Fold(lines []state.AutoDecision, app, base string) Ledger {
 		for _, f := range []struct{ dst, src *string }{
 			{&a.Agent, &d.Agent}, {&a.Principal, &d.Principal}, {&a.Line, &d.Line},
 			{&a.Base, &d.Base}, {&a.Rev, &d.Rev}, {&a.Why, &d.Why}, {&a.Expect, &d.Expect},
+			{&a.Spec, &d.Spec},
 		} {
 			if *f.src != "" {
 				*f.dst = *f.src
@@ -260,6 +265,8 @@ func Fold(lines []state.AutoDecision, app, base string) Ledger {
 			}
 		}
 		switch d.Event {
+		case "spec-review":
+			a.SpecReview = detail
 		case "trigger":
 			a.Request = detail
 			if p.Request == "" {

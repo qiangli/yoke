@@ -84,7 +84,9 @@ type Binding struct {
 	Base string `json:"base"`
 	// Verifier is the build id of the verifier that produced the record.
 	Verifier string `json:"verifier"`
-	// Contract is the digest of the base-frozen contract and check set.
+	// Contract is the digest of the frozen contract and check set the
+	// candidate was graded against: the base's, or the candidate's own when
+	// an owner-reviewed spec change or a recorded version's spec applies.
 	Contract string `json:"contract"`
 	// Dependency is the digest of the candidate's dependency manifests.
 	Dependency string `json:"dependency"`
@@ -109,8 +111,18 @@ type Record struct {
 	// non-empty list is why an otherwise all-pass run still failed.
 	Uncalled []string `json:"uncalled,omitempty"`
 	// Reason explains a failing verdict in one line.
-	Reason   string `json:"reason,omitempty"`
-	IssuedAt string `json:"issued_at"`
+	Reason string `json:"reason,omitempty"`
+	// Spec is the digest of the spec (contract and check set) the candidate
+	// version carries in its own tree. Empty on records minted before specs
+	// were recorded.
+	Spec string `json:"spec,omitempty"`
+	// SpecFrom is "candidate" when the checks were frozen from the
+	// candidate's own tree (Binding.Contract then equals Spec); empty means
+	// the base's.
+	SpecFrom string `json:"spec_from,omitempty"`
+	// SpecChange lists the base checks the candidate edits or removes.
+	SpecChange []string `json:"spec_change,omitempty"`
+	IssuedAt   string   `json:"issued_at"`
 	// Seal is the hex HMAC-SHA256 over the record with Seal emptied.
 	Seal string `json:"seal"`
 }
