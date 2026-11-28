@@ -363,5 +363,10 @@
     "path": "timeout",
     "type": "string",
     "description": "duration bounding an offered invocation; empty uses the runner default"
+  },
+  {
+    "path": "unit",
+    "type": "string",
+    "description": "offer output unit when offered: call (default), seconds or bytes, read from the result's field of that name"
   }
 ]

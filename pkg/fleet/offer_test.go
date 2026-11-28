@@ -177,3 +177,27 @@ func TestOfferTypedHTTPCommand(t *testing.T) {
 		t.Fatalf("untyped HTTP command: %v", err)
 	}
 }
+
+// A registered command offered as a tool keeps its declared unit (Sprint 739
+// K5: transcribe meters seconds), and an unknown unit is refused at write.
+func TestRegisteredOfferCommandUnit(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	c := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithoutCloudOverlay())
+	rec := fleet.Command{Name: "unit-fixture", Exec: []string{"fixture"}, Synopsis: "fixture", Effects: []string{"read"}, Unit: "seconds",
+		Args: &fleet.CommandSchema{Flags: []fleet.CommandFlag{{Name: "input", Required: true}}}}
+	if err := c.SaveCommand(rec); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := c.RegisteredOfferCommand(rec.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Unit != "seconds" {
+		t.Fatalf("offered unit = %q, want seconds", cmd.Unit)
+	}
+	bad := rec
+	bad.Name, bad.Unit = "unit-bad", "parsecs"
+	if err := c.SaveCommand(bad); err == nil {
+		t.Fatal("unit parsecs was accepted")
+	}
+}
