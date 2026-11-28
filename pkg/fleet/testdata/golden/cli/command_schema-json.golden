@@ -358,5 +358,10 @@
     "path": "tier",
     "type": "string",
     "description": "execution tier (atlas vocabulary); default userland"
+  },
+  {
+    "path": "timeout",
+    "type": "string",
+    "description": "duration bounding an offered invocation; empty uses the runner default"
   }
 ]

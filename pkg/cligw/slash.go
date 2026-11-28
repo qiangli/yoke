@@ -372,7 +372,7 @@ func (s *Server) serveSlash(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	args := lastUserText(req)
 	opts := toolcmd.Options{Agent: agent.Name, Catalog: s.catalog.fleet}
-	if tool.Name == fleet.OffersTool {
+	if tool.IsOffers() {
 		live, err := s.catalog.fleet.RegisteredOfferCommand(name)
 		if err != nil || !reflect.DeepEqual(live, cmd) {
 			fail(slashFailure{Status: http.StatusConflict, Type: "offer_changed", Message: "registered command changed; refresh its offer", Command: name})

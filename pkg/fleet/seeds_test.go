@@ -98,13 +98,15 @@ func TestSeedsSwitchDropsThirdPartyTools(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("seeds off: tools errs %v", errs)
 	}
-	if len(toolsOff) != 1 || toolsOff[0].Name != "ycode" {
-		t.Fatalf("seeds off: tools = %v, want only [ycode]", toolsOff)
+	// offers (Sprint 739) is first-party mechanism too: the hidden tool that
+	// runs offered registered commands on the door, so it survives seeds off.
+	if len(toolsOff) != 2 || toolsOff[0].Name != "offers" || toolsOff[1].Name != "ycode" {
+		t.Fatalf("seeds off: tools = %v, want only [offers ycode]", toolsOff)
 	}
-	// Tools(false) should also return only ycode.
+	// Tools(false) should also return only the first-party tools.
 	cliTools, errs := cOff.Tools(false)
-	if len(errs) != 0 || len(cliTools) != 1 || cliTools[0].Name != "ycode" {
-		t.Fatalf("seeds off: cli tools = %v, want only [ycode]", cliTools)
+	if len(errs) != 0 || len(cliTools) != 2 || cliTools[0].Name != "offers" || cliTools[1].Name != "ycode" {
+		t.Fatalf("seeds off: cli tools = %v, want only [offers ycode]", cliTools)
 	}
 	// Tool("ycode") and Tool("genie") resolve; third-party tools do not.
 	if _, ok := cOff.Tool("ycode"); !ok {

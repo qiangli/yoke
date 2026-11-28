@@ -290,7 +290,7 @@ func (c *FleetCatalog) deriveInventory() []Agent {
 			continue
 		}
 		a, tool, model, err := c.fleet.Binding(raw.Name)
-		if err != nil || !hasLaunchContract(tool) || (tool.Name == fleet.OffersTool && len(tool.Commands) == 0) {
+		if err != nil || !hasLaunchContract(tool) || (tool.IsOffers() && len(tool.Commands) == 0) {
 			continue
 		}
 		band, source := model.Band, effectiveBandSource(model.Band, model.BandSource)

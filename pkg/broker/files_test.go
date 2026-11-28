@@ -145,9 +145,9 @@ func TestFilesDefinitionAndDigest(t *testing.T) {
 		t.Fatalf("expected 64-hex sha256 digest, got %q", def.Digest)
 	}
 	var schema struct {
-		Type       string                       `json:"type"`
-		Required   []string                     `json:"required"`
-		Properties map[string]map[string]any    `json:"properties"`
+		Type       string                    `json:"type"`
+		Required   []string                  `json:"required"`
+		Properties map[string]map[string]any `json:"properties"`
 	}
 	if err := json.Unmarshal(def.InputSchema, &schema); err != nil {
 		t.Fatalf("invalid input_schema JSON: %v", err)

@@ -182,3 +182,8 @@ func (s CommandSchema) OfferArgv(raw string) ([]string, error) {
 	}
 	return argv, nil
 }
+
+// IsOffers reports whether t is the hidden tool that runs offered registered
+// commands on the door. It keeps that one mechanism check in the fleet
+// package, so the gateway carries no tool-name branch.
+func (t Tool) IsOffers() bool { return t.Name == OffersTool }

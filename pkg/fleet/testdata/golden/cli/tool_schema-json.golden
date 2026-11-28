@@ -695,6 +695,171 @@
     "description": "list element"
   },
   {
+    "path": "commands.\u003cindex\u003e.args",
+    "type": "object",
+    "description": "typed arguments to a print command"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags",
+    "type": "[]object",
+    "description": "named arguments (--name, --name=value; -x for a shorthand); a bool flag given without a value is true"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "long flag name, used as --name (letters, digits, _ and -; no leading dash)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required flag may not carry a default)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.shorthand",
+    "type": "string",
+    "description": "short spelling, used as -x (letters and digits)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; a bool flag given with no value binds to true"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "long flag name, used as --name (letters, digits, _ and -; no leading dash)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required flag may not carry a default)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.shorthand",
+    "type": "string",
+    "description": "short spelling, used as -x (letters and digits)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.flags.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; a bool flag given with no value binds to true"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals",
+    "type": "[]object",
+    "description": "positional arguments in order; required ones first, then optional (a default makes one optional)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "parameter name (a bare identifier; what an error message calls it)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required positional may not carry a default)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; the value is converted before the body runs"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "parameter name (a bare identifier; what an error message calls it)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required positional may not carry a default)"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.args.positionals.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; the value is converted before the body runs"
+  },
+  {
     "path": "commands.\u003cindex\u003e.capability",
     "type": "string",
     "description": "capability tag for --capability routing"
@@ -703,6 +868,11 @@
     "path": "commands.\u003cindex\u003e.confirm",
     "type": "bool",
     "description": "require explicit operator confirmation (--yes) even without a mutating effect; see NeedsConfirmation"
+  },
+  {
+    "path": "commands.\u003cindex\u003e.description",
+    "type": "string",
+    "description": "model-facing command description"
   },
   {
     "path": "commands.\u003cindex\u003e.effects",
@@ -910,9 +1080,179 @@
     "description": "Go duration bounding the whole command; empty = runner default"
   },
   {
+    "path": "commands.\u003cindex\u003e.unit",
+    "type": "string",
+    "description": "offer output unit: call (default), seconds or bytes"
+  },
+  {
     "path": "commands.name=\u003cvalue\u003e",
     "type": "object",
     "description": "named list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args",
+    "type": "object",
+    "description": "typed arguments to a print command"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags",
+    "type": "[]object",
+    "description": "named arguments (--name, --name=value; -x for a shorthand); a bool flag given without a value is true"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "long flag name, used as --name (letters, digits, _ and -; no leading dash)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required flag may not carry a default)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.shorthand",
+    "type": "string",
+    "description": "short spelling, used as -x (letters and digits)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; a bool flag given with no value binds to true"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "long flag name, used as --name (letters, digits, _ and -; no leading dash)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required flag may not carry a default)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.shorthand",
+    "type": "string",
+    "description": "short spelling, used as -x (letters and digits)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.flags.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; a bool flag given with no value binds to true"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals",
+    "type": "[]object",
+    "description": "positional arguments in order; required ones first, then optional (a default makes one optional)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e",
+    "type": "object",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e.name",
+    "type": "string",
+    "description": "parameter name (a bare identifier; what an error message calls it)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required positional may not carry a default)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.\u003cindex\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; the value is converted before the body runs"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e",
+    "type": "object",
+    "description": "named list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e.default",
+    "type": "string",
+    "description": "value bound when the invocation omits it; must convert to type and, with an enum, be one of its entries"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e.enum",
+    "type": "[]string",
+    "description": "the closed set of accepted values (non-empty entries, each in the canonical spelling of type)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e.enum.\u003cindex\u003e",
+    "type": "string",
+    "description": "list element"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e.name",
+    "type": "string",
+    "description": "parameter name (a bare identifier; what an error message calls it)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e.required",
+    "type": "bool",
+    "description": "the invocation must supply it (a required positional may not carry a default)"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.args.positionals.name=\u003cvalue\u003e.type",
+    "type": "string",
+    "description": "string (default) | int | float | bool; the value is converted before the body runs"
   },
   {
     "path": "commands.name=\u003cvalue\u003e.capability",
@@ -923,6 +1263,11 @@
     "path": "commands.name=\u003cvalue\u003e.confirm",
     "type": "bool",
     "description": "require explicit operator confirmation (--yes) even without a mutating effect; see NeedsConfirmation"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.description",
+    "type": "string",
+    "description": "model-facing command description"
   },
   {
     "path": "commands.name=\u003cvalue\u003e.effects",
@@ -1128,6 +1473,11 @@
     "path": "commands.name=\u003cvalue\u003e.timeout",
     "type": "string",
     "description": "Go duration bounding the whole command; empty = runner default"
+  },
+  {
+    "path": "commands.name=\u003cvalue\u003e.unit",
+    "type": "string",
+    "description": "offer output unit: call (default), seconds or bytes"
   },
   {
     "path": "display",
