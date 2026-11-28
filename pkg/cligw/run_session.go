@@ -107,18 +107,24 @@ func (s *Server) sessionScope(ctx context.Context, opts runSessionOptions) (runS
 	}
 	for _, name := range opts.Models {
 		name = strings.TrimSpace(name)
-		sel, err := s.catalog.ParseModelSelector(name)
-		if err != nil || sel.Kind != SelectorAgent {
-			return scope, fmt.Errorf("%q is not a served binding; run `bashy llm pools` to check the available bindings", name)
+		// A binding is looked up by its own name first: a binding may share
+		// its name with a model (muse-wonder is both), and the selector
+		// grammar prefers the model.
+		agent, ok := s.agent(name)
+		if !ok {
+			sel, err := s.catalog.ParseModelSelector(name)
+			if err != nil || sel.Kind != SelectorAgent {
+				return scope, fmt.Errorf("%q is not a served binding; run `bashy llm pools` to check the available bindings", name)
+			}
+			agent, ok = s.agent(sel.Name)
 		}
-		agent, ok := s.agent(sel.Name)
 		if !ok || !s.policy.Filter.Match(agent) {
 			return scope, fmt.Errorf("no backend serves binding %q; run `bashy llm pools` to check the available bindings", name)
 		}
 		if ok, reason := s.router.Servable(agent); !ok {
 			return scope, fmt.Errorf("no backend serves binding %q (%s); run `bashy llm pools` to check the available bindings", name, reason)
 		}
-		scope.models = append(scope.models, sel.Name)
+		scope.models = append(scope.models, agent.Name)
 	}
 	scope.models = uniqueStrings(scope.models)
 	sort.Strings(scope.models)

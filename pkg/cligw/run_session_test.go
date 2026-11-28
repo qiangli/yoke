@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/qiangli/yoke/pkg/fleet"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -312,5 +313,27 @@ func assertRunSocketRemoved(t *testing.T, socket string) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("session file %s remains: %v", path, err)
 		}
+	}
+}
+
+// A binding that shares its name with a model opens by its binding name: the
+// selector grammar alone would read the name as the model and refuse it.
+func TestRunSessionScopeBindingNamedLikeAModel(t *testing.T) {
+	ts := newTestServer(t, nil)
+	if err := ts.catalog.fleet.SaveAgent(fleet.Agent{Name: "sonnet-x", Tool: "claude", Model: "sonnet-x"}); err != nil {
+		t.Fatal(err)
+	}
+	if sel, err := ts.catalog.ParseModelSelector("sonnet-x"); err != nil || sel.Kind != SelectorModel {
+		t.Fatalf("precondition: selector %+v err=%v", sel, err)
+	}
+	scope, err := ts.sessionScope(t.Context(), runSessionOptions{Label: "same-name", Models: []string{"sonnet-x"}, TTL: time.Minute, MaxRequests: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scope.models) != 1 || scope.models[0] != "sonnet-x" {
+		t.Fatalf("scope %v", scope.models)
+	}
+	if _, err := ts.sessionScope(t.Context(), runSessionOptions{Label: "none", Models: []string{"no-such-binding"}, TTL: time.Minute, MaxRequests: 1}); err == nil {
+		t.Fatal("an unknown binding opened a scope")
 	}
 }
