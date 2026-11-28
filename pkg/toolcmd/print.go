@@ -269,7 +269,9 @@ func runPrint(ctx context.Context, tool fleet.Tool, cmd fleet.ToolCommand, args 
 		res.Text = cres.Output
 	default:
 		res.Text = ev.final
-		if res.Text == "" && !ev.parsed {
+		// The offers tool runs registered commands: their stdout is the
+		// result itself, not an agent event stream (Sprint 739 K5).
+		if res.Text == "" && (!ev.parsed || tool.IsOffers()) {
 			res.Text = strings.TrimSpace(cres.Output)
 		}
 	}

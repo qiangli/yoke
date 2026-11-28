@@ -315,6 +315,11 @@
     "description": "list element"
   },
   {
+    "path": "output",
+    "type": "string",
+    "description": "when offered: file:\u003cglob\u003e publishes the files the run writes in its workdir as artifacts; empty returns stdout only"
+  },
+  {
     "path": "provides",
     "type": "[]string",
     "description": "open provider roles implemented by this command (for example transcribe.acquire)"

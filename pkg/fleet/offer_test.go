@@ -195,6 +195,19 @@ func TestRegisteredOfferCommandUnit(t *testing.T) {
 	if cmd.Unit != "seconds" {
 		t.Fatalf("offered unit = %q, want seconds", cmd.Unit)
 	}
+	withOut := rec
+	withOut.Name, withOut.Output = "unit-out", "file:out.txt"
+	if err := c.SaveCommand(withOut); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, err := c.RegisteredOfferCommand(withOut.Name); err != nil || cmd.Output != "file:out.txt" {
+		t.Fatalf("offered output = %q (%v), want file:out.txt", cmd.Output, err)
+	}
+	badOut := rec
+	badOut.Name, badOut.Output = "unit-badout", "transcript"
+	if err := c.SaveCommand(badOut); err == nil {
+		t.Fatal("output transcript was accepted; only file:<glob> is")
+	}
 	bad := rec
 	bad.Name, bad.Unit = "unit-bad", "parsecs"
 	if err := c.SaveCommand(bad); err == nil {

@@ -363,3 +363,30 @@ func TestRefusalsAreStructured(t *testing.T) {
 		t.Fatalf("live: %+v %v", res, err)
 	}
 }
+
+// The offers tool runs registered commands whose stdout is the result itself:
+// a JSON line is not an agent event stream (Sprint 739 K5: a seconds-metered
+// offer printed {"text":...,"seconds":1} and the result text came back empty).
+func TestPrintOffersToolKeepsJSONStdout(t *testing.T) {
+	const out = `{"text":"transcript of 4 bytes","seconds":1}`
+	stubInvoke(t, out, 0, nil)
+	tool := claudeTool()
+	tool.Name = fleet.OffersTool
+	// The baseline offers tool declares no verdict contract.
+	tool.CLI.Launch.EventsOutcome = *new(fleet.EventsOutcome)
+	cmd := fleet.ToolCommand{Name: "stt", Slash: "stt {args}", Mode: "print"}
+	res, err := Run(context.Background(), tool, cmd, "--input x", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeSuccess || res.Text != out {
+		t.Fatalf("offers result text = %q (outcome %s), want the raw JSON", res.Text, res.Outcome)
+	}
+	// Any other tool still reads JSON lines as its event stream.
+	stubInvoke(t, out, 0, nil)
+	// (claude's verdict contract also refuses it; only the text matters here.)
+	res, _ = Run(context.Background(), claudeTool(), cmd, "--input x", Options{})
+	if res.Text == out {
+		t.Fatalf("agent tool text = %q, want the event-stream final, not raw stdout", res.Text)
+	}
+}

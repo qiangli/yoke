@@ -57,6 +57,7 @@ type Command struct {
 	// record: untyped pass-through, exactly as before the field existed.
 	Args    *CommandSchema `yaml:"args,omitempty" json:"args,omitempty" doc:"argument schema the shell binds and validates before the body runs (typed positionals, flags, enums, defaults); absent = untyped pass-through"`
 	Timeout string         `yaml:"timeout,omitempty" json:"timeout,omitempty" doc:"duration bounding an offered invocation; empty uses the runner default"`
+	Output  string         `yaml:"output,omitempty" json:"output,omitempty" doc:"when offered: file:<glob> publishes the files the run writes in its workdir as artifacts; empty returns stdout only"`
 	Unit    string         `yaml:"unit,omitempty" json:"unit,omitempty" doc:"offer output unit when offered: call (default), seconds or bytes, read from the result's field of that name"`
 
 	// Open capability names and JSON request matchers make a registered
@@ -225,6 +226,9 @@ func (c Command) AtlasSpec() atlas.RegisteredSpec {
 // answer to "does this name already resolve to something you ship" (see
 // WithReservedNames); the ring's own names are checked by the caller.
 func (c Command) Validate(reserved ReservedName) error {
+	if c.Output != "" && (!strings.HasPrefix(c.Output, "file:") || strings.TrimPrefix(c.Output, "file:") == "") {
+		return fmt.Errorf("fleet: command %q: output must be file:<glob>", c.Name)
+	}
 	switch c.Unit {
 	case "", "call", "seconds", "bytes":
 	default:

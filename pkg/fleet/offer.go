@@ -93,7 +93,7 @@ func (c *Catalog) RegisteredOfferCommand(name string) (ToolCommand, error) {
 	if r.Args == nil {
 		return ToolCommand{}, &OfferError{name, "missing typed args schema"}
 	}
-	return ToolCommand{Name: name, Description: r.Synopsis, Args: r.Args, Mode: ToolCommandPrint, Slash: name + " {args}", Exec: "bashy " + r.Name + " {args}", Effects: r.Effects, Timeout: r.Timeout, Unit: r.Unit}, nil
+	return ToolCommand{Name: name, Description: r.Synopsis, Args: r.Args, Mode: ToolCommandPrint, Slash: name + " {args}", Exec: "bashy " + r.Name + " {args}", Effects: r.Effects, Timeout: r.Timeout, Unit: r.Unit, Output: r.Output}, nil
 }
 
 // SetRegisteredOffers replaces the generated overlay with the complete selected
