@@ -67,6 +67,7 @@ func (ri *reqInfo) measureResult(result json.RawMessage, usage any) error {
 		var output struct {
 			Seconds *float64 `json:"seconds"`
 			Text    string   `json:"text"`
+			Outcome string   `json:"outcome"`
 		}
 		if err := json.Unmarshal(result, &output); err != nil {
 			return err
@@ -74,11 +75,13 @@ func (ri *reqInfo) measureResult(result json.RawMessage, usage any) error {
 		// A toolcmd.Result carries the command's JSON output in Text.
 		if output.Seconds == nil && output.Text != "" {
 			if err := json.Unmarshal([]byte(output.Text), &output); err != nil {
-				return fmt.Errorf("invalid seconds result: %w", err)
+				return fmt.Errorf("invalid seconds result (outcome %s: %.200q): %w", output.Outcome, output.Text, err)
 			}
 		}
 		if output.Seconds == nil || *output.Seconds < 0 {
-			return fmt.Errorf("offer result needs nonnegative numeric seconds")
+			// Name the run's own outcome: a failed run carries no seconds,
+			// and the caller should see why rather than only the unit.
+			return fmt.Errorf("offer result needs nonnegative numeric seconds (outcome %s: %.200q)", output.Outcome, output.Text)
 		}
 		ri.offerUsage.Units = *output.Seconds
 	}
