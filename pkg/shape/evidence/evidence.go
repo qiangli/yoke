@@ -122,7 +122,11 @@ type Record struct {
 	SpecFrom string `json:"spec_from,omitempty"`
 	// SpecChange lists the base checks the candidate edits or removes.
 	SpecChange []string `json:"spec_change,omitempty"`
-	IssuedAt   string   `json:"issued_at"`
+	// SpecReview is the owner-reviewed spec digest that authorized grading
+	// the candidate against its own spec; empty when the base's spec graded
+	// it, and for a recorded version graded by its own spec on restore.
+	SpecReview string `json:"spec_review,omitempty"`
+	IssuedAt   string `json:"issued_at"`
 	// Seal is the hex HMAC-SHA256 over the record with Seal emptied.
 	Seal string `json:"seal"`
 }

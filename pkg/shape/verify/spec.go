@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/qiangli/yoke/pkg/shape/evidence"
 )
 
 // A version's spec is the contract its own tree carries: the required
@@ -121,4 +123,27 @@ func shortDigest(d string) string {
 		return d[:12]
 	}
 	return d
+}
+
+// RequireSpec checks that a sealed record graded a spec-changing candidate
+// the only way a spec change may be graded for a merge: against the
+// candidate's own spec, under the owner's review of exactly that spec. A
+// candidate that keeps the base spec needs nothing more than the binding.
+// A record graded by a recorded version's own spec (a restore) does not
+// authorize a merge.
+func RequireSpec(rec evidence.Record, delta SpecDelta) error {
+	if len(delta.Changed) == 0 {
+		return nil
+	}
+	switch {
+	case rec.SpecFrom != SpecFromCandidate || rec.Spec != delta.Candidate || rec.Binding.Contract != delta.Candidate:
+		return fmt.Errorf("%w: the candidate changes the spec (%s) but the evidence was not graded against it",
+			evidence.ErrStale, strings.Join(delta.Changed, ", "))
+	case rec.SpecReview == "":
+		return fmt.Errorf("%w: %s", ErrSpecUnreviewed, strings.Join(delta.Changed, ", "))
+	case rec.SpecReview != delta.Candidate:
+		return fmt.Errorf("%w: the reviewed spec %s is not the candidate's spec %s",
+			ErrSpecUnreviewed, shortDigest(rec.SpecReview), shortDigest(delta.Candidate))
+	}
+	return nil
 }

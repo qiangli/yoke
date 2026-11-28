@@ -87,11 +87,22 @@ func requireEvidence(home, dir string, pr PR, baseSHA string) error {
 		return fmt.Errorf("src: refusing PR %s: no principal is resolved, so no verification evidence applies "+
 			"(set the principal, or record an approval covering the whole change)", pr.ID)
 	}
-	want, err := verify.Binding(dir, pr.HeadSHA, baseSHA, principal, nil)
+	want, delta, err := verify.BindingSpec(dir, pr.HeadSHA, baseSHA, principal, nil)
 	if err != nil {
 		return fmt.Errorf("src: PR %s: %w", pr.ID, err)
 	}
-	if _, err := evidence.Require(home, want); err != nil {
+	if len(delta.Changed) > 0 {
+		// RequireSpec checks the contract digest of a spec change, after
+		// a failing verdict has reported its own reason.
+		want.Contract = ""
+	}
+	rec, err := evidence.Require(home, want)
+	if err == nil {
+		// A spec change merges only as it was graded: against its own
+		// spec, under the owner's review of exactly that spec.
+		err = verify.RequireSpec(rec, delta)
+	}
+	if err != nil {
 		return fmt.Errorf("src: refusing PR %s at %s: %w "+
 			"(verify the candidate, or record an approval covering the whole change)",
 			pr.ID, shortSHA(pr.HeadSHA), err)
@@ -191,9 +202,16 @@ func VerifyPR(ctx context.Context, home, id string, runner verify.Runner) (evide
 		}
 		return rec, nil
 	}
+	// An owner's review of the head's spec change travels in its sealed
+	// record; re-verifying carries it forward (the verifier still demands
+	// it equal the head's spec). Nothing else in a record is reused.
+	spec := ""
+	if prior, perr := evidence.Read(home, pr.HeadSHA); perr == nil {
+		spec = prior.SpecReview
+	}
 	rep, err := verify.Run(ctx, verify.Options{
 		Home: home, RepoDir: dir, BaseSHA: baseSHA, CandidateSHA: pr.HeadSHA,
-		Principal: principal, Runner: runner,
+		Principal: principal, Runner: runner, Spec: spec,
 	})
 	if err != nil {
 		return evidence.Record{}, fmt.Errorf("src: verify PR %s: %w", id, err)

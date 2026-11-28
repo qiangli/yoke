@@ -249,6 +249,10 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	changed := SpecChange(base, candidate)
 	graded, capFrom, specFrom, refusal := gradingSpec(base, candidate, o.Spec, changed)
+	review := ""
+	if specFrom == SpecFromCandidate && o.Spec != VersionSpec {
+		review = o.Spec
+	}
 	rec := evidence.Record{
 		Binding: evidence.Binding{
 			Candidate:  o.CandidateSHA,
@@ -262,6 +266,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		Spec:       candidate.Digest(),
 		SpecFrom:   specFrom,
 		SpecChange: changed,
+		SpecReview: review,
 	}
 	report := Report{Base: base, Candidate: candidate}
 	if o.KeepClone {
@@ -722,40 +727,58 @@ func trim(s string) string {
 }
 
 // Binding recomputes the parts of an evidence binding that a reader can
-// derive from the repository itself — the frozen contract digest at the
-// base and the dependency digest at the candidate — plus the running
-// verifier's build id. A gate calls it so it compares a record against
-// inputs it worked out for itself rather than against the record's own
-// account of them.
+// derive from the repository itself — the frozen contract digest and the
+// dependency digest at the candidate — plus the running verifier's build
+// id. A gate calls it so it compares a record against inputs it worked out
+// for itself rather than against the record's own account of them. The
+// contract digest is the base's, or the candidate's own when the candidate
+// changes the spec: a spec change is only ever graded against its own spec.
 func Binding(repoDir, candidateSHA, baseSHA, principal string, reader ContractReader) (evidence.Binding, error) {
+	b, _, err := BindingSpec(repoDir, candidateSHA, baseSHA, principal, reader)
+	return b, err
+}
+
+// BindingSpec is Binding plus the spec delta it derived, so a gate can also
+// demand that a spec change was graded under the owner's review of exactly
+// that spec (RequireSpec).
+func BindingSpec(repoDir, candidateSHA, baseSHA, principal string, reader ContractReader) (evidence.Binding, SpecDelta, error) {
 	if repoDir == "" || candidateSHA == "" || baseSHA == "" {
-		return evidence.Binding{}, errors.New("verify: repo dir, base and candidate are required")
+		return evidence.Binding{}, SpecDelta{}, errors.New("verify: repo dir, base and candidate are required")
 	}
 	if reader == nil {
 		reader = UnitReader{}
 	}
 	clone, err := IsolatedClone(repoDir, baseSHA)
 	if err != nil {
-		return evidence.Binding{}, err
+		return evidence.Binding{}, SpecDelta{}, err
 	}
 	defer os.RemoveAll(clone)
 	base, err := reader.ReadContract(clone)
 	if err != nil {
-		return evidence.Binding{}, err
+		return evidence.Binding{}, SpecDelta{}, err
 	}
 	if err := detach(clone, candidateSHA); err != nil {
-		return evidence.Binding{}, err
+		return evidence.Binding{}, SpecDelta{}, err
+	}
+	cand, err := reader.ReadContract(clone)
+	if err != nil {
+		return evidence.Binding{}, SpecDelta{}, err
 	}
 	dep, err := DependencyDigest(clone)
 	if err != nil {
-		return evidence.Binding{}, err
+		return evidence.Binding{}, SpecDelta{}, err
+	}
+	delta := SpecDelta{Base: base.Digest(), Candidate: cand.Digest(), Changed: SpecChange(base, cand)}
+	graded := delta.Base
+	if len(delta.Changed) > 0 {
+		graded = delta.Candidate
 	}
 	return evidence.Binding{
 		Candidate:  candidateSHA,
 		Base:       baseSHA,
 		Verifier:   BuildID(),
-		Contract:   base.Digest(),
+		Contract:   graded,
 		Dependency: dep,
 		Principal:  principal,
-	}, nil
+	}, delta, nil
 }
