@@ -93,14 +93,15 @@ func newPeerAddCmd() *cobra.Command {
 
 func newPeerSetCmd() *cobra.Command {
 	var email, circle string
+	var commands []string
 	var asJSON, dryRun bool
 	c := &cobra.Command{
-		Use:   "set NAME --email EMAIL [--circle C]",
-		Short: "set or clear a peer's member binding",
+		Use:   "set NAME [--email EMAIL] [--circle C] [--command NAME]...",
+		Short: "set a peer's member binding or named command allow-list",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !cmd.Flags().Changed("email") && !cmd.Flags().Changed("circle") {
-				return fmt.Errorf("llm peer set: give --email (use --email= to restore a legacy unbound peer) or --circle")
+			if !cmd.Flags().Changed("email") && !cmd.Flags().Changed("circle") && !cmd.Flags().Changed("command") {
+				return fmt.Errorf("llm peer set: give --email, --circle or --command")
 			}
 			path, err := peersPath()
 			if err != nil {
@@ -120,16 +121,31 @@ func newPeerSetCmd() *cobra.Command {
 			if !cmd.Flags().Changed("circle") {
 				circle = rec.Circle
 			}
-			if email != "" {
+			if (cmd.Flags().Changed("email") || cmd.Flags().Changed("circle")) && email != "" {
 				if err := validatePeerMember(cmd.Context(), email, circle); err != nil {
 					return err
 				}
 			}
 			result := map[string]any{"peer": PeerPrincipalPrefix + args[0], "email": email, "circle": circle}
+			if cmd.Flags().Changed("command") {
+				if len(commands) == 1 && commands[0] == "" {
+					commands = nil
+				}
+				result["commands"] = commands
+			}
 			if dryRun {
 				result["dry_run"] = true
-			} else if err := SetPeerMember(path, args[0], email, circle, time.Now().UTC()); err != nil {
-				return err
+			} else {
+				if cmd.Flags().Changed("email") || cmd.Flags().Changed("circle") {
+					if err := SetPeerMember(path, args[0], email, circle, time.Now().UTC()); err != nil {
+						return err
+					}
+				}
+				if cmd.Flags().Changed("command") {
+					if err := SetPeerCommands(path, args[0], commands, time.Now().UTC()); err != nil {
+						return err
+					}
+				}
 			}
 			if asJSON {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
@@ -142,6 +158,7 @@ func newPeerSetCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&email, "email", "", "active mutual member email (empty clears the binding)")
 	c.Flags().StringVar(&circle, "circle", "", "also require the member's current circle (empty means exact email only)")
+	c.Flags().StringArrayVar(&commands, "command", nil, "allow named command (repeat; --command= clears the list)")
 	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable output")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show the change without writing")
 	return c
@@ -280,13 +297,13 @@ func newPeerListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "PEER\tSHARE\tEMAIL\tCIRCLE\tLIMITS\tCREATED")
+			fmt.Fprintln(tw, "PEER\tSHARE\tEMAIL\tCIRCLE\tCOMMANDS\tLIMITS\tCREATED")
 			for _, n := range ps.Names() {
 				lim := PeerLimits{}
 				if ps.Peers[n].Limits != nil {
 					lim = *ps.Peers[n].Limits
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", PeerPrincipalPrefix+n, ps.Peers[n].Share, ps.Peers[n].Email, ps.Peers[n].Circle, lim, ps.Peers[n].Created.Format(time.RFC3339))
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", PeerPrincipalPrefix+n, ps.Peers[n].Share, ps.Peers[n].Email, ps.Peers[n].Circle, strings.Join(ps.Peers[n].Commands, ","), lim, ps.Peers[n].Created.Format(time.RFC3339))
 			}
 			return tw.Flush()
 		},

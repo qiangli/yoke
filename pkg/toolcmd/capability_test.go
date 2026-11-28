@@ -147,7 +147,7 @@ func TestRunPeerCapabilityFailsClosedBeforeNetwork(t *testing.T) {
 	}
 	check("address as peer", run("--capability", "deep-research", "--peer", peerURL, "--", "q"), "not an address")
 	check("no peers file", run("--capability", "deep-research", "--peer", "dragon", "--", "q"), "no peers file")
-	check("ref instead of capability", run("vendor-b:research", "--peer", "dragon", "--", "q"), "name a capability")
+	check("named command without peers file", run("vendor-b:research", "--peer", "dragon", "--", "q"), "no peers file")
 
 	writePeers(t, 0o644, map[string]PeerDoor{"dragon": {URL: peer.URL, Credential: secret}})
 	check("group-readable peers file", run("--capability", "deep-research", "--peer", "dragon", "--", "q"), "must be 0600")
@@ -259,5 +259,52 @@ func TestPeerReplyMustBeAttributedToAnotherVendor(t *testing.T) {
 	}
 	if events != 0 {
 		t.Fatalf("unaccepted replies published %d events", events)
+	}
+}
+
+func TestPeerNamedCommandReply(t *testing.T) {
+	t.Setenv("BASHY_HOME", t.TempDir())
+	var gotFilter string
+	var gotText string
+	command := "review"
+	tool := "codex"
+	door := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotFilter = r.Header.Get(FilterHeader)
+		var body struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Messages) > 0 {
+			gotText = body.Messages[0].Content
+		}
+		json.NewEncoder(w).Encode(map[string]any{"x_bashy_tool_command": Result{Tool: tool, Command: command, Outcome: OutcomeSuccess, Text: "done"}})
+	}))
+	defer door.Close()
+	writePeers(t, 0o600, map[string]PeerDoor{"dragon": {URL: door.URL, Credential: "bpeer_ok"}})
+	var out strings.Builder
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"codex:review", "--peer", "dragon", "--json", "--", "look", "here"})
+	cmd.SetOut(&out)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotFilter != "slash=review,tool=codex" || gotText != "look here" {
+		t.Fatalf("filter=%q text=%q", gotFilter, gotText)
+	}
+	var res Result
+	if err := json.Unmarshal([]byte(out.String()), &res); err != nil || res.Command != "review" {
+		t.Fatalf("reply=%+v err=%v", res, err)
+	}
+	tool = "claude"
+	if _, err := DispatchPeerCommand(t.Context(), "dragon", "codex:review", "", "", "q", 0); err == nil || !strings.Contains(err.Error(), "answered") {
+		t.Fatalf("mismatched tool: %v", err)
+	}
+	tool, command = "codex", "plan"
+	if _, err := DispatchPeerCommand(t.Context(), "dragon", "review", "", "", "q", 0); err == nil || !strings.Contains(err.Error(), "answered") {
+		t.Fatalf("mismatched command: %v", err)
 	}
 }

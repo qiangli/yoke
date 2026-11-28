@@ -43,6 +43,7 @@ import (
 const (
 	CapabilityHeader = "X-Bashy-Capability"
 	CallerHeader     = "X-Bashy-Caller"
+	FilterHeader     = "X-Bashy-Filter"
 )
 
 // DefaultPeerTimeout bounds a peer capability run when --timeout is unset: a
@@ -122,6 +123,71 @@ func LoadPeer(name string) (PeerDoor, error) {
 
 // peerHTTPClient never follows redirects: the credential is for one door.
 var peerHTTPClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// DispatchPeerCommand runs a named command on a peer's door. The door owns the
+// command definition and checks its per-peer allow-list before execution.
+func DispatchPeerCommand(ctx context.Context, peer, ref, model, agent, text string, timeout time.Duration) (Result, error) {
+	tool, command, hasTool := strings.Cut(ref, ":")
+	if !hasTool {
+		command, tool = tool, ""
+	}
+	if command == "" || strings.ContainsAny(command, ",= /\t\n:") || strings.ContainsAny(tool, ",= /\t\n:") || (hasTool && tool == "") {
+		return Result{}, fmt.Errorf("toolcmd: invalid peer command %q", ref)
+	}
+	if model != "" || agent != "" {
+		return Result{}, fmt.Errorf("toolcmd: named peer commands select their tool on the peer door; do not pass --model or --agent")
+	}
+	door, err := LoadPeer(peer)
+	if err != nil {
+		return Result{}, err
+	}
+	peer = strings.TrimSpace(peer)
+	scrub := func(s string) string { return strings.ReplaceAll(s, door.Credential, "[redacted]") }
+	body, _ := json.Marshal(map[string]any{"model": "auto", "messages": []map[string]string{{"role": "user", "content": text}}})
+	if timeout <= 0 {
+		timeout = DefaultPeerTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, door.URL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return Result{}, fmt.Errorf("toolcmd: peer %q request: %s", peer, scrub(err.Error()))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+door.Credential)
+	filter := "slash=" + command
+	if tool != "" {
+		filter += ",tool=" + tool
+	}
+	req.Header.Set(FilterHeader, filter)
+	resp, err := peerHTTPClient.Do(req)
+	if err != nil {
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return Result{}, fmt.Errorf("toolcmd: peer %q door unreachable: %s", peer, scrub(err.Error()))
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return Result{}, fmt.Errorf("toolcmd: peer %q read reply: %s", peer, scrub(err.Error()))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return Result{}, fmt.Errorf("toolcmd: peer %q refused command %s (HTTP %d): %s", peer, ref, resp.StatusCode, scrub(peerErrorText(data)))
+	}
+	var reply struct {
+		ToolCommand *Result `json:"x_bashy_tool_command"`
+	}
+	if err := json.Unmarshal(data, &reply); err != nil || reply.ToolCommand == nil {
+		return Result{}, fmt.Errorf("toolcmd: peer %q reply carries no tool-command envelope", peer)
+	}
+	res := *reply.ToolCommand
+	if res.Command != command || (tool != "" && res.Tool != tool) || res.Tool == "" {
+		return res, fmt.Errorf("toolcmd: peer %q answered %s:%s, asked %s", peer, res.Tool, res.Command, ref)
+	}
+	return res, nil
+}
 
 // DispatchPeerCapability runs capText on peer name's door and returns the
 // peer's typed result. The selection event is recorded on THIS host, naming

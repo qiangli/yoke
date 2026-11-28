@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -379,6 +380,12 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) {
 		writeErr(w, rest, http.StatusForbidden, fmt.Sprintf("%s may reach only inference routes on this door, not %s %s", principal, r.Method, rest))
 		return
+	}
+	if strings.HasPrefix(principal, PeerPrincipalPrefix) && r.Method == http.MethodPost && isInferencePath(rest) {
+		if slash := SlashName(r.Header.Get(cligw.FilterHeader)); slash != "" && !slices.Contains(auth.commands, slash) {
+			writeErr(w, rest, http.StatusForbidden, fmt.Sprintf("peer %s may not run command %q", principal, slash))
+			return
+		}
 	}
 	if r.Method == http.MethodPost && isInferencePath(rest) && !b.admitPeer(w, ri, limits) {
 		return
@@ -1477,6 +1484,12 @@ func (b *Broker) serveModels(w http.ResponseWriter, r *http.Request, ri *reqInfo
 // slashOf returns the slash= key of an X-Bashy-Filter value ("" when absent
 // or unparsable — a malformed filter is cligw's 400 to report).
 func slashOf(filter string) string {
+	return SlashName(filter)
+}
+
+// SlashName returns the parsed named command from a request filter. An invalid
+// filter is left to cligw to reject with its own 400 response.
+func SlashName(filter string) string {
 	f, err := cligw.ParseFilter(filter)
 	if err != nil {
 		return ""

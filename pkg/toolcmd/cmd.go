@@ -269,21 +269,20 @@ func newRunCmd() *cobra.Command {
 	f.StringVar(&model, "model", "", "model to bind (TOOL:MODEL)")
 	f.StringVar(&agent, "agent", "", "agent nick to resolve the launch from (default: the tool)")
 	f.StringVar(&capabilityName, "capability", "", "route through a measured non-caller provider for this capability")
-	f.StringVar(&peer, "peer", "", "sphere peer whose door runs --capability (a name in the 0600 toolcmd peers file)")
+	f.StringVar(&peer, "peer", "", "sphere peer whose door runs a named command or --capability (a name in the 0600 toolcmd peers file)")
 	f.StringVar(&caller, "caller", "", "requesting vendor, excluded from --capability selection (default: BASHY_AGENT)")
 	f.DurationVar(&timeout, "timeout", 0, "override the command's timeout")
 	return c
 }
 
-// runPeer is `run --capability X --peer NAME`: the peer's door selects and
-// runs; this host records the selection and prints the peer's report.
+// runPeer sends a named command or capability request to the peer's door.
 func runPeer(cmd *cobra.Command, args []string, peer, capabilityName, caller, model, agent string, async, dryRun, asJSON bool, timeout time.Duration) error {
 	switch {
-	case capabilityName == "":
-		return fmt.Errorf("toolcmd: --peer dispatches a --capability request; name a capability")
-	case len(args) > 0 && strings.Contains(args[0], ":"):
+	case capabilityName == "" && len(args) == 0:
+		return fmt.Errorf("toolcmd: --peer needs TOOL:NAME, NAME or --capability")
+	case capabilityName != "" && len(args) > 0 && strings.Contains(args[0], ":"):
 		return fmt.Errorf("toolcmd: give TOOL:NAME or --capability, not both")
-	case model != "" || agent != "":
+	case capabilityName != "" && (model != "" || agent != ""):
 		return fmt.Errorf("toolcmd: --capability selects its own measured binding; do not pass --model or --agent")
 	case async:
 		return fmt.Errorf("toolcmd: --peer does not support --async")
@@ -292,9 +291,15 @@ func runPeer(cmd *cobra.Command, args []string, peer, capabilityName, caller, mo
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	res, err := DispatchPeerCapability(ctx, peer, capabilityName, caller, strings.Join(args, " "), timeout)
+	var res Result
+	var err error
+	if capabilityName != "" {
+		res, err = DispatchPeerCapability(ctx, peer, capabilityName, caller, strings.Join(args, " "), timeout)
+	} else {
+		res, err = DispatchPeerCommand(ctx, peer, args[0], model, agent, strings.Join(args[1:], " "), timeout)
+	}
 	out := cmd.OutOrStdout()
-	if asJSON && res.Selection != nil {
+	if asJSON && (res.Selection != nil || res.Command != "") {
 		if werr := writeJSON(out, res); werr != nil {
 			return werr
 		}

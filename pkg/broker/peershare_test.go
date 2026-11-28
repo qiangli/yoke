@@ -399,3 +399,66 @@ func TestPeerCapabilityDispatchRoundTrip(t *testing.T) {
 		t.Fatalf("revoked dispatch err = %v", err)
 	}
 }
+
+func TestPeerNamedCommandAllowList(t *testing.T) {
+	h, cli, peers := peerHarness(t)
+	now := time.Now()
+	cred, err := MintPeerCredential(peers, "codexhost", ShareAllow, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := map[string]string{cligw.FilterHeader: "slash=review,tool=codex"}
+	if code, _ := peerPost(t, h, "/v1/chat/completions", cred, filter); code != http.StatusForbidden {
+		t.Fatalf("empty list: HTTP %d, want 403", code)
+	}
+	if err := SetPeerCommands(peers, "codexhost", []string{"review"}, now); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := peerPost(t, h, "/v1/chat/completions", cred, filter); code == http.StatusForbidden {
+		t.Fatalf("allowed slash: HTTP %d", code)
+	}
+	cli.mu.Lock()
+	hits := cli.hits
+	cli.mu.Unlock()
+	if code, _ := peerPost(t, h, "/v1/chat/completions", cred, map[string]string{cligw.FilterHeader: "slash=deploy,tool=codex"}); code != http.StatusForbidden {
+		t.Fatalf("unlisted slash: HTTP %d, want 403", code)
+	}
+	cli.mu.Lock()
+	if cli.hits != hits {
+		t.Fatal("denied slash reached cligw")
+	}
+	cli.mu.Unlock()
+	if got := SlashName("tool=codex,slash=/review"); got != "review" {
+		t.Fatalf("SlashName = %q", got)
+	}
+}
+
+func TestPeerSetCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "peers.json")
+	if _, err := MintPeerCredential(path, "bob", ShareAllow, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := peersPath
+	peersPath = func() (string, error) { return path, nil }
+	t.Cleanup(func() { peersPath = oldPath })
+	cmd := newPeerSetCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"bob", "--command", "review", "--command", "plan"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := LoadPeerShares(path)
+	if err != nil || len(ps.Peers["bob"].Commands) != 2 {
+		t.Fatalf("commands = %+v, err=%v", ps.Peers["bob"].Commands, err)
+	}
+	cmd = newPeerSetCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"bob", "--command="})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	ps, err = LoadPeerShares(path)
+	if err != nil || len(ps.Peers["bob"].Commands) != 0 {
+		t.Fatalf("cleared commands = %+v, err=%v", ps.Peers["bob"].Commands, err)
+	}
+}

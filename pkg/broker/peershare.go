@@ -50,6 +50,9 @@ type PeerShare struct {
 	Circle string `json:"circle,omitempty"`
 	// Limits caps the peer's usage (nil = unlimited); see peerlimit.go.
 	Limits *PeerLimits `json:"limits,omitempty"`
+	// Commands is the exact set of named slash commands this peer may run.
+	// An empty set denies all named commands.
+	Commands []string `json:"commands,omitempty"`
 }
 
 // PeerShares is the on-disk peers file.
@@ -235,6 +238,25 @@ func SetPeerShare(path, name, share string, now time.Time) error {
 	})
 }
 
+// SetPeerCommands replaces the named commands allowed for an existing peer.
+func SetPeerCommands(path, name string, commands []string, now time.Time) error {
+	for _, command := range commands {
+		if command == "" || strings.ContainsAny(command, ",= /\t\n") {
+			return fmt.Errorf("broker: invalid peer command %q", command)
+		}
+	}
+	return updatePeerShares(path, func(ps *PeerShares) error {
+		rec, ok := ps.Peers[name]
+		if !ok {
+			return fmt.Errorf("broker: no peer %q (mint one with `llm peer add %s`)", name, name)
+		}
+		rec.Commands = append([]string(nil), commands...)
+		rec.Updated = now
+		ps.Peers[name] = rec
+		return nil
+	})
+}
+
 // RevokePeer deletes name's credential; a request carrying it is then an
 // unknown bearer (401).
 func RevokePeer(path, name string) error {
@@ -269,6 +291,7 @@ type peerAuthorization struct {
 	principal string
 	limits    *PeerLimits
 	member    *boundary.Decision
+	commands  []string
 }
 
 type peerMemberRefusal struct{ reason string }
@@ -297,7 +320,7 @@ func (b *Broker) authorizePeer(ctx context.Context, presented string) (peerAutho
 	if match == "" {
 		return peerAuthorization{}, nil
 	}
-	auth := peerAuthorization{principal: PeerPrincipalPrefix + match, limits: ps.Peers[match].Limits}
+	auth := peerAuthorization{principal: PeerPrincipalPrefix + match, limits: ps.Peers[match].Limits, commands: ps.Peers[match].Commands}
 	if ps.Peers[match].Share != ShareAllow {
 		return auth, errPeerNotShared
 	}
