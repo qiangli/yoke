@@ -48,6 +48,30 @@ func ParseSatelliteAppURL(raw string) (SatelliteAppEndpoint, error) {
 	return SatelliteAppEndpoint{URL: u.String(), Satellite: u.Scheme + "://" + u.Host, Host: parts[3], App: parts[5]}, nil
 }
 
+// ParseSatelliteAppBase validates an offer app URL, optionally with a resource
+// path below the app. The returned URL retains that path.
+func ParseSatelliteAppBase(raw string) (SatelliteAppEndpoint, error) {
+	var zero SatelliteAppEndpoint
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") ||
+		(u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
+		return zero, fmt.Errorf("invalid satellite offer URL")
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 6 || parts[0] != "" || parts[1] != "matrix" || parts[2] != "h" || parts[4] != "app" ||
+		!strings.HasPrefix(parts[5], "offer-") || parts[5] == "offer-" || strings.Contains(strings.ToLower(u.EscapedPath()), "%2f") {
+		return zero, fmt.Errorf("expected satellite offer route /matrix/h/HOST/app/offer-NAME")
+	}
+	for _, segment := range parts[1:] {
+		if segment == "" || segment == "." || segment == ".." || strings.ContainsAny(segment, "\\\x00\r\n") {
+			return zero, fmt.Errorf("invalid satellite offer path")
+		}
+	}
+	u.Path, u.RawPath = path, ""
+	return SatelliteAppEndpoint{URL: u.String(), Satellite: u.Scheme + "://" + u.Host, Host: parts[3], App: parts[5]}, nil
+}
+
 func isLoopbackHost(host string) bool {
 	return strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback()
 }
