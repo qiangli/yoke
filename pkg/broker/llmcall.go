@@ -82,10 +82,12 @@ func Call(ctx context.Context, req CallRequest) (CallResult, error) {
 		}
 	}
 	model, base, key := req.Model, "", ""
+	var host string
 	if m, ok, err := ResolveDoorModel(ctx, req.Model); ok {
 		if err != nil {
 			return fail("door", "%v", err)
 		}
+		host = m.Host
 		model, base, key = m.ModelID, m.BaseURL, m.Key
 	} else {
 		token, err := door.Token()
@@ -141,6 +143,11 @@ func Call(ctx context.Context, req CallRequest) (CallResult, error) {
 			msg = msg[:512]
 		}
 		return fail("door", "the door answered %d: %s", resp.StatusCode, msg)
+	}
+	if host != "" {
+		if err := RecordRemoteResponse(host, resp); err != nil {
+			return fail("door", "record completed remote call: %v", err)
+		}
 	}
 	var out struct {
 		Model   string `json:"model"`

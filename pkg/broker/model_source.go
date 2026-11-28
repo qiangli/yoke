@@ -10,6 +10,7 @@ import (
 // Key and BaseURL may contain credentials: keep them in memory, never log them
 // or persist them in a model catalog. Resolve again for each invocation.
 type DoorModel struct {
+	Host    string
 	ModelID string
 	BaseURL string
 	Key     string
@@ -43,5 +44,5 @@ func ResolveDoorModel(ctx context.Context, name string) (m DoorModel, ok bool, e
 	if env["OPENAI_BASE_URL"] == "" || env["OPENAI_API_KEY"] == "" {
 		return DoorModel{}, true, fmt.Errorf("door %s returned an incomplete model endpoint", source)
 	}
-	return DoorModel{ModelID: model, BaseURL: strings.TrimRight(env["OPENAI_BASE_URL"], "/"), Key: env["OPENAI_API_KEY"]}, true, nil
+	return DoorModel{Host: source, ModelID: model, BaseURL: strings.TrimRight(env["OPENAI_BASE_URL"], "/"), Key: env["OPENAI_API_KEY"]}, true, nil
 }

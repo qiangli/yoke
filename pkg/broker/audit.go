@@ -20,6 +20,11 @@ import (
 // serving backend could not honor (X-Bashy-Ignored): a recorded run's numbers
 // were not produced under them, however the request was written.
 type Record struct {
+	Tool          string         `json:"tool,omitempty"`
+	OfferClass    string         `json:"offer_class,omitempty"`
+	Unit          string         `json:"unit,omitempty"`
+	Units         float64        `json:"units"`
+	Digest        string         `json:"digest,omitempty"`
 	Time          time.Time      `json:"time"`
 	Principal     string         `json:"principal"`
 	Session       string         `json:"session,omitempty"`

@@ -166,7 +166,7 @@ type Broker struct {
 	audit           *auditLog
 	meter           *peerMeter // per-peer limit counters (peerlimit.go)
 	offerMu         sync.Mutex
-	offerCalls      map[string]uint64
+	offerCalls      map[string]float64
 	tracer          trace.Tracer
 
 	// stickyW holds one warm CLI per bind=worker/reset=none binding, keyed
@@ -201,7 +201,7 @@ func New(ctx context.Context, opts Options) (*Broker, error) {
 		tracer:     otel.Tracer("bashy/broker"),
 		derived:    map[string]bool{},
 		stickyW:    map[string]*stickyEntry{},
-		offerCalls: map[string]uint64{},
+		offerCalls: map[string]float64{},
 	}
 	var stickyPath, auditPath string
 	if opts.StateDir != "" {
@@ -278,7 +278,8 @@ const unixOwnerKey ctxKey = 1
 type reqInfo struct {
 	principal         string
 	offerName         string
-	offerUnit         string
+	offerUsage        OfferUsage
+	reservedCall      bool
 	session           string
 	class             Class
 	params            map[string]string
@@ -361,15 +362,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w = cw
 	defer func() {
-		if !ri.finished {
-			if cw.status == 0 {
-				cw.status = http.StatusOK
-			}
-			if ri.rec.PromptTok == 0 && ri.rec.OutputTok == 0 {
-				ri.rec.PromptTok, ri.rec.OutputTok, ri.rec.CachedTok, ri.rec.CacheWriteTok = parseUsage(cw.tail)
-			}
-			b.finish(ri, cw.status, 0, refusalReason(cw.status, cw.tail))
-		}
+		b.finishCaptured(ri, cw)
 		if capture && ri.principal != "" {
 			b.appendCapture(ri, rest, &requestBody, cw)
 		}
@@ -389,7 +382,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	principal, limits := auth.principal, auth.limits
 	stampMemberDecision(ri, auth.member)
 	ri.principal = principal
-	ri.offerName = auth.offerName
+
 	ri.rec.Principal = principal
 	if strings.HasPrefix(principal, PeerPrincipalPrefix) && !peerRouteAllowed(r.Method, rest) && !peerOfferAllowed(r.Method, rest, auth.commands) && !peerFilesOfferAllowed(r.Method, rest, auth.commands) {
 		writeErr(w, rest, http.StatusForbidden, fmt.Sprintf("%s may reach only inference routes on this door, not %s %s", principal, r.Method, rest))
@@ -398,8 +391,11 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(principal, "member:") && !b.memberOfferRouteAllowed(w, r, rest, auth.offerName) {
 		return
 	}
-	if strings.HasPrefix(principal, "member:") && isInferencePath(rest) && !b.admitOfferLimit(w, ri, auth.offerName) {
-		return
+	if auth.offerName != "" && isInferencePath(rest) {
+		if !b.admitOfferLimit(w, ri, auth.offerName) {
+			return
+		}
+		ri.offerUsage.Tool = "llm"
 	}
 	if strings.HasPrefix(principal, PeerPrincipalPrefix) && r.Method == http.MethodPost && isInferencePath(rest) {
 		if slash := SlashName(r.Header.Get(cligw.FilterHeader)); slash != "" && !slices.Contains(auth.commands, slash) {
@@ -446,7 +442,7 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(rest, "/api/"):
 		b.serveNative(w, r, ri)
 	case r.Method == http.MethodPost && isInferencePath(rest):
-		b.serveInference(w, r, ri)
+		b.serveInference(w, r, ri, auth.commands)
 	default:
 		if b.opts.CLI != nil {
 			b.delegateCLI(w, r, ri, nil)
@@ -501,10 +497,20 @@ func (b *Broker) serveNative(w http.ResponseWriter, r *http.Request, ri *reqInfo
 	b.dispatch(w, r, ri, body, true)
 }
 
-func (b *Broker) serveInference(w http.ResponseWriter, r *http.Request, ri *reqInfo) {
+func (b *Broker) serveInference(w http.ResponseWriter, r *http.Request, ri *reqInfo, commands []string) {
 	body, err := readBody(r)
 	if err != nil {
 		writeErr(w, r.URL.Path, http.StatusBadRequest, err.Error())
+		return
+	}
+	prefix := r.Header.Get(coopauth.HdrForwardedPrefix)
+	if ri.offerUsage.Tool == "" && (len(commands) > 0 || prefix != "") && r.Header.Get(cligw.FilterHeader) == "" && r.Header.Get(cligw.CapabilityHeader) == "" {
+		if !b.admitInferenceOffer(w, ri, commands, prefix, body) {
+			return
+		}
+	}
+	if ri.offerUsage.Tool != "" {
+		b.serveMeteredInference(w, r, ri, body)
 		return
 	}
 	b.dispatch(w, r, ri, body, false)
@@ -825,22 +831,9 @@ func (b *Broker) finish(ri *reqInfo, status int, wait time.Duration, errMsg stri
 	ri.rec.Error = errMsg
 	ri.rec.MemberListAgeMS = ri.memberListAgeMS
 	ri.rec.MemberListOffline = ri.memberListOffline
+	b.finishOfferUsage(ri, status)
 	b.price(ri)
 	b.audit.append(ri.rec)
-	if ri.offerName != "" && ri.rec.Status < 300 && ri.rec.Principal != b.opts.Principal {
-		var used uint64 = 1
-		switch ri.offerUnit {
-		case "token":
-			used = uint64(max(0, ri.rec.PromptTok+ri.rec.OutputTok))
-		case "bytes":
-			used = uint64(max(int64(0), ri.rec.Bytes))
-		case "seconds":
-			used = uint64(max(int64(1), (ri.rec.WallMS+999)/1000))
-		}
-		b.offerMu.Lock()
-		b.offerCalls[ri.rec.Principal+"\x00"+ri.offerName] += used
-		b.offerMu.Unlock()
-	}
 	if b.meter != nil && strings.HasPrefix(ri.rec.Principal, PeerPrincipalPrefix) {
 		tokens, usd := recordUsage(ri.rec)
 		b.meter.observe(ri.rec.Principal, tokens, usd, b.opts.Now())

@@ -125,7 +125,7 @@ func NewOfferCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&tokenCap, "token-cap", 0, "agent total token cap")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "definition tag")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable result")
-	cmd.AddCommand(newListCmd(), newStopCmd())
+	cmd.AddCommand(newListCmd(), newStopCmd(), newOfferUsageCmd(false))
 	return cmd
 }
 
@@ -221,20 +221,20 @@ func newStopCmd() *cobra.Command {
 // The options configure the catalog a mount is written to (the embedding
 // shell passes its reserved names so a mount cannot shadow a shipped verb).
 func RemoteSubcommands(opts ...fleet.Option) []*cobra.Command {
-	return []*cobra.Command{newRemoteCallCmd(), newRemoteAddCmd(opts), newRemoteRemoveCmd(opts), newRemoteListCmd(opts)}
+	return []*cobra.Command{newRemoteCallCmd(), newRemoteAddCmd(opts), newRemoteRemoveCmd(opts), newRemoteListCmd(opts), newOfferUsageCmd(true, opts...)}
 }
 
 func newRemoteCallCmd() *cobra.Command {
-	var asJSON, definition bool
 	c := &cobra.Command{Use: "call HOST NAME [--ARG value ...]", Short: "call a remote typed offer", Args: cobra.MinimumNArgs(2), DisableFlagParsing: true, RunE: func(c *cobra.Command, argv []string) error {
 		host, name := argv[0], argv[1]
 		if !broker.ValidPeerName(host) || !broker.ValidPeerName(name) {
 			return errors.New("invalid remote host or offer name")
 		}
+		var definition bool
 		var flags []string
 		for _, arg := range argv[2:] {
 			if arg == "--json" {
-				asJSON = true
+				continue
 			} else if arg == "--definition" {
 				definition = true
 			} else {
@@ -263,6 +263,9 @@ func newRemoteCallCmd() *cobra.Command {
 				return nil, err
 			}
 			defer resp.Body.Close()
+			if method == http.MethodPost && resp.StatusCode/100 == 2 {
+				return nil, copyRemoteResult(c.OutOrStdout(), host, resp)
+			}
 			data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			if err != nil {
 				return nil, err
@@ -274,6 +277,9 @@ func newRemoteCallCmd() *cobra.Command {
 		}
 		data, err := request("GET", "?definition", nil)
 		if err != nil {
+			return err
+		}
+		if err := rememberRemoteDefinition(data); err != nil {
 			return err
 		}
 		if definition {
@@ -295,15 +301,7 @@ func newRemoteCallCmd() *cobra.Command {
 			return err
 		}
 		body, _ := json.Marshal(map[string]any{"args": args})
-		data, err = request("POST", "", body)
-		if err != nil {
-			return err
-		}
-		if asJSON {
-			_, err = c.OutOrStdout().Write(data)
-			return err
-		}
-		_, err = c.OutOrStdout().Write(data)
+		_, err = request("POST", "", body)
 		return err
 	}}
 	return c

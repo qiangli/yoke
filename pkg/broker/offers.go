@@ -109,6 +109,9 @@ func SaveOffer(dir string, o OfferRecord) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if err := RememberOfferDefinition(dir, o.Definition); err != nil {
+		return err
+	}
 	return os.Rename(tmp.Name(), path)
 }
 
@@ -158,18 +161,7 @@ func (b *Broker) admitOfferLimit(w http.ResponseWriter, ri *reqInfo, name string
 		http.Error(w, "invalid offer", 503)
 		return false
 	}
-	ri.offerName, ri.offerUnit = name, d.Unit
-	if rec.Limit == 0 || ri.principal == b.opts.Principal {
-		return true
-	}
-	b.offerMu.Lock()
-	used := b.offerCalls[ri.principal+"\x00"+name]
-	b.offerMu.Unlock()
-	if used >= rec.Limit {
-		http.Error(w, "offer limit reached", 429)
-		return false
-	}
-	return true
+	return b.admitUsage(w, ri, rec, d)
 }
 
 func offerRoute(path string) (string, bool) {
@@ -329,7 +321,8 @@ func (b *Broker) serveOffer(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 		http.Error(w, "offer definition changed (now "+o.Digest+"); run `bashy remote add HOST "+name+"` to accept it", http.StatusConflict)
 		return
 	}
-	if !b.admitOfferLimit(w, ri, name) {
+	d, _ := o.kind()
+	if !b.admitUsage(w, ri, o, d) {
 		return
 	}
 	var input struct {
@@ -355,7 +348,8 @@ func (b *Broker) serveOffer(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 			_, _ = w.Write(capture.Body.Bytes())
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"result": json.RawMessage(capture.Body.Bytes()), "usage": map[string]int64{"bytes": ri.rec.Bytes}})
+		ri.offerUsage.setHeader(w.Header())
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": json.RawMessage(capture.Body.Bytes()), "usage": ri.offerUsage})
 		return
 	}
 	offerRunner.RLock()
@@ -374,19 +368,10 @@ func (b *Broker) serveOffer(w http.ResponseWriter, r *http.Request, ri *reqInfo,
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if d, err := o.kind(); err == nil {
-		if d.Unit == "bytes" {
-			ri.rec.Bytes = int64(len(result))
-		}
-		if d.Unit == "token" {
-			var u struct {
-				Input  int `json:"input"`
-				Output int `json:"output"`
-			}
-			data, _ := json.Marshal(usage)
-			_ = json.Unmarshal(data, &u)
-			ri.rec.PromptTok, ri.rec.OutputTok = u.Input, u.Output
-		}
+	if err := ri.measureResult(result, usage); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"result": result, "usage": usage})
+	ri.offerUsage.setHeader(w.Header())
+	_ = json.NewEncoder(w).Encode(map[string]any{"result": result, "usage": ri.offerUsage})
 }

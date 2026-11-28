@@ -7,7 +7,6 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/qiangli/yoke/pkg/broker"
 	"github.com/qiangli/yoke/pkg/chat"
@@ -105,7 +104,6 @@ func runOffer(ctx context.Context, rec broker.OfferRecord, args map[string]any) 
 		if err != nil {
 			return nil, nil, err
 		}
-		started := time.Now()
 		result, err := cligw.RunOfferedTool(ctx, t, c, argv, cat)
 		if err != nil {
 			return nil, nil, err
@@ -114,14 +112,7 @@ func runOffer(ctx context.Context, rec broker.OfferRecord, args map[string]any) 
 		if err != nil {
 			return nil, nil, err
 		}
-		usage := map[string]any{"calls": 1}
-		if d.Unit == "bytes" {
-			usage = map[string]any{"bytes": len(value)}
-		}
-		if d.Unit == "seconds" {
-			usage = map[string]any{"seconds": int64(max(time.Second, time.Since(started)) / time.Second)}
-		}
-		return value, usage, nil
+		return value, nil, nil
 	}
 	return nil, nil, fmt.Errorf("unknown offer class %q", d.Class)
 }

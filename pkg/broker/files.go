@@ -492,6 +492,14 @@ func (b *Broker) serveFiles(w http.ResponseWriter, r *http.Request, ri *reqInfo)
 		return
 	}
 
+	if ri.offerUsage.Tool == "" {
+		if !b.admitFileUsage(rawW, ri, name) {
+			return
+		}
+		rawW = fileUsageWriter{ResponseWriter: rawW, ri: ri, head: r.Method == http.MethodHead}
+		defer ri.writeUsageHeader(rawW.Header())
+	}
+
 	if r.Method == http.MethodPost {
 		if hasSlash {
 			b.finishFilesErr(rawW, ri, r.URL.Path, &shareErr{status: http.StatusMethodNotAllowed, msg: "POST is supported only on /files/" + name})
@@ -681,7 +689,8 @@ func (b *Broker) serveFileBytes(w http.ResponseWriter, r *http.Request, ri *reqI
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
-			_, _ = w.Write(data)
+			n, _ := w.Write(data)
+			ri.rec.Bytes = int64(n)
 		}
 		b.finish(ri, http.StatusOK, 0, "")
 		return

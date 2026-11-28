@@ -62,6 +62,19 @@ type call struct {
 
 var client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
+// RecordUsage is installed by pkg/offer when the caller has usage reporting.
+var RecordUsage func(string, *http.Response) error
+
+func recordUsage(host string, resp *http.Response) error {
+	if RecordUsage == nil {
+		return nil
+	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return err
+	}
+	return RecordUsage(host, resp)
+}
+
 // Fetch streams a designated peer file into dst. The caller chooses dst inside
 // its private run directory; credentials are loaded from the local peer store.
 func Fetch(ctx context.Context, uri, dst string) error {
@@ -93,8 +106,10 @@ func Fetch(ctx context.Context, uri, dst string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("files get: peer returned HTTP %d", resp.StatusCode)
 	}
-	_, err = download(dst, resp.Body)
-	return err
+	if _, err = download(dst, resp.Body); err != nil {
+		return err
+	}
+	return recordUsage(t.Host, resp)
 }
 
 func memberCmd(verb string, asJSON *bool) *cobra.Command {
@@ -169,6 +184,9 @@ func memberCmd(verb string, asJSON *bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := recordUsage(t.Host, resp); err != nil {
+				return err
+			}
 			if *asJSON {
 				return json.NewEncoder(out).Encode(map[string]any{"path": dest, "bytes": n})
 			}
@@ -176,6 +194,9 @@ func memberCmd(verb string, asJSON *bool) *cobra.Command {
 		}
 		var result json.RawMessage
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return err
+		}
+		if err := recordUsage(t.Host, resp); err != nil {
 			return err
 		}
 		if *asJSON {

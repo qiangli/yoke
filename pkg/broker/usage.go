@@ -15,19 +15,23 @@ import (
 type UsageRollupOptions struct {
 	Since     time.Time
 	Principal string
+	// By selects an offer report grouped by member, host, or tool.
+	By      string
+	Digests map[string]bool
 }
 
 // PrincipalUsage is the aggregate usage of one authenticated door principal.
 // It is the shared representation used by the CLI and by enforcement code.
 type PrincipalUsage struct {
-	Principal        string  `json:"principal"`
-	Requests         uint64  `json:"requests"`
-	PromptTokens     uint64  `json:"prompt_tokens"`
-	CompletionTokens uint64  `json:"completion_tokens"`
-	CachedTokens     uint64  `json:"cached_tokens"`
-	CacheWriteTokens uint64  `json:"cache_write_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
-	Unpriced         bool    `json:"unpriced"`
+	Units            map[string]float64 `json:"units,omitempty"`
+	Principal        string             `json:"principal"`
+	Requests         uint64             `json:"requests"`
+	PromptTokens     uint64             `json:"prompt_tokens"`
+	CompletionTokens uint64             `json:"completion_tokens"`
+	CachedTokens     uint64             `json:"cached_tokens"`
+	CacheWriteTokens uint64             `json:"cache_write_tokens"`
+	CostUSD          float64            `json:"cost_usd"`
+	Unpriced         bool               `json:"unpriced"`
 	// PricedTokens is the prompt+completion total of the records the price
 	// table priced (unpriced false). UnpricedTokens is the same total for
 	// the records with no price (unpriced true). The two always add up to
@@ -43,6 +47,12 @@ type PrincipalUsage struct {
 // schemas can be rolled up by the same report.
 func RollupUsage(r io.Reader, opts UsageRollupOptions) ([]PrincipalUsage, error) {
 	type usageRecord struct {
+		Host   string   `json:"host"`
+		Tool   string   `json:"tool"`
+		Unit   string   `json:"unit"`
+		Units  *float64 `json:"units"`
+		Digest string   `json:"digest"`
+
 		Time       time.Time `json:"time"`
 		Principal  string    `json:"principal"`
 		Prompt     int64     `json:"prompt_tokens"`
@@ -69,19 +79,55 @@ func RollupUsage(r io.Reader, opts UsageRollupOptions) ([]PrincipalUsage, error)
 		if err := json.Unmarshal(data, &rec); err != nil {
 			return nil, fmt.Errorf("broker: audit line %d: %w", line, err)
 		}
-		if rec.Principal == "" || (opts.Principal != "" && rec.Principal != opts.Principal) || (!opts.Since.IsZero() && rec.Time.Before(opts.Since)) {
+		if (opts.Principal != "" && rec.Principal != opts.Principal) || (!opts.Since.IsZero() && rec.Time.Before(opts.Since)) {
 			continue
 		}
 		if rec.Prompt < 0 || rec.Completion < 0 || rec.Cached < 0 || rec.CacheWrite < 0 || rec.CostUSD < 0 {
 			return nil, fmt.Errorf("broker: audit line %d: usage values must not be negative", line)
 		}
-		row := byPrincipal[rec.Principal]
+		key := rec.Principal
+		if opts.By != "" {
+			// Modern non-offer requests have no tool. Old audit lines lack
+			// units entirely and retain their request and token totals.
+			if rec.Tool == "" && rec.Units != nil || opts.Digests != nil && !opts.Digests[rec.Digest] {
+				continue
+			}
+			switch opts.By {
+			case "tool":
+				key = rec.Tool
+				if key == "" {
+					key = "(unknown)"
+				}
+			case "host":
+				key = rec.Host
+			case "member":
+			default:
+				return nil, fmt.Errorf("invalid usage grouping %q", opts.By)
+			}
+		}
+		if key == "" {
+			continue
+		}
+		row := byPrincipal[key]
 		if row == nil {
-			row = &PrincipalUsage{Principal: rec.Principal}
-			byPrincipal[rec.Principal] = row
+			row = &PrincipalUsage{Principal: key}
+			byPrincipal[key] = row
 		}
 		tokens := uint64(rec.Prompt + rec.Completion)
 		row.Requests++
+		if opts.By != "" {
+			if row.Units == nil {
+				row.Units = map[string]float64{}
+			}
+			if rec.Units != nil && rec.Unit != "" {
+				if *rec.Units < 0 {
+					return nil, fmt.Errorf("broker: audit line %d: negative offer units", line)
+				}
+				row.Units[rec.Unit] += *rec.Units
+			} else if tokens > 0 {
+				row.Units["token"] += float64(tokens)
+			}
+		}
 		row.PromptTokens += uint64(rec.Prompt)
 		row.CompletionTokens += uint64(rec.Completion)
 		row.CachedTokens += uint64(rec.Cached)
